@@ -538,6 +538,157 @@ The key design principle: **the same config file and pipeline code should run on
 
 Coiled is the recommended starting point: Pythonic, Dask-native, free tier adequate for development, spot instances for production, and the `us-west-2` colocation with most USGS cloud data is a perfect fit.
 
+### 5.9 Containerization: Reproducible Environments Across Platforms
+
+#### 5.9.1 The Problem
+
+The geospatial Python stack is one of the hardest scientific computing environments to install reproducibly. GDAL, PROJ, GEOS, and their Python bindings (rasterio, pyproj, fiona/geopandas) depend on system-level C/C++ libraries with version-sensitive interactions. Adding xesmf (which requires ESMF/C++) and gdptools compounds the problem. The result: "works on my laptop but not on HPC" is the norm, not the exception.
+
+This directly undermines two of the project's core goals — reproducibility ("this config produced these parameters") and platform-agnosticism ("same config, any backend"). If the environment itself isn't portable, config-driven reproducibility is incomplete.
+
+#### 5.9.2 Container Strategy: Optional but First-Class
+
+Containers should follow the same principle as cloud compute (§5.8.6): **optional but first-class.** The system should work fine in a standard conda/pixi/uv environment for development and simple runs. But for production runs — especially on HPC and cloud — a containerized environment eliminates an entire class of failure modes.
+
+| Platform | Container Runtime | Image Format | Notes |
+|---|---|---|---|
+| Desktop/Workstation | Docker or Podman | Docker image | Development, testing |
+| USGS HPC (Hovenweep, Tallgrass) | Apptainer (formerly Singularity) | `.sif` file | No root required, standard on USGS HPC |
+| AWS Batch / ECS | Docker | Docker image | Native container platform |
+| Coiled | N/A (package sync) | — | Coiled mirrors local environment; container not needed |
+| Modal | Docker | Docker image | Container-native platform |
+
+**Why Apptainer, not Docker, on HPC:** Docker requires root (daemon-based architecture). HPC admins universally prohibit this. Apptainer (the Singularity successor, adopted by the Linux Foundation) runs unprivileged, integrates with SLURM, supports bind-mounting HPC filesystems, and can import Docker images directly. It is the de facto standard for containers on federal HPC systems.
+
+#### 5.9.3 What Goes Wrong on HPC (and How Containers Help)
+
+Common HPC environment failures that containers eliminate:
+
+| Failure Mode | Without Container | With Container |
+|---|---|---|
+| GDAL/PROJ version mismatch | Broken CRS transforms, silent wrong results | Pinned and tested |
+| Module conflicts (`module load` collisions) | Unpredictable | Isolated from host modules |
+| Conda env corruption after system update | Re-solve, hours lost | Image unchanged |
+| Different results on different nodes | Possible (shared lib drift) | Identical environment |
+| New team member onboarding | Days of environment debugging | `apptainer pull` + run |
+
+Common HPC container difficulties that **do not apply** to hydro-param:
+
+| Difficulty | Why It Doesn't Apply |
+|---|---|
+| MPI host/container version matching | hydro-param uses joblib + SLURM arrays, not MPI |
+| GPU driver compatibility | No GPU compute |
+| Network fabric (InfiniBand) passthrough | Independent batch jobs, not distributed |
+| Interactive GUI/display | Batch processing only |
+
+This is a favorable position — hydro-param's embarrassingly parallel, batch-oriented architecture (§5.4) is the **easy case** for HPC containers. Each SLURM array task runs independently inside its own container instance with no inter-node communication.
+
+#### 5.9.4 Image Architecture
+
+A single `Dockerfile` produces a multi-stage image:
+
+```dockerfile
+# Stage 1: Geospatial base (GDAL, PROJ, GEOS)
+FROM condaforge/miniforge3 AS base
+RUN mamba install -y gdal proj geos rasterio fiona pyproj
+
+# Stage 2: Python environment
+FROM base AS runtime
+COPY pyproject.toml .
+RUN pip install "hydro-param[gdp,regrid,parallel]"
+
+# Stage 3: Slim production image
+FROM runtime AS production
+# Remove build tools, reduce image size
+```
+
+**Image distribution:**
+
+| Registry | Audience | Format |
+|---|---|---|
+| GitHub Container Registry (ghcr.io) | Public, CI/CD | Docker |
+| USGS internal registry (if available) | USGS HPC users | Docker → `.sif` |
+| Dockerhub (mirror) | Broad discovery | Docker |
+
+**Apptainer conversion** (one command, run once per release):
+
+```bash
+apptainer pull hydro-param-v0.1.0.sif docker://ghcr.io/rmcd-mscb/hydro-param:0.1.0
+```
+
+The `.sif` file is a single immutable file (~3-5 GB for the full geospatial stack) that can be placed on shared HPC storage and used by all team members.
+
+#### 5.9.5 Integration with Compute Backends
+
+The `container` config is orthogonal to backend selection — any backend can optionally use a container:
+
+```yaml
+compute:
+  backend: "slurm"
+  container:
+    enabled: true
+    image: "hydro-param-v0.1.0.sif"
+    bind_paths: ["/caldera", "/home", "/scratch"]
+  slurm:
+    partition: "cpu"
+    time: "04:00:00"
+    mem_per_task: "16G"
+    array_size: 50
+```
+
+The `SlurmArrayBackend` generates job scripts that wrap execution in `apptainer exec`:
+
+```bash
+#!/bin/bash
+#SBATCH --array=1-50
+apptainer exec \
+    --bind /caldera:/caldera \
+    --bind /scratch:/scratch \
+    hydro-param-v0.1.0.sif \
+    python -m hydro_param.cli process-batch \
+        --config run_config.yaml \
+        --batch-id $SLURM_ARRAY_TASK_ID
+```
+
+For cloud backends, the same Docker image is used natively:
+
+```yaml
+compute:
+  backend: "aws_batch"
+  container:
+    image: "ghcr.io/rmcd-mscb/hydro-param:0.1.0"
+  cloud:
+    region: "us-west-2"
+    spot: true
+```
+
+For desktop/development, containers are unnecessary — a standard Python environment is simpler and allows faster iteration:
+
+```yaml
+compute:
+  backend: "joblib"
+  # no container section — runs in local Python environment
+```
+
+#### 5.9.6 CI/CD and Versioning
+
+Container images should be:
+
+1. **Built automatically** via GitHub Actions on each release tag
+2. **Tagged by version** (`v0.1.0`, `v0.2.0`) — never `latest` only
+3. **Tested in CI** — the test suite runs inside the container as part of the release pipeline
+4. **Immutable** — a given tag always produces identical results
+
+This means the full reproducibility chain becomes: config file (what to compute) + container tag (environment) + dataset versions (source data) = deterministic output.
+
+#### 5.9.7 Recommendation
+
+**Phase 1:** Provide a `Dockerfile` and document the Apptainer conversion workflow. Publish images to GHCR on releases. This is low effort and immediately useful for HPC users.
+
+**Phase 2:** Integrate container awareness into the `SlurmArrayBackend` and `AWSBatchBackend` so the config file drives container execution automatically.
+
+**Don't do:** Don't require containers for any workflow. Don't build separate images for different backends. Don't manage Apptainer builds in CI (let users convert from Docker). One Dockerfile, multiple runtimes.
+
 ---
 
 ## 6. Curated Data Layer
