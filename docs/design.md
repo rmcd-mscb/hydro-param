@@ -482,7 +482,7 @@ Estimated costs for processing ~110K HRUs against 6 gridded datasets (soils, DEM
 **Cloud wins when:**
 - Source data is already on S3/cloud storage (data colocation advantage)
 - You need on-demand bursting without job queue waits
-- You're a non-USGS user (Connected Waters LLC, university collaborators) without HPC allocations
+- You're a non-USGS user (contractors, university collaborators) without HPC allocations
 - Development iteration — spin up, test, tear down in minutes
 - Reproducibility — anyone can run the same config on the same cloud data
 
@@ -534,7 +534,7 @@ The key design principle: **the same config file and pipeline code should run on
 1. **Data colocation** with S3/OSN Zarr stores is the fastest path to processing
 2. **Democratizes access** — any hydrologist with a laptop and AWS credentials (or Coiled's free tier) can run CONUS-scale parameterization
 3. **Reproducibility** — "run this config on this cloud data" is more reproducible than "stage data to your local HPC scratch"
-4. **Connected Waters LLC** doesn't have USGS HPC allocations; cloud is the natural production environment for contractor work
+4. **Non-USGS collaborators** (contractors, universities) lack HPC allocations; cloud is the natural production environment
 
 Coiled is the recommended starting point: Pythonic, Dask-native, free tier adequate for development, spot instances for production, and the `us-west-2` colocation with most USGS cloud data is a perfect fit.
 
@@ -1190,6 +1190,12 @@ Failed HRU log: ./failed_hrus.csv
 10. **Grid regridding engine:** For grid-to-grid pathway (Appendix A.1), which conservative regridding method? `xesmf` vs `rioxarray.reproject_match` vs `exactextract`?
 11. **SIR schema:** What CF conventions and variable naming for the Standardized Internal Representation (Appendix A.3)?
 12. **Formatter prioritization:** Which output formatters to implement first? (Lean: Parquet → pywatershed → PRMS → NextGen)
+13. **Spatial correctness validation:** How do we verify that computed parameters are correct? Regression tests against existing NhmParamDb values? Known-answer tests on small hand-computable domains? Spatial processing bugs can be silent — you get a number, it's just the wrong number.
+14. **Output provenance and lineage:** What metadata travels with output files? When someone receives a PRMS parameter file, can they trace every value back to its source dataset, version, processing method, and config? Matters for USGS data releases and reproducibility claims. CF conventions help but don't cover the full lineage.
+15. **Dataset registry versioning:** `hydro-param-data` will evolve — POLARIS Zarr stores may be reprocessed, NLCD 2023 replaces 2021, conversion bugs are found. How do we version the data products themselves, separate from code version? Affects cache invalidation strategy (§A.2).
+16. **Custom parameter derivations:** Many model parameters aren't a direct zonal mean — they're derived (depth-weighted soil averages, NLCD class fractions, slope-aspect combinations, seasonal climate normals from daily data). Where does transformation logic live? Dataset registry metadata, config, or Python code?
+17. **Fabric acquisition and subsetting:** Step 1 (§4) is "resolve target fabric" but the path from "I want to model the Delaware River Basin" to a GeoDataFrame of HRUs involves non-trivial subsetting (pynhd for GFv1.1, different toolchains for NextGen, manual for custom fabrics). How much of this does hydro-param own vs. expect the user to provide?
+18. **POLARIS licensing (CC BY-NC 4.0):** The NC (non-commercial) restriction on POLARIS — does it propagate to derived parameter values in model outputs? Matters for any operational or commercial use of parameterization results. May need legal guidance or an alternative pathway (gNATSGO) for affected users.
 
 ### 10.3 Completed Actions
 
@@ -1202,6 +1208,7 @@ Failed HRU log: ./failed_hrus.csv
 - [x] Comprehensive synthesis (this document)
 - [x] Cloud compute evaluation (§5.8)
 - [x] External review response — Gemini 3 Pro (Appendix A)
+- [x] Containerization strategy — Apptainer/Docker (§5.9)
 
 ### 10.4 Next Steps
 
@@ -1218,18 +1225,24 @@ Failed HRU log: ./failed_hrus.csv
 - [ ] Compute backend interface (serial + joblib backends first)
 - [ ] Fault tolerance: tolerant/strict modes, failed HRU logging, patch runs
 - [ ] Test domain selection and MVP scope (Delaware River Basin)
+- [ ] Spatial correctness validation strategy (regression tests, known-answer tests)
+- [ ] Dockerfile and Apptainer conversion documentation (§5.9)
 
 **Phase 2: Integration & Scaling**
 - [ ] gdptools integration layer (wrapper API)
 - [ ] Output formatter plugin system (Parquet → pywatershed → PRMS)
 - [ ] Weight caching with ID-based keys and Parquet storage
 - [ ] SLURM and Coiled compute backends
+- [ ] Container integration in SlurmArrayBackend and AWSBatchBackend (§5.9)
+- [ ] Output provenance and lineage metadata in SIR
+- [ ] Parameter derivation framework (depth-weighting, class fractions, etc.)
 - [ ] Project naming, repository setup, packaging
 
 **Phase 3: Community & Outreach**
 - [ ] Draft one-page summary for collaborators
 - [ ] Outreach to Johnson and McCreight
 - [ ] Documentation and example notebooks
+- [ ] POLARIS license implications assessment (CC BY-NC 4.0 propagation)
 
 ---
 
