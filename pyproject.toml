@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hydro-param"
+version = "0.1.0dev0"
+description = "Configuration-driven hydrologic parameterization for any model, any fabric."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Rich McDonald", email = "rich@connectedwatersllc.com" },
+]
+keywords = [
+    "hydrology",
+    "parameterization",
+    "geospatial",
+    "NHM",
+    "NextGen",
+    "watershed",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+dependencies = [
+    "xarray",
+    "geopandas",
+    "numpy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+gdp = ["gdptools"]
+regrid = ["xesmf", "rioxarray"]
+parallel = ["joblib"]
+cloud = ["coiled", "dask-geopandas"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/rmcd-mscb/hydro-param"
+Documentation = "https://github.com/rmcd-mscb/hydro-param/blob/main/docs/design.md"
+Repository = "https://github.com/rmcd-mscb/hydro-param"
+Issues = "https://github.com/rmcd-mscb/hydro-param/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hydro_param"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
