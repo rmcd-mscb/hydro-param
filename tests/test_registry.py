@@ -163,6 +163,48 @@ def test_local_tiff_requires_source():
         DatasetEntry(strategy="local_tiff")
 
 
+def test_coordinate_defaults():
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com/stac/v1",
+        collection="test",
+    )
+    assert entry.x_coord == "x"
+    assert entry.y_coord == "y"
+    assert entry.t_coord is None
+
+
+def test_custom_coordinate_names():
+    entry = DatasetEntry(
+        strategy="converted_zarr",
+        source="s3://bucket/data.zarr",
+        x_coord="lon",
+        y_coord="lat",
+    )
+    assert entry.x_coord == "lon"
+    assert entry.y_coord == "lat"
+
+
+def test_temporal_requires_t_coord():
+    with pytest.raises(ValidationError, match="Temporal datasets require 't_coord'"):
+        DatasetEntry(
+            strategy="native_zarr",
+            source="s3://bucket/data.zarr",
+            temporal=True,
+        )
+
+
+def test_temporal_with_t_coord_valid():
+    entry = DatasetEntry(
+        strategy="native_zarr",
+        source="s3://bucket/data.zarr",
+        temporal=True,
+        t_coord="time",
+    )
+    assert entry.t_coord == "time"
+    assert entry.temporal is True
+
+
 def test_load_real_registry():
     """Test loading the actual configs/datasets.yml file."""
     registry_path = Path("configs/datasets.yml")
