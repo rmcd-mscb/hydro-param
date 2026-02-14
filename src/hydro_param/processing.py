@@ -157,12 +157,10 @@ def get_processor(fabric: gpd.GeoDataFrame) -> Processor:
     if fabric.empty:
         raise ValueError("Fabric GeoDataFrame is empty; cannot select a processor.")
 
-    geom_types = fabric.geometry.geom_type.unique()
-    if len(geom_types) != 1:
-        types = ", ".join(map(str, geom_types))
-        raise ValueError(f"Mixed geometry types are not supported: {types}")
-
-    geom_type = geom_types[0]
-    if geom_type in ("Polygon", "MultiPolygon"):
+    geom_types = set(fabric.geometry.geom_type.unique())
+    polygon_types = {"Polygon", "MultiPolygon"}
+    if geom_types <= polygon_types:
         return ZonalProcessor()
-    raise ValueError(f"Unsupported geometry type: {geom_type}")
+
+    unsupported = geom_types - polygon_types
+    raise ValueError(f"Unsupported geometry types: {', '.join(sorted(unsupported))}")

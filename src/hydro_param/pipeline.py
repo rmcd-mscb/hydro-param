@@ -86,6 +86,21 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
         config.target_fabric.id_field,
         fabric.crs,
     )
+
+    # Apply domain filter to spatially subset fabric
+    if config.domain.type == "bbox" and config.domain.bbox is not None:
+        from shapely.geometry import box
+
+        # Config bbox is assumed EPSG:4326; reproject if fabric CRS differs.
+        bbox_geom = box(*config.domain.bbox)
+        bbox_gdf = gpd.GeoDataFrame(index=[0], geometry=[bbox_geom], crs="EPSG:4326")
+        if fabric.crs is not None and fabric.crs != bbox_gdf.crs:
+            bbox_gdf = bbox_gdf.to_crs(fabric.crs)
+        fabric = gpd.clip(fabric, bbox_gdf)
+        logger.info("Domain bbox filter: %d features within bbox", len(fabric))
+        if fabric.empty:
+            raise ValueError("No features found within the specified domain bbox.")
+
     return fabric
 
 
@@ -338,8 +353,7 @@ def run_pipeline(
     logger.info("hydro-param pipeline: %s", config.output.sir_name)
     logger.info("=" * 60)
 
-    # Stage 1: Resolve target fabric
-    # TODO: Apply config.domain to spatially subset fabric (bbox clip, HUC filter, etc.)
+    # Stage 1: Resolve target fabric (applies domain filter if configured)
     fabric = stage1_resolve_fabric(config)
 
     # Spatial batching

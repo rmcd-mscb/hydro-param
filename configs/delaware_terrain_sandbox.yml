@@ -1,0 +1,38 @@
+# Pipeline configuration: Delaware River Basin terrain — SANDBOX subset.
+#
+# Small bbox (~1,425 catchments in upper Delaware near Hancock, NY)
+# for fast iteration (~1-2 minutes vs ~10 min for full basin).
+#
+# Run with:
+#   python -m hydro_param configs/delaware_terrain_sandbox.yml
+#
+# Environment: pixi run -e full python -m hydro_param configs/delaware_terrain_sandbox.yml
+
+target_fabric:
+  path: "data/delaware/catchments.gpkg"
+  id_field: "featureid"
+  crs: "EPSG:4326"
+
+domain:
+  type: bbox
+  # Upper Delaware near Hancock, NY — small subset for testing
+  bbox: [-75.5, 41.5, -74.8, 42.0]
+
+datasets:
+  - name: dem_3dep_10m
+    variables:
+      - elevation
+      - slope
+      - aspect
+    statistics:
+      - mean
+
+output:
+  path: "./output"
+  format: netcdf
+  sir_name: "delaware_terrain_sandbox"
+
+processing:
+  engine: exactextract
+  failure_mode: strict
+  batch_size: 200
