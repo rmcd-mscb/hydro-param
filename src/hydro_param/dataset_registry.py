@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class VariableSpec(BaseModel):
@@ -53,6 +53,16 @@ class DatasetEntry(BaseModel):
     derived_variables: list[DerivedVariableSpec] = []
     category: str = ""
     temporal: bool = False
+
+    @model_validator(mode="after")
+    def _validate_strategy_fields(self) -> DatasetEntry:
+        if self.strategy == "stac_cog":
+            if not self.catalog_url or not self.collection:
+                raise ValueError("stac_cog strategy requires 'catalog_url' and 'collection'")
+        elif self.strategy == "local_tiff":
+            if not self.source:
+                raise ValueError("local_tiff strategy requires 'source' path")
+        return self
 
 
 class DatasetRegistry(BaseModel):

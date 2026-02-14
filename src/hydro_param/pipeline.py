@@ -134,6 +134,7 @@ def _process_batch(
         Variable name → DataFrame of zonal statistics.
     """
     processor = get_processor(batch_fabric)
+    # TODO: Reproject batch bounds into entry.crs when fabric CRS != dataset CRS
     bbox = list(batch_fabric.total_bounds)
     results: dict[str, pd.DataFrame] = {}
 
@@ -156,6 +157,7 @@ def _process_batch(
             da = derive_fn(source_da, method=var_spec.method)
         else:
             # Raw variable: fetch directly
+            # TODO: Pass var_spec.band to fetch routine for multi-band datasets
             if entry.strategy == "stac_cog":
                 da = fetch_stac_cog(entry, bbox)
             else:
@@ -337,6 +339,7 @@ def run_pipeline(
     logger.info("=" * 60)
 
     # Stage 1: Resolve target fabric
+    # TODO: Apply config.domain to spatially subset fabric (bbox clip, HUC filter, etc.)
     fabric = stage1_resolve_fabric(config)
 
     # Spatial batching
@@ -376,7 +379,7 @@ def main() -> int:
     )
 
     if len(sys.argv) < 2:
-        print("Usage: python -m hydro_param.pipeline <config.yml> [registry.yml]")
+        logger.error("Usage: python -m hydro_param.pipeline <config.yml> [registry.yml]")
         return 1
 
     config_path = sys.argv[1]

@@ -87,6 +87,17 @@ def spatial_batch(
         result["batch_id"] = np.array([], dtype=int)
         return result
 
+    # Short-circuit: single batch when all features fit
+    if len(gdf) <= batch_size:
+        result = gdf.copy()
+        result["batch_id"] = 0
+        logger.info(
+            "Spatial batching: %d features → 1 batch (all fit in batch_size=%d)",
+            len(gdf),
+            batch_size,
+        )
+        return result
+
     # Geographic CRS centroid warning is expected — we only need
     # approximate centroids for spatial grouping, not precision.
     with warnings.catch_warnings():

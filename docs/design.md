@@ -1222,13 +1222,13 @@ Failed HRU log: ./failed_hrus.csv
 
 - [x] Config file schema design (declarative YAML structure) — §11.6
 - [x] Test domain selection and MVP scope (Delaware River Basin) — §11.1
-- [ ] Config schema implementation (Pydantic models + YAML loader)
-- [ ] Dataset registry implementation (YAML schema + variable resolution)
-- [ ] Spatial batching implementation (KD-tree recursive bisection) — §11.2
-- [ ] STAC COG data access (Planetary Computer integration) — §11.4
-- [ ] gdptools ZonalGen + exactextract integration — §11.5
-- [ ] Pipeline orchestrator (5-stage batch loop) — §11.7
-- [ ] SIR output as xr.Dataset with CF-1.8 metadata
+- [x] Config schema implementation (Pydantic models + YAML loader)
+- [x] Dataset registry implementation (YAML schema + variable resolution)
+- [x] Spatial batching implementation (KD-tree recursive bisection) — §11.2
+- [x] STAC COG data access (Planetary Computer integration) — §11.4
+- [x] gdptools ZonalGen + exactextract integration — §11.5
+- [x] Pipeline orchestrator (5-stage batch loop) — §11.7
+- [x] SIR output as xr.Dataset with CF-1.8 metadata
 - [ ] Processing pathway bifurcation (gdptools vs xesmf routing)
 - [ ] Compute backend interface (serial + joblib backends first)
 - [ ] Fault tolerance: tolerant/strict modes, failed HRU logging, patch runs

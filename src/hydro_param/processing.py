@@ -118,9 +118,17 @@ class ZonalProcessor:
             list(result_df.columns),
         )
 
-        # For continuous variables, select requested statistics
+        # For continuous variables, validate and select requested statistics
         if not categorical:
             available = set(result_df.columns)
+            missing = [s for s in statistics if s not in available]
+            if missing:
+                logger.warning(
+                    "Requested statistics %s not available for '%s'. Available: %s",
+                    missing,
+                    variable_name,
+                    sorted(available),
+                )
             selected = [s for s in statistics if s in available]
             if selected:
                 result_df = result_df[selected]

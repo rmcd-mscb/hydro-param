@@ -5,6 +5,7 @@ and cardinal-direction slopes.
 """
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from hydro_param.data_access import derive_aspect, derive_slope
@@ -167,8 +168,6 @@ def test_aspect_has_attrs():
 
 
 def test_unsupported_slope_method():
-    import pytest
-
     data = np.full((5, 5), 100.0)
     elev = _make_elevation(data)
     with pytest.raises(ValueError, match="Unsupported slope method"):
@@ -176,8 +175,6 @@ def test_unsupported_slope_method():
 
 
 def test_unsupported_aspect_method():
-    import pytest
-
     data = np.full((5, 5), 100.0)
     elev = _make_elevation(data)
     with pytest.raises(ValueError, match="Unsupported aspect method"):

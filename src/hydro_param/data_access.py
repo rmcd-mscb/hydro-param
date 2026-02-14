@@ -210,8 +210,9 @@ def fetch_stac_cog(
         da = da.squeeze("band", drop=True)
         try:
             da = da.rio.clip_box(minx=bbox[0], miny=bbox[1], maxx=bbox[2], maxy=bbox[3])
-        except Exception:
+        except (rioxarray.exceptions.NoDataInBounds, ValueError):
             # Item may not overlap after precise clipping
+            logger.debug("Tile %s has no data in bbox, skipping", item.id)
             continue
         if da.size > 0:
             arrays.append(da)

@@ -57,6 +57,7 @@ class ProcessingConfig(BaseModel):
     """Processing options."""
 
     engine: Literal["exactextract", "serial"] = "exactextract"
+    # TODO: Wire failure_mode into stage4 error handling (continue-on-failure with logging)
     failure_mode: Literal["strict", "tolerant"] = "strict"
     batch_size: int = Field(default=500, gt=0)
 

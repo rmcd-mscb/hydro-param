@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from hydro_param.dataset_registry import (
     DatasetEntry,
@@ -150,6 +151,16 @@ def test_local_tiff_entry_fields(registry_yaml: Path):
     entry = registry.get("nlcd_test")
     assert entry.source == "data/nlcd.tif"
     assert entry.crs == "EPSG:5070"
+
+
+def test_stac_cog_requires_catalog_url_and_collection():
+    with pytest.raises(ValidationError, match="stac_cog strategy requires"):
+        DatasetEntry(strategy="stac_cog")
+
+
+def test_local_tiff_requires_source():
+    with pytest.raises(ValidationError, match="local_tiff strategy requires"):
+        DatasetEntry(strategy="local_tiff")
 
 
 def test_load_real_registry():
