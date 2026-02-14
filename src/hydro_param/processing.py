@@ -43,7 +43,15 @@ class ZonalProcessor:
 
 
 def get_processor(fabric: gpd.GeoDataFrame) -> Processor:
-    geom_type = fabric.geometry.geom_type.iloc[0]
+    if fabric.empty:
+        raise ValueError("Fabric GeoDataFrame is empty; cannot select a processor.")
+
+    geom_types = fabric.geometry.geom_type.unique()
+    if len(geom_types) != 1:
+        types = ", ".join(map(str, geom_types))
+        raise ValueError(f"Mixed geometry types are not supported: {types}")
+
+    geom_type = geom_types[0]
     if geom_type in ("Polygon", "MultiPolygon"):
         return ZonalProcessor()
     raise ValueError(f"Unsupported geometry type: {geom_type}")

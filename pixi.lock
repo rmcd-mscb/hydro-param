@@ -4476,7 +4476,7 @@ packages:
 - pypi: ./
   name: hydro-param
   version: 0.1.0.dev0
-  sha256: 139f18d9fe4f76ee9f55aa652dc13fc6d033543eeb67c1e8f62c210cf9e65c17
+  sha256: 3658ab1b9e39888ecc114a3d217d0ed964aee3b575540ebf290f40bdfae41ac6
   requires_dist:
   - xarray
   - geopandas
