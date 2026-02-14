@@ -49,6 +49,9 @@ class DatasetEntry(BaseModel):
     source: str | None = None
     # Common fields
     crs: str = "EPSG:4326"
+    x_coord: str = "x"
+    y_coord: str = "y"
+    t_coord: str | None = None
     variables: list[VariableSpec] = []
     derived_variables: list[DerivedVariableSpec] = []
     category: str = ""
@@ -62,6 +65,8 @@ class DatasetEntry(BaseModel):
         elif self.strategy == "local_tiff":
             if not self.source:
                 raise ValueError("local_tiff strategy requires 'source' path")
+        if self.temporal and not self.t_coord:
+            raise ValueError("Temporal datasets require 't_coord'")
         return self
 
 
