@@ -1,0 +1,49 @@
+name: Design Decision
+description: Propose or discuss an architectural decision
+labels: ["design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for architectural decisions that affect the project's design.
+        Reference `docs/design.md` for existing decisions.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What situation or requirement prompted this decision?
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Options Considered
+      description: List the alternatives with pros and cons for each.
+      placeholder: |
+        **Option A: ...**
+        - Pro: ...
+        - Con: ...
+
+        **Option B: ...**
+        - Pro: ...
+        - Con: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: Which option do you recommend and why?
+    validations:
+      required: true
+
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What are the implications of this decision? What becomes easier or harder?
+    validations:
+      required: false
