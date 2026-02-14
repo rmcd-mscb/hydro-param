@@ -38,6 +38,12 @@ def get_basin_boundary() -> gpd.GeoDataFrame:
     nldi = NLDI()
     logger.info("Fetching basin boundary for USGS-%s ...", GAGE_ID)
     basin = nldi.get_basins(GAGE_ID)
+    if basin.empty:
+        logger.error(
+            "No basin boundary returned for USGS-%s. Check gage ID and network connectivity.",
+            GAGE_ID,
+        )
+        sys.exit(1)
     area_km2 = basin.to_crs("EPSG:5070").geometry.area.sum() / 1e6
     logger.info("Basin boundary: %.0f km2, CRS=%s", area_km2, basin.crs)
     return basin
