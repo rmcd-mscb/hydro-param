@@ -63,7 +63,7 @@ jobs:
         run: uv pip install --system -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ --cov=hydro_param --cov-report=term-missing
+        run: pytest tests/ --cov=src/hydro_param --cov-report=term-missing
 
   pre-commit:
     name: Pre-commit Hooks
