@@ -51,6 +51,17 @@ Package management: pixi or uv preferred. Conda for geospatial stack if needed.
 - **Format:** `ruff format src/ tests/`
 - **Lint:** `ruff check src/ tests/`
 
+## Development Workflow
+
+See `CONTRIBUTING.md` for the full guide. Key rules for AI assistants:
+
+- **GitHub Flow**: All changes go through feature branches and pull requests against `main`. Never commit directly to `main`.
+- **Issue first**: Every code change starts with a GitHub issue. Reference the issue number in branch names and PR descriptions.
+- **Branch naming**: `<type>/<issue-number>-<short-description>` (e.g., `feat/12-config-schema`).
+- **Conventional commits**: Use `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:` prefixes.
+- **Pre-commit hooks**: Run `pre-commit run --all-files` before suggesting a commit. Hooks enforce ruff, mypy, and secrets detection.
+- **PR template**: Fill out the summary, related issue (`Closes #N`), test plan, and checklist.
+
 ## What NOT to Do
 
 - Don't add dask.distributed as a dependency
@@ -58,3 +69,6 @@ Package management: pixi or uv preferred. Conda for geospatial stack if needed.
 - Don't hash geometry coordinates for cache keys
 - Don't hardcode model-specific output logic in the core engine
 - Don't treat grids as polygons for raster-on-raster operations
+- Don't commit directly to `main` — always use a feature branch and PR
+- Don't create commits without conventional commit prefixes
+- Don't skip pre-commit hooks
