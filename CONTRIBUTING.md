@@ -68,12 +68,11 @@ ci: add Python 3.12 to test matrix
 This project uses [pre-commit](https://pre-commit.com) to run checks before each commit:
 
 ```bash
-# Install pre-commit (one-time setup)
-pip install pre-commit
-pre-commit install
+# Install pre-commit hooks (one-time setup, after pixi install)
+pixi run -e dev pre-commit install
 
 # Run manually against all files
-pre-commit run --all-files
+pixi run -e dev pre-commit
 ```
 
 Hooks include:
@@ -105,25 +104,47 @@ PR requirements:
 
 ## Setting Up Your Development Environment
 
+This project uses [pixi](https://pixi.sh) for environment management. pixi handles Python, geospatial C libraries (GDAL, GEOS, PROJ), and all development tools from conda-forge.
+
 ```bash
+# Install pixi (if not already installed)
+# Linux/macOS:
+curl -fsSL https://pixi.sh/install.sh | bash
+# Windows: see https://pixi.sh/latest/#installation
+
 # Clone the repository
 git clone https://github.com/rmcd-mscb/hydro-param.git
 cd hydro-param
 
-# Create a virtual environment and install
-python -m venv .venv
-source .venv/bin/activate  # or .venv/Scripts/activate on Windows
-pip install -e ".[dev]"
+# Install the development environment
+pixi install
 
-# Install pre-commit hooks
-pip install pre-commit
-pre-commit install
+# Install pre-commit hooks (one-time)
+pixi run -e dev pre-commit install
 
 # Verify everything works
-pytest tests/
-ruff check src/ tests/
-mypy src/
+pixi run -e dev check
 ```
+
+### Available pixi tasks
+
+| Command | What it does |
+|---|---|
+| `pixi run -e dev test` | Run tests with coverage |
+| `pixi run -e dev lint` | Lint with ruff |
+| `pixi run -e dev format` | Format with ruff |
+| `pixi run -e dev typecheck` | Type check with mypy |
+| `pixi run -e dev pre-commit` | Run all pre-commit hooks |
+| `pixi run -e dev check` | Run all of the above |
+
+### Environments
+
+| Environment | Purpose |
+|---|---|
+| `dev` | Day-to-day development |
+| `test-py311` | CI: test on Python 3.11 |
+| `test-py312` | CI: test on Python 3.12 |
+| `full` | All optional dependencies (gdp, regrid, parallel) |
 
 ## Architecture Guidelines
 

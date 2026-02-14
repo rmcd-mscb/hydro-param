@@ -33,7 +33,7 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 - I/O: zarr, fsspec, s3fs
 - Optional: xesmf (grid regridding), dask (lazy I/O only)
 
-Package management: pixi or uv preferred. Conda for geospatial stack if needed.
+Package management: **pixi** (configured in `pyproject.toml` under `[tool.pixi.*]`). Use `pixi install` to create/sync environments. Run local development tasks (tests, linting, formatting) via `pixi run -e dev`. CI runs tests in dedicated `test-py311`/`test-py312` environments.
 
 ## Coding Conventions
 
@@ -46,10 +46,13 @@ Package management: pixi or uv preferred. Conda for geospatial stack if needed.
 
 ## Common Tasks
 
-- **Run tests:** `pytest tests/`
-- **Type check:** `mypy src/`
-- **Format:** `ruff format src/ tests/`
-- **Lint:** `ruff check src/ tests/`
+- **Run tests:** `pixi run -e dev test`
+- **Type check:** `pixi run -e dev typecheck`
+- **Format:** `pixi run -e dev format`
+- **Lint:** `pixi run -e dev lint`
+- **All checks:** `pixi run -e dev check`
+- **Pre-commit:** `pixi run -e dev pre-commit`
+- **Install/sync environment:** `pixi install`
 
 ## Development Workflow
 
