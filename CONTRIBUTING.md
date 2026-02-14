@@ -81,7 +81,27 @@ Hooks include:
 - **detect-secrets** — prevents accidental credential commits
 - **trailing-whitespace**, **end-of-file-fixer**, **check-yaml**, **check-toml**
 
-### 6. Open a Pull Request
+### 6. Run Checks Before Pushing
+
+**Always** run the full check suite locally before pushing:
+
+```bash
+# Run all quality checks (lint, format, typecheck, tests)
+pixi run -e dev check
+
+# Run pre-commit hooks
+pixi run -e dev pre-commit
+```
+
+If you modified `pyproject.toml` (dependencies, pixi config, etc.), regenerate the lock file first:
+
+```bash
+pixi install
+```
+
+CI runs `pixi install --locked` and will reject a stale `pixi.lock`.
+
+### 7. Open a Pull Request
 
 Push your branch and open a PR against `main`:
 
@@ -96,7 +116,7 @@ PR requirements:
 - All CI checks must pass (lint, type check, tests, pre-commit)
 - Copilot code review will run automatically
 
-### 7. Review and Merge
+### 8. Review and Merge
 
 - Address Copilot review comments
 - Get approval from a maintainer (or self-approve for solo work)
@@ -145,6 +165,7 @@ pixi run -e dev check
 | `test-py311` | CI: test on Python 3.11 |
 | `test-py312` | CI: test on Python 3.12 |
 | `full` | All optional dependencies (gdp, regrid, parallel) |
+| `download` | Data download scripts (pynhd) |
 
 ## Architecture Guidelines
 
