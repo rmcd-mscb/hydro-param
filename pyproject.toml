@@ -116,10 +116,11 @@ python = "3.11.*"
 python = "3.12.*"
 
 # --- Environments ------------------------------------------------------------
-# Separate solve-groups for different Python versions to avoid conflicts.
+# Pin default/dev/full to Python 3.11 for stability. Separate solve-groups
+# for different Python versions to avoid conflicts.
 [tool.pixi.environments]
-default = { solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
+default = { features = ["py311"], solve-group = "py311" }
+dev = { features = ["dev", "py311"], solve-group = "py311" }
 test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
 test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
-full = { features = ["dev", "gdp", "regrid", "parallel"], solve-group = "default" }
+full = { features = ["dev", "gdp", "regrid", "parallel", "py311"], solve-group = "py311" }

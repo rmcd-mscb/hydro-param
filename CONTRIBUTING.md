@@ -108,7 +108,9 @@ This project uses [pixi](https://pixi.sh) for environment management. pixi handl
 
 ```bash
 # Install pixi (if not already installed)
+# Linux/macOS:
 curl -fsSL https://pixi.sh/install.sh | bash
+# Windows: see https://pixi.sh/latest/#installation
 
 # Clone the repository
 git clone https://github.com/rmcd-mscb/hydro-param.git

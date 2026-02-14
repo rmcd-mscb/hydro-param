@@ -62,6 +62,9 @@ jobs:
   pre-commit:
     name: Pre-commit Hooks
     runs-on: ubuntu-latest
+    # Uses setup-python + pre-commit/action (not pixi) because pre-commit
+    # manages its own isolated virtualenvs per hook. Running it through pixi
+    # adds complexity with no reproducibility benefit.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
