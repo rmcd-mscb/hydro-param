@@ -24,7 +24,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-
 VARIABLES = ["elevation", "slope", "aspect"]
 
 PLOT_CONFIG = {
@@ -115,7 +114,7 @@ def plot_choropleths(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     if n == 1:
         axes = [axes]
 
-    for ax, var in zip(axes, available):
+    for ax, var in zip(axes, available, strict=False):
         cfg = PLOT_CONFIG[var]
         vmin = gdf[var].quantile(0.02)
         vmax = gdf[var].quantile(0.98)
@@ -157,7 +156,7 @@ def plot_histograms(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     if n == 1:
         axes = [axes]
 
-    for ax, var in zip(axes, available):
+    for ax, var in zip(axes, available, strict=False):
         cfg = PLOT_CONFIG[var]
         values = gdf[var].dropna()
 
