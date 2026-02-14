@@ -248,6 +248,10 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
     """
     import rioxarray  # noqa: F401
 
-    da.rio.to_raster(path)
+    # Remove _FillValue from attrs to avoid conflict with encoding
+    clean = da.copy()
+    clean.attrs = {k: v for k, v in da.attrs.items() if k != "_FillValue"}
+    clean.encoding = {k: v for k, v in da.encoding.items() if k != "_FillValue"}
+    clean.rio.to_raster(path)
     logger.info("Saved GeoTIFF: %s (%s)", path, da.shape)
     return path

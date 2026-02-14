@@ -114,6 +114,8 @@ numpy = ">=1.26"
 
 [tool.pixi.feature.gdp.dependencies]
 exactextract = ">=0.2"
+pyarrow = ">=14.0"
+distributed = ">=2024.1"
 
 [tool.pixi.feature.stac.dependencies]
 pystac-client = ">=0.8"

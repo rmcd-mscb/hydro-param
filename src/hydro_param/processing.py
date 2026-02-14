@@ -74,6 +74,7 @@ class ZonalProcessor:
         pd.DataFrame
             DataFrame with statistics columns, indexed by feature ID.
         """
+        import rioxarray  # noqa: F401
         from gdptools import UserTiffData, ZonalGen
 
         if statistics is None:
@@ -87,8 +88,16 @@ class ZonalProcessor:
             categorical,
         )
 
+        # Read CRS from GeoTIFF for UserTiffData
+        ds = rioxarray.open_rasterio(tiff_path)
+        source_crs = str(ds.rio.crs)
+        ds.close()
+
         user_data = UserTiffData(
             source_ds=str(tiff_path),
+            source_crs=source_crs,
+            source_x_coord="x",
+            source_y_coord="y",
             source_var=variable_name,
             target_gdf=fabric[[id_field, "geometry"]].copy(),
             target_id=id_field,
@@ -98,6 +107,7 @@ class ZonalProcessor:
             user_data=user_data,
             zonal_engine=engine,
             zonal_writer="csv",
+            out_path=str(tiff_path.parent),
         )
         result_df = zonal.calculate_zonal(categorical=categorical)
 
