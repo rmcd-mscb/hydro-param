@@ -1,9 +1,9 @@
 # Hydrologic Model Parameterization System — Complete Design Document
 
-**Version:** 5.0 — Comprehensive Synthesis
-**Date:** 2025-02-13
+**Version:** 5.1 — Data Category Taxonomy & Derivation Architecture
+**Date:** 2025-02-14
 **Author:** Rich McDonald / Claude (AI-assisted brainstorm)
-**Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape)
+**Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis)
 
 ---
 
@@ -27,13 +27,27 @@ Build a **configuration-driven parameterization system** that:
 
 ### 1.3 Data Categories
 
-| Category | Purpose | Example Datasets |
-|----------|---------|-----------------|
-| **Static Physical** | Basin/grid characterization | DEM/slope (3DEP), soils (POLARIS, gSSURGO), geology |
-| **Vegetation/Land Cover** | Land surface parameters | NLCD, MODIS LAI/NDVI, LCMAP |
-| **Climate Forcings** | Model inputs (time-varying) | CONUS404, GridMET, Daymet, Livneh, PRISM, TerraClimate |
-| **Calibration/Verification** | Model evaluation | NWIS streamflow, SNODAS/UA SWE, MODSCAG, ET (SSEBop/OpenET) |
-| **Hydrographic Fabric** | Model discretization | GFv1.1, WBD HUC12, NHDPlus, NextGen hydrofabric |
+The source data landscape for hydrologic parameterization spans eight distinct categories, each with characteristic access patterns, processing strategies, and output shapes. See §6.10 for detailed processing profiles per category.
+
+| # | Category | Purpose | Temporality | Geometry | Example Sources |
+|---|----------|---------|-------------|----------|-----------------|
+| 1 | **Topography / Terrain** | Elevation, slope, aspect, curvature, TWI, flow direction | Static | Raster | 3DEP, NED, MERIT DEM |
+| 2 | **Hydrography / Drainage Network** | Stream geometry, connectivity, Strahler order, contributing area | Static | Vector | NHDPlus v2, NHDPlus HR, MERIT Hydro |
+| 3 | **Soils** | AWC, texture, Ksat, bulk density, porosity, HSG, drainage class | Static | Raster/Tabular | POLARIS, gSSURGO, gNATSGO, STATSGO2 |
+| 4 | **Land Cover / Vegetation*** | Cover type, canopy density, impervious fraction, LAI, rooting depth | Static* | Raster | NLCD, MODIS, LANDFIRE, CDL |
+| 5 | **Geology / Subsurface** | Hydrogeologic class, permeability, aquifer type, depth to bedrock | Static | Raster/Vector | Gleeson global permeability, state surveys, USGS maps |
+| 6 | **Climate / Atmospheric Forcing** | Precip, temperature, solar radiation, humidity, wind, PET | Time-Varying | Raster | DAYMET, gridMET, PRISM, NLDAS-2, ERA5 |
+| 7 | **Snow / Cryosphere** | SCA depletion curves, SWE, precipitation phase, albedo dynamics | Mixed | Raster | SNODAS, MODIS snow products, DAYMET snowfall |
+| 8 | **Surface Water Bodies / Depressions** | Lake/reservoir extents, depression storage fraction, depth | Static | Vector/Raster | NHD waterbodies, GRanD, NID |
+
+**Notes:**
+
+- \*Land Cover is static per epoch (NLCD 2019, 2021) but users may select an epoch or compute change metrics across epochs.
+- **Temporality:** Categories 1–5 and 8 are essentially static (updated on decadal timescales at most). Category 6 is time-varying forcing data. Category 7 straddles both — some snow parameters are static calibration coefficients, others are derived from time-series analysis.
+- **Calibration/Verification** is a *role*, not a data category. A Snow dataset (category 7) can serve both as a parameter source and a calibration target (e.g., SNODAS SWE for model evaluation). Calibration datasets are tagged with their primary category.
+- **Hydrographic Fabric** is the *target* geometry for parameterization, not a source dataset to be processed. It does not appear as a data category.
+- **Resolution hierarchy:** These datasets span orders of magnitude in resolution: 1m (3DEP lidar), 10m (gSSURGO raster), 30m (NLCD, NED), 100m (POLARIS), 1km (DAYMET, SNODAS), 4km (gridMET/PRISM). The aggregation-to-fabric step is inherently resolution-aware.
+- **Dependency chains:** Some model parameters require data from multiple categories (e.g., TWI needs terrain + hydrography; curve numbers need soils + land cover). These cross-category dependencies are handled by the parameter derivation framework (§A.8), not the core processing pipeline.
 
 ### 1.4 Key Constraints
 
@@ -809,6 +823,33 @@ Each: download → QC → convert (documented chunking/compression) → CF metad
 5. Available as COG? → Use via gdptools UserTiffData
 6. None of above? → Convert (C)
 
+### 6.10 Category Processing Profiles
+
+The eight data categories (§1.3) differ in their access patterns, processing requirements, and the shape of their dataset registry entries. Rather than enforcing a rigid per-category schema, the system uses a common `DatasetEntry` model with optional fields. The `category` field on each dataset entry serves as documentation and enables category-aware defaults and validation. This section documents the processing profile for each category.
+
+| Category | Access Pattern | Processing Strategy | Category-Specific Fields | Output Shape |
+|----------|---------------|---------------------|--------------------------|--------------|
+| **Topography** | STAC COG, converted Zarr | ZonalGen (continuous) + derivation (slope/aspect from DEM) | `derived_variables`, `gsd` | Per-feature scalar statistics |
+| **Hydrography** | Vector (GeoPackage, NHDPlus) | Attribute join, topology extraction | `topology_fields`, `connectivity` | Per-feature attributes, network graph |
+| **Soils** | Converted Zarr (depth-resolved) | ZonalGen (continuous) + depth aggregation | `depth_layers`, `depth_weights` | Per-feature per-depth or depth-weighted |
+| **Land Cover** | COG, converted Zarr | ZonalGen (categorical) | `class_map`, `reclassify` | Per-feature class fractions |
+| **Geology** | Mixed raster/vector | ZonalGen or polygon overlay | `classification_scheme` | Per-feature categorical or continuous |
+| **Climate** | Native Zarr, virtual Zarr | AggGen (time-varying grid→polygon) | `time_range`, `temporal_resolution`, `climatology_period` | Per-feature time series or summary stats |
+| **Snow** | Native Zarr / STAC COG | ZonalGen (static products) or AggGen (time-varying) | `time_range`, `sca_curve_method` | Mixed: per-feature scalar + time series |
+| **Water Bodies** | Vector (NHD), converted Zarr | Polygon overlay, attribute extraction | `waterbody_type`, `storage_curve` | Per-feature attributes |
+
+**Design considerations:**
+
+1. **Category does NOT determine processing strategy mechanically.** The `strategy` field on `DatasetEntry` (stac_cog, native_zarr, converted_zarr, local_tiff) controls data access. The `categorical` flag on variables controls ZonalGen mode. Category is a human-readable grouping that provides defaults and documentation, not a dispatch key. For example, both Topography and Soils use ZonalGen continuous mode, but Soils entries are expected to carry `depth_layers` while Topography entries carry `derived_variables`.
+
+2. **Category-specific fields are optional, not enforced by schema.** The `DatasetEntry` Pydantic model includes optional fields like `depth_layers`, `time_range`, and `class_map`. The `category` value tells the user and tooling which fields are relevant. A validator could warn if a soils entry lacks `depth_layers`, but it should not fail — this preserves flexibility for unconventional dataset configurations.
+
+3. **The `category` field should be a constrained enum.** In code, the `category` field on `DatasetEntry` will become a `Literal` type constrained to the eight canonical categories: `topography`, `hydrography`, `soils`, `land_cover`, `geology`, `climate`, `snow`, `water_bodies`. This catches typos, enables IDE completion, and provides a stable vocabulary for category-aware processing logic.
+
+4. **Cross-category dependency chains.** Some model parameters require data from multiple categories. For example, the Topographic Wetness Index (TWI) depends on terrain (slope) and hydrography (contributing area). Soil-adjusted curve numbers depend on soils (HSG) and land cover (NLCD class). `soil_moist_max` depends on soils (AWC) and land cover (rooting depth). `tmax_allsnow` depends on climate (temperatures) and snow (phase observations). These cross-category dependencies are handled by the parameter derivation framework (§A.8), not by the dataset processing pipeline.
+
+5. **Resolution hierarchy is handled at the processing level.** Datasets span orders of magnitude in resolution (1m lidar to 4km gridMET). The ZonalGen aggregation step is inherently resolution-aware — it operates on the intersection of source grid cells and target polygons regardless of source resolution. The spatial batching system (§5.5) ensures efficient I/O at any source resolution by keeping batch bounding boxes compact.
+
 ---
 
 ## 7. Soils Data: The POLARIS Recommendation
@@ -1159,6 +1200,79 @@ Failed HRU log: ./failed_hrus.csv
 | (new) Output formatter architecture | **Plugin/adapter pattern with Standardized Internal Representation** | Review §A.3 |
 | (new) Config philosophy | **Strictly declarative. Logic belongs in Python scripts.** | Review §A.4 |
 | (new) Partial failure handling | **Tolerant mode + failed log + patch runs** | Review §A.6 |
+| (new) Parameter derivation architecture | **Three-layer: SIR → model-specific derivation plugins → output formatters** | Review §A.8 |
+
+### A.8 Parameter Derivation: SIR to Model Parameters
+
+Section A.3 established the OutputFormatter plugin pattern for writing model-specific file formats. But there is a critical middle step between the SIR and the formatted output: **parameter derivation**. Many model parameters are not direct zonal statistics of source data — they are derived quantities that combine multiple SIR variables using model-specific formulas. This section clarifies the three-layer architecture.
+
+```
+Source Data  →  Core Pipeline (§4, §11)  →  SIR (xr.Dataset)
+                                              Physical properties per feature
+                                              (elevation_mean, clay_pct, nlcd_fractions...)
+                                                │
+                                                ▼
+                                    Parameter Derivation Layer
+                                    Model-specific plugin classes
+                                                │
+                                                ▼
+                                    Derived Parameters (xr.Dataset)
+                                    Model parameters per feature
+                                    (carea_max, soil_moist_max, tmax_allsnow...)
+                                                │
+                                                ▼
+                                    Output Formatter (§A.3)
+                                    File format adapter
+                                    (PRMS .param, NextGen YAML, Parquet...)
+```
+
+**A. The SIR contains physical properties, not model parameters.** The SIR should contain values like `elevation_mean`, `slope_mean`, `clay_pct_mean`, `nlcd_class_21_frac`. These are model-independent physical measurements of each feature in the target fabric. Anyone can use them regardless of which model they are parameterizing.
+
+**B. Model-specific derivation is plugin code, not config.** The relationship between SIR variables and model parameters is complex, model-specific, and sometimes requires domain judgment (e.g., choosing between Penman-Monteith and Hamon PET). This logic belongs in Python plugin classes, not in YAML configuration. Each model gets a derivation plugin:
+
+```python
+class PRMSDerivation:
+    """Derive PRMS-specific parameters from SIR variables."""
+
+    REQUIRED_SIR_VARS = [
+        "elevation_mean", "slope_mean", "aspect_mean",
+        "clay_pct_mean", "sand_pct_mean", "ksat_mean",
+        "nlcd_class_*",  # glob pattern for class fractions
+    ]
+
+    def derive(self, sir: xr.Dataset) -> xr.Dataset:
+        ds = xr.Dataset()
+        # Soil parameters from POLARIS
+        ds["soil_moist_max"] = self._soil_moist_max(sir)
+        ds["soil_rechr_max"] = self._soil_rechr_max(sir)
+        # Terrain parameters (unit conversion)
+        ds["hru_slope"] = sir["slope_mean"] * DEGREES_TO_RADIANS
+        # Land cover parameters
+        ds["cov_type"] = self._classify_cover_type(sir)
+        ds["covden_sum"] = self._summer_cover_density(sir)
+        return ds
+
+class NextGenDerivation:
+    """Derive NextGen/CFE/TOPMODEL parameters from SIR variables."""
+    ...
+```
+
+**C. Derivation plugins declare their SIR requirements.** The `REQUIRED_SIR_VARS` attribute enables the pipeline to validate that all needed source data is being processed before running a long computation. If the pipeline config requests `derivation: "prms"` but the datasets section does not include soils data, the pipeline can fail early with a clear error.
+
+**D. Cross-category dependencies are explicit in derivation code.** When a PRMS parameter like `carea_max` depends on both soils HSG and land cover class, that dependency is encoded in the derivation plugin, not in the pipeline orchestrator. The pipeline simply ensures all requested datasets are processed to SIR before derivation runs.
+
+**E. Config integration.** The pipeline config gains an optional `derivation` field:
+
+```yaml
+output:
+  format: "prms"
+  derivation: "prms"       # which derivation plugin to use
+  model_version: "5.2.1"   # formatter may need model version
+```
+
+This connects to the existing `OutputFormatter` plugin via a two-step invocation: `DerivationPlugin.derive(sir)` then `OutputFormatter.write(derived, path)`. When no derivation is specified, the SIR passes directly to the formatter — useful for generic Parquet/NetCDF output of physical properties.
+
+**F. This resolves open question Q16** (§10.2): "Where does transformation logic live?" Answer: model-specific derivation plugins that consume the SIR and produce derived parameter datasets. The dataset registry and pipeline config describe what physical data to collect; the derivation plugins know what to do with it for each model.
 
 ---
 
@@ -1175,6 +1289,7 @@ Failed HRU log: ./failed_hrus.csv
 - ~~Output formatter architecture~~ → Plugin/adapter pattern with standardized internal representation (Appendix A.3)
 - ~~Config philosophy~~ → Strictly declarative; logic in Python scripts (Appendix A.4)
 - ~~Partial failure handling~~ → Tolerant mode + failed log + patch runs (Appendix A.6)
+- ~~Custom parameter derivations~~ → Model-specific derivation plugins consuming the SIR (Appendix A.8)
 
 ### 10.2 Open Design Questions
 
@@ -1193,9 +1308,10 @@ Failed HRU log: ./failed_hrus.csv
 13. **Spatial correctness validation:** How do we verify that computed parameters are correct? Regression tests against existing NhmParamDb values? Known-answer tests on small hand-computable domains? Spatial processing bugs can be silent — you get a number, it's just the wrong number.
 14. **Output provenance and lineage:** What metadata travels with output files? When someone receives a PRMS parameter file, can they trace every value back to its source dataset, version, processing method, and config? Matters for USGS data releases and reproducibility claims. CF conventions help but don't cover the full lineage.
 15. **Dataset registry versioning:** `hydro-param-data` will evolve — POLARIS Zarr stores may be reprocessed, NLCD 2023 replaces 2021, conversion bugs are found. How do we version the data products themselves, separate from code version? Affects cache invalidation strategy (§A.2).
-16. **Custom parameter derivations:** Many model parameters aren't a direct zonal mean — they're derived (depth-weighted soil averages, NLCD class fractions, slope-aspect combinations, seasonal climate normals from daily data). Where does transformation logic live? Dataset registry metadata, config, or Python code?
+16. ~~**Custom parameter derivations:** Many model parameters aren't a direct zonal mean — they're derived (depth-weighted soil averages, NLCD class fractions, slope-aspect combinations, seasonal climate normals from daily data). Where does transformation logic live? Dataset registry metadata, config, or Python code?~~ → Model-specific derivation plugins that consume the SIR (Appendix A.8)
 17. **Fabric acquisition and subsetting:** Step 1 (§4) is "resolve target fabric" but the path from "I want to model the Delaware River Basin" to a GeoDataFrame of HRUs involves non-trivial subsetting (pynhd for GFv1.1, different toolchains for NextGen, manual for custom fabrics). How much of this does hydro-param own vs. expect the user to provide?
 18. **POLARIS licensing (CC BY-NC 4.0):** The NC (non-commercial) restriction on POLARIS — does it propagate to derived parameter values in model outputs? Matters for any operational or commercial use of parameterization results. May need legal guidance or an alternative pathway (gNATSGO) for affected users.
+19. **Category enum governance:** The `category` field on `DatasetEntry` will become a `Literal` enum constrained to the 8 canonical categories (§1.3, §6.10). Decision: **Yes, Literal enum** — catches typos, enables IDE completion. Implementation deferred to code PR.
 
 ### 10.3 Completed Actions
 
@@ -1317,6 +1433,8 @@ The dataset registry (`configs/datasets.yml`) maps human-readable dataset names 
 | Topography | 3DEP DEM | `stac_cog` | Continuous + derived | Derived variables (slope, aspect) computed from source (elevation) |
 | Soils | POLARIS | `converted_zarr` | Continuous, multi-variable | Multiple independent variables; future: depth dimension |
 | Land Cover | NLCD | `local_tiff` | Categorical | Class fractions, not means; `categorical: true` flag |
+
+The MVP implements three of the eight data categories defined in §1.3. The full category processing profiles — including hydrography (vector join), climate (temporal aggregation), and cross-category parameter derivation — are described in §6.10 and Appendix A.8.
 
 **Registry schema design decisions:**
 
