@@ -91,8 +91,12 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
     if config.domain.type == "bbox" and config.domain.bbox is not None:
         from shapely.geometry import box
 
+        # Config bbox is assumed EPSG:4326; reproject if fabric CRS differs.
         bbox_geom = box(*config.domain.bbox)
-        fabric = gpd.clip(fabric, bbox_geom)
+        bbox_gdf = gpd.GeoDataFrame(index=[0], geometry=[bbox_geom], crs="EPSG:4326")
+        if fabric.crs is not None and fabric.crs != bbox_gdf.crs:
+            bbox_gdf = bbox_gdf.to_crs(fabric.crs)
+        fabric = gpd.clip(fabric, bbox_gdf)
         logger.info("Domain bbox filter: %d features within bbox", len(fabric))
         if fabric.empty:
             raise ValueError("No features found within the specified domain bbox.")

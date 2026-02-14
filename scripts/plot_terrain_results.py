@@ -16,6 +16,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -23,6 +24,8 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 VARIABLES = ["elevation", "slope", "aspect"]
 
@@ -68,20 +71,20 @@ def load_data(nc_path: Path, gpkg_path: Path) -> gpd.GeoDataFrame:
 
     # Join on featureid = hru_id
     merged = catchments.merge(df, left_on="featureid", right_on="hru_id", how="inner")
-    print(f"Joined {len(merged)} of {len(catchments)} catchments to SIR data")
+    logger.info("Joined %d of %d catchments to SIR data", len(merged), len(catchments))
 
     return merged
 
 
-def print_summary(gdf: gpd.GeoDataFrame) -> None:
-    """Print summary statistics for each variable."""
-    print("\n" + "=" * 60)
-    print("Summary Statistics")
-    print("=" * 60)
+def log_summary(gdf: gpd.GeoDataFrame) -> None:
+    """Log summary statistics for each variable."""
+    logger.info("=" * 60)
+    logger.info("Summary Statistics")
+    logger.info("=" * 60)
 
     for var in VARIABLES:
         if var not in gdf.columns:
-            print(f"\n  {var}: NOT FOUND in data")
+            logger.warning("  %s: NOT FOUND in data", var)
             continue
 
         values = gdf[var]
@@ -89,17 +92,17 @@ def print_summary(gdf: gpd.GeoDataFrame) -> None:
         n_valid = values.notna().sum()
         n_missing = n_total - n_valid
 
-        print(f"\n  {var}:")
-        print(f"    count:   {n_valid}")
-        print(f"    missing: {n_missing} ({100 * n_missing / n_total:.1f}%)")
+        logger.info("  %s:", var)
+        logger.info("    count:   %d", n_valid)
+        logger.info("    missing: %d (%.1f%%)", n_missing, 100 * n_missing / n_total)
         if n_valid > 0:
-            print(f"    min:     {values.min():.2f}")
-            print(f"    max:     {values.max():.2f}")
-            print(f"    mean:    {values.mean():.2f}")
-            print(f"    std:     {values.std():.2f}")
-            print(f"    median:  {values.median():.2f}")
+            logger.info("    min:     %.2f", values.min())
+            logger.info("    max:     %.2f", values.max())
+            logger.info("    mean:    %.2f", values.mean())
+            logger.info("    std:     %.2f", values.std())
+            logger.info("    median:  %.2f", values.median())
 
-    print("\n" + "=" * 60)
+    logger.info("=" * 60)
 
 
 def plot_choropleths(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
@@ -107,7 +110,7 @@ def plot_choropleths(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     available = [v for v in VARIABLES if v in gdf.columns]
     n = len(available)
     if n == 0:
-        print("No variables found for choropleth maps.")
+        logger.warning("No variables found for choropleth maps.")
         return
 
     fig, axes = plt.subplots(1, n, figsize=(6 * n, 8))
@@ -141,7 +144,7 @@ def plot_choropleths(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     out_path = output_dir / "choropleth_maps.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved choropleth maps → {out_path}")
+    logger.info("Saved choropleth maps → %s", out_path)
 
 
 def plot_histograms(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
@@ -149,7 +152,7 @@ def plot_histograms(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     available = [v for v in VARIABLES if v in gdf.columns]
     n = len(available)
     if n == 0:
-        print("No variables found for histograms.")
+        logger.warning("No variables found for histograms.")
         return
 
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 4))
@@ -176,7 +179,7 @@ def plot_histograms(gdf: gpd.GeoDataFrame, output_dir: Path) -> None:
     out_path = output_dir / "histograms.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved histograms → {out_path}")
+    logger.info("Saved histograms → %s", out_path)
 
 
 def main() -> int:
@@ -194,22 +197,28 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     if not args.nc_path.exists():
-        print(f"Error: NetCDF file not found: {args.nc_path}", file=sys.stderr)
+        logger.error("NetCDF file not found: %s", args.nc_path)
         return 1
     if not args.gpkg_path.exists():
-        print(f"Error: GeoPackage not found: {args.gpkg_path}", file=sys.stderr)
+        logger.error("GeoPackage not found: %s", args.gpkg_path)
         return 1
 
     output_dir = args.output_dir or (args.nc_path.parent / "plots")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     gdf = load_data(args.nc_path, args.gpkg_path)
-    print_summary(gdf)
+    log_summary(gdf)
     plot_choropleths(gdf, output_dir)
     plot_histograms(gdf, output_dir)
 
-    print(f"\nAll plots saved to {output_dir}/")
+    logger.info("All plots saved to %s/", output_dir)
     return 0
 
 

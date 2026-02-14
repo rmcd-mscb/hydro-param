@@ -1,6 +1,6 @@
 # Pipeline configuration: Delaware River Basin terrain — SANDBOX subset.
 #
-# Small bbox (~200 catchments in upper Delaware near Hancock, NY)
+# Small bbox (~1,425 catchments in upper Delaware near Hancock, NY)
 # for fast iteration (~1-2 minutes vs ~10 min for full basin).
 #
 # Run with:

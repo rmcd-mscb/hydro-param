@@ -108,6 +108,58 @@ def test_stage1_loads_fabric(config_yaml: Path, fabric_gpkg: Path):
     assert "featureid" in fabric.columns
 
 
+def test_stage1_bbox_filter_clips_fabric(tmp_path: Path):
+    """Bbox filter reduces feature count to only those within the bbox."""
+    gdf = gpd.GeoDataFrame(
+        {"featureid": [1, 2, 3, 4]},
+        geometry=[
+            box(0, 0, 1, 1),  # inside bbox
+            box(1, 0, 2, 1),  # inside bbox
+            box(5, 5, 6, 6),  # outside bbox
+            box(10, 10, 11, 11),  # outside bbox
+        ],
+        crs="EPSG:4326",
+    )
+    gpkg_path = tmp_path / "catchments.gpkg"
+    gdf.to_file(gpkg_path, driver="GPKG")
+
+    raw = {
+        "target_fabric": {"path": str(gpkg_path), "id_field": "featureid"},
+        "domain": {"type": "bbox", "bbox": [-0.5, -0.5, 2.5, 1.5]},
+        "datasets": [],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(raw))
+
+    config = load_config(cfg_path)
+    fabric = stage1_resolve_fabric(config)
+    assert len(fabric) == 2
+    assert set(fabric["featureid"]) == {1, 2}
+
+
+def test_stage1_bbox_filter_empty_raises(tmp_path: Path):
+    """Bbox filter raises ValueError when no features are within the bbox."""
+    gdf = gpd.GeoDataFrame(
+        {"featureid": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+    gpkg_path = tmp_path / "catchments.gpkg"
+    gdf.to_file(gpkg_path, driver="GPKG")
+
+    raw = {
+        "target_fabric": {"path": str(gpkg_path), "id_field": "featureid"},
+        "domain": {"type": "bbox", "bbox": [50.0, 50.0, 51.0, 51.0]},
+        "datasets": [],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(raw))
+
+    config = load_config(cfg_path)
+    with pytest.raises(ValueError, match="No features found"):
+        stage1_resolve_fabric(config)
+
+
 def test_stage1_rejects_missing_id_field(config_yaml: Path, tmp_path: Path):
     # Create config pointing to fabric without required id field
     gdf = gpd.GeoDataFrame(
@@ -273,6 +325,22 @@ def test_get_processor_rejects_unsupported_geometry():
     )
     with pytest.raises(ValueError, match="Unsupported geometry type"):
         get_processor(points)
+
+
+def test_get_processor_accepts_mixed_polygon_multipolygon():
+    """Mixed Polygon/MultiPolygon (as produced by gpd.clip) should be accepted."""
+    from shapely.geometry import MultiPolygon
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[
+            box(0, 0, 1, 1),  # Polygon
+            MultiPolygon([box(2, 2, 3, 3), box(4, 4, 5, 5)]),  # MultiPolygon
+        ],
+        crs="EPSG:4326",
+    )
+    proc = get_processor(fabric)
+    assert isinstance(proc, ZonalProcessor)
 
 
 def test_get_processor_rejects_empty_fabric():
