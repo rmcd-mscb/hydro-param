@@ -3,6 +3,10 @@
 # Each entry describes how to find, load, and interpret a dataset.
 # Pipeline configs reference datasets by name; the registry resolves them.
 # See design.md sections 6.6 and 11.3 for the schema design.
+#
+# Coordinate fields (x_coord, y_coord, t_coord) map to the gdptools
+# UserTiffData/UserCatData constructor parameters source_x_coord,
+# source_y_coord, and source_t_coord respectively.
 
 datasets:
   # --- Topography (continuous, with derived variables) ---
@@ -14,6 +18,8 @@ datasets:
     asset_key: "data"
     gsd: 10
     crs: "EPSG:4326"
+    x_coord: "x"
+    y_coord: "y"
     sign: planetary_computer
     category: topography
     temporal: false
@@ -42,6 +48,8 @@ datasets:
     strategy: converted_zarr
     source: "s3://hytest/polaris/polaris_100m_mean.zarr"
     crs: "EPSG:4326"
+    x_coord: "lon"
+    y_coord: "lat"
     category: soils
     temporal: false
     variables:
@@ -69,6 +77,8 @@ datasets:
     strategy: local_tiff
     source: "data/nlcd_2021_conus.tif"
     crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
     category: land_cover
     temporal: false
     variables:
