@@ -42,6 +42,7 @@ gdp = ["gdptools"]
 regrid = ["xesmf", "rioxarray"]
 parallel = ["joblib"]
 cloud = ["coiled", "dask-geopandas"]
+download = ["pynhd"]
 dev = [
     "pytest",
     "pytest-cov",
@@ -75,6 +76,7 @@ module = [
     "shapely.*",
     "xarray.*",
     "numpy.*",
+    "pynhd.*",
 ]
 ignore_missing_imports = true
 
@@ -105,6 +107,12 @@ numpy = ">=1.26"
 [tool.pixi.feature.regrid.dependencies]
 xesmf = ">=0.8"
 rioxarray = ">=0.15"
+
+[tool.pixi.feature.download.dependencies]
+pynhd = ">=0.17"
+
+[tool.pixi.feature.download.tasks]
+download-delaware = "python scripts/download_delaware_nhd.py"
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"
@@ -137,3 +145,4 @@ dev = { features = ["dev", "py311"], solve-group = "py311" }
 test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
 test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
 full = { features = ["dev", "gdp", "regrid", "parallel", "py311"], solve-group = "py311" }
+download = { features = ["download", "py311"], solve-group = "py311" }

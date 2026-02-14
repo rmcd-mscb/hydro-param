@@ -23,6 +23,7 @@ venv/
 Thumbs.db
 
 # Data & outputs (large files)
+data/
 *.zarr/
 *.nc
 *.tif
