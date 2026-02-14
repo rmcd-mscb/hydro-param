@@ -39,3 +39,9 @@ output/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Caches
+cache/
+
+# Generated docs
+docs/ai-workflow-guide.md
