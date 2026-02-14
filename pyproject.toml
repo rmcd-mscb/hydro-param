@@ -67,3 +67,59 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# ---------------------------------------------------------------------------
+# Pixi workspace configuration
+# ---------------------------------------------------------------------------
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
+
+[tool.pixi.pypi-dependencies]
+hydro-param = { path = ".", editable = true }
+
+# Conda-forge overrides for packages with C/Fortran dependencies.
+# These replace the PyPI versions from [project.dependencies].
+[tool.pixi.dependencies]
+geopandas = ">=1.0"
+xarray = ">=2024.1"
+numpy = ">=1.26"
+
+# --- Features ---------------------------------------------------------------
+# Each [project.optional-dependencies] group is auto-detected as a feature.
+# Below we add conda overrides and Python-version pins as additional features.
+
+[tool.pixi.feature.regrid.dependencies]
+xesmf = ">=0.8"
+rioxarray = ">=0.15"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"
+ruff = "*"
+mypy = "*"
+pre-commit = "*"
+
+[tool.pixi.feature.dev.tasks]
+test = "pytest tests/ --cov=src/hydro_param --cov-report=term-missing"
+lint = "ruff check src/ tests/"
+format = "ruff format src/ tests/"
+format-check = "ruff format --check src/ tests/"
+typecheck = "mypy src/"
+pre-commit = "pre-commit run --all-files"
+check = { depends-on = ["lint", "format-check", "typecheck", "test"] }
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+# --- Environments ------------------------------------------------------------
+# Separate solve-groups for different Python versions to avoid conflicts.
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
+test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
+full = { features = ["dev", "gdp", "regrid", "parallel"], solve-group = "default" }
