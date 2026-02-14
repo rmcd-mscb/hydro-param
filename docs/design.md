@@ -1218,13 +1218,20 @@ Failed HRU log: ./failed_hrus.csv
 - [ ] `hydro-param-data` package: standalone dataset registry + access helpers
 - [ ] Publish converted Zarr stores (OSN or S3)
 
-**Phase 1: Architecture & MVP**
-- [ ] Config file schema design (declarative YAML structure)
+**Phase 1: Architecture & MVP** (see §11 for implementation details)
+
+- [x] Config file schema design (declarative YAML structure) — §11.6
+- [x] Test domain selection and MVP scope (Delaware River Basin) — §11.1
+- [ ] Config schema implementation (Pydantic models + YAML loader)
+- [ ] Dataset registry implementation (YAML schema + variable resolution)
+- [ ] Spatial batching implementation (KD-tree recursive bisection) — §11.2
+- [ ] STAC COG data access (Planetary Computer integration) — §11.4
+- [ ] gdptools ZonalGen + exactextract integration — §11.5
+- [ ] Pipeline orchestrator (5-stage batch loop) — §11.7
+- [ ] SIR output as xr.Dataset with CF-1.8 metadata
 - [ ] Processing pathway bifurcation (gdptools vs xesmf routing)
-- [ ] Standardized Internal Representation (SIR) schema definition
 - [ ] Compute backend interface (serial + joblib backends first)
 - [ ] Fault tolerance: tolerant/strict modes, failed HRU logging, patch runs
-- [ ] Test domain selection and MVP scope (Delaware River Basin)
 - [ ] Spatial correctness validation strategy (regression tests, known-answer tests)
 - [ ] Dockerfile and Apptainer conversion documentation (§5.9)
 
@@ -1246,7 +1253,174 @@ Failed HRU log: ./failed_hrus.csv
 
 ---
 
-## 11. Key Links & References
+## 11. MVP Implementation: Config-Driven Pipeline
+
+This section documents the decisions made during initial implementation of the config-driven pipeline, using the Delaware River Basin as the test domain and USGS 3DEP terrain as the first dataset.
+
+### 11.1 Scope: What the MVP Builds
+
+The MVP implements the core pipeline loop (§4 stages 1–5) with enough infrastructure to demonstrate the config-driven pattern end-to-end. It is designed so that adding new datasets, access strategies, or output formats requires minimal code changes.
+
+**Built in MVP:**
+
+| Component | Implementation |
+| --- | --- |
+| Config schema | Pydantic models: TargetFabricConfig, DomainConfig, DatasetRequest, OutputConfig, ProcessingConfig |
+| Dataset registry | YAML file mapping dataset names to access strategies, variable specs, and derivation rules |
+| Spatial batching | KD-tree recursive bisection (§5.5.1 Approach 5) |
+| Data access | STAC COG strategy via Planetary Computer (pystac-client + planetary-computer + rioxarray) |
+| Processing | gdptools ZonalGen with exactextract engine; continuous and categorical modes |
+| Output | SIR as xr.Dataset with CF-1.8 metadata; NetCDF writer |
+| Test domain | Delaware River Basin, 7,268 NHDPlus catchments |
+| Test dataset | 3DEP 1/3 arc-second (~10m) DEM with derived slope and aspect |
+
+**Deferred to later phases:**
+
+| Component | Rationale |
+| --- | --- |
+| Compute backends (joblib, SLURM, Coiled) | Serial is sufficient for regional-scale MVP |
+| Weight caching | gdptools ZonalGen manages weights internally |
+| Output formatters (PRMS, NextGen, pywatershed) | NetCDF/Parquet sufficient for validation |
+| native_zarr and local_tiff access strategies | Implemented in registry schema but not in code; STAC COG is the working strategy |
+| Tolerant failure mode with patch runs | Strict mode only for MVP |
+| Spatial batching caching | Batching is fast enough to recompute (~seconds for 7K features) |
+
+### 11.2 Spatial Batching: Enabling Desktop-Scale Processing at 10m
+
+The full Delaware basin at 10m DEM resolution is approximately 1.2 billion pixels (~5 GB). Loading this into memory on a desktop would fail. Spatial batching (§5.5) solves this by grouping catchments into spatially contiguous batches with compact bounding boxes, so each batch's data read is small.
+
+**Implementation choice: KD-tree recursive bisection** (§5.5.1 Approach 5). Selected because:
+
+- ~50 lines of pure numpy — no external dependencies
+- Guarantees balanced batch sizes (within 2x of target)
+- Produces tight bounding boxes for each batch
+- Works for any geometry type (polygons, points)
+- Fast: ~milliseconds for 7K features, ~seconds for 110K features
+
+**Batch-based data flow:**
+
+1. Assign 7,268 catchments to ~15 batches of ~500 each
+2. For each batch: fetch source data clipped to batch bounding box (~0.3° × 0.3°)
+3. At 10m resolution, each batch is ~1,100 × 1,100 pixels = ~5 MB per variable
+4. Derive slope and aspect from the batch DEM
+5. Run exactextract zonal statistics for the batch features
+6. Merge batch results after all batches complete
+
+This is the "chunk by space, not by time" principle (§5.4). The serial batch loop is trivially replaceable with joblib or SLURM array dispatch in a later phase.
+
+### 11.3 Dataset Registry: Multi-Type Support
+
+The dataset registry (`configs/datasets.yml`) maps human-readable dataset names to access strategies. The schema supports three dataset categories with different characteristics:
+
+| Category | Example | Strategy | Variable Type | Key Difference |
+| --- | --- | --- | --- | --- |
+| Topography | 3DEP DEM | `stac_cog` | Continuous + derived | Derived variables (slope, aspect) computed from source (elevation) |
+| Soils | POLARIS | `converted_zarr` | Continuous, multi-variable | Multiple independent variables; future: depth dimension |
+| Land Cover | NLCD | `local_tiff` | Categorical | Class fractions, not means; `categorical: true` flag |
+
+**Registry schema design decisions:**
+
+- **`strategy` field**: Discriminator for which data access function to invoke. Extensible: adding a new access strategy (e.g., `native_zarr`) requires one new function in the data access module.
+- **`categorical` flag on variables**: Flows through to `gdptools ZonalGen.calculate_zonal(categorical=True|False)`. Categorical variables produce class fraction columns instead of statistical summaries.
+- **`derived_variables`**: Declared in the registry, not the pipeline config. The registry knows *how* to produce a variable (e.g., slope from elevation via Horn method). The pipeline config only says *which* variables to compute.
+- **`sign` field**: Authentication method for signed URLs (e.g., `planetary_computer` for Azure blob signing). Extensible to other signing strategies.
+- **CF metadata on variables**: Each variable carries `units` and `long_name` for SIR output compliance.
+
+### 11.4 STAC COG Data Access via Planetary Computer
+
+For the MVP, 3DEP data is accessed from the Microsoft Planetary Computer STAC catalog. This exercises a general pattern: **STAC query → COG loading → spatial clip → rioxarray DataArray**.
+
+**Tile handling:** The 3DEP-seamless collection stores data in spatial tiles. A batch bounding box may span multiple tiles. The data access module queries STAC for all items intersecting the batch bbox, loads each via `rioxarray.open_rasterio()`, and mosaics if necessary using `rioxarray.merge.merge_arrays()`.
+
+**URL signing:** Planetary Computer COGs require Azure blob URL signing. The `planetary_computer.sign_inplace` modifier handles this transparently via pystac-client's modifier hook.
+
+**Generalization path:** Other STAC catalogs (HyTEST WMA STAC, Element 84, etc.) use the same pattern with different catalog URLs and potentially different signing methods. The registry's `catalog_url` and `sign` fields parameterize this.
+
+### 11.5 Processing: gdptools ZonalGen + exactextract
+
+The MVP replaces the placeholder point-in-polygon processor with real gdptools integration:
+
+```text
+UserTiffData(source_ds=batch_tiff, target_gdf=batch_catchments, target_id=id_field)
+    → ZonalGen(user_data, zonal_engine="exactextract")
+    → calculate_zonal(categorical=False)  # or True for land cover
+    → pd.DataFrame of statistics per feature
+```
+
+**Why exactextract:** C++ implementation, 10–100x faster than serial Python. Handles its own memory management — reads only the raster window needed for each polygon, so memory usage is O(single polygon extent) regardless of total raster size.
+
+**Continuous vs categorical:**
+
+- `categorical=False`: Returns statistical summaries (mean, min, max, std) per polygon. Used for elevation, slope, aspect, soil properties.
+- `categorical=True`: Returns fraction of each class within each polygon. Used for land cover. Output columns are class-specific (e.g., `class_11`, `class_21`, ...).
+
+### 11.6 Pipeline Config Schema
+
+The pipeline config is **strictly declarative** (§A.4). It says *what* to compute, not *how*:
+
+```yaml
+target_fabric:
+  path: "data/delaware/catchments.gpkg"
+  id_field: "featureid"
+  crs: "EPSG:4326"
+
+domain:
+  type: bbox
+  bbox: [-76.5, 38.5, -74.0, 42.6]
+
+datasets:
+  - name: dem_3dep_10m
+    variables: [elevation, slope, aspect]
+    statistics: [mean]
+
+output:
+  path: "./output"
+  format: netcdf
+  sir_name: "delaware_terrain"
+
+processing:
+  engine: exactextract
+  failure_mode: strict
+  batch_size: 500
+```
+
+**Design decisions:**
+
+- `target_fabric` is a structured object with `path`, `id_field`, `crs` — not a bare string. The user provides the fabric as a file; fabric resolution is a separate pre-processing step (§10.2 Q17).
+- `datasets` references registry names. The `variables` list selects which variables to compute; the registry resolves how.
+- `batch_size` controls spatial batching granularity. Default 500 balances memory and overhead.
+- `domain.type: bbox` is the only implemented domain type for MVP. Extension to HUC-based and gage-based domains is straightforward via pynhd.
+
+### 11.7 Module Architecture
+
+```text
+src/hydro_param/
+  config.py            — Pydantic config schema + YAML loader
+  dataset_registry.py  — Registry schema + YAML loader + variable resolution
+  data_access.py       — STAC COG fetch, terrain derivation, tile mosaic
+  batching.py          — KD-tree spatial batching
+  processing.py        — gdptools ZonalGen wrapper (continuous + categorical)
+  pipeline.py          — 5-stage orchestrator with batch loop
+```
+
+Each module has a single responsibility and minimal coupling. The pipeline orchestrator calls the others in sequence but doesn't implement data access, batching, or processing logic itself.
+
+### 11.8 Resolved Open Questions
+
+This implementation resolves or partially resolves several open questions from §10.2:
+
+| Question | Resolution |
+| --- | --- |
+| Q1 Config format | YAML (more expressive nested structures, gdptools precedent) |
+| Q4 Batch sizing | Fixed count (500 features), configurable via `processing.batch_size` |
+| Q7 DEM resolution | 10m (1/3 arc-second), enabled by spatial batching |
+| Q8 Test domain | Delaware River Basin confirmed (7,268 NHDPlus catchments) |
+| Q16 Custom derivations | Derived variables declared in dataset registry metadata (`derived_variables` section) |
+| Q17 Fabric acquisition | User provides pre-downloaded fabric file; download is a separate script |
+
+---
+
+## 12. Key Links & References
 
 ### Data Catalogs & Tools
 - HyTEST: https://hytest-org.github.io/hytest/ | https://github.com/hytest-org

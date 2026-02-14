@@ -1,0 +1,36 @@
+# Pipeline configuration: Delaware River Basin terrain parameters.
+#
+# Run with:
+#   python -m hydro_param.pipeline configs/delaware_terrain.yml
+#
+# Requires: gdptools, exactextract, pystac-client, planetary-computer, rioxarray
+# Environment: pixi run -e full python -m hydro_param.pipeline configs/delaware_terrain.yml
+
+target_fabric:
+  path: "data/delaware/catchments.gpkg"
+  id_field: "featureid"
+  crs: "EPSG:4326"
+
+domain:
+  type: bbox
+  # Delaware River Basin approximate extent
+  bbox: [-76.5, 38.5, -74.0, 42.6]
+
+datasets:
+  - name: dem_3dep_10m
+    variables:
+      - elevation
+      - slope
+      - aspect
+    statistics:
+      - mean
+
+output:
+  path: "./output"
+  format: netcdf
+  sir_name: "delaware_terrain"
+
+processing:
+  engine: exactextract
+  failure_mode: strict
+  batch_size: 500
