@@ -1,0 +1,78 @@
+# Dataset registry: maps dataset names to access strategies.
+#
+# Each entry describes how to find, load, and interpret a dataset.
+# Pipeline configs reference datasets by name; the registry resolves them.
+# See design.md sections 6.6 and 11.3 for the schema design.
+
+datasets:
+  # --- Topography (continuous, with derived variables) ---
+  dem_3dep_10m:
+    description: "USGS 3DEP Seamless DEM, 1/3 arc-second (~10m)"
+    strategy: stac_cog
+    catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+    collection: "3dep-seamless"
+    asset_key: "data"
+    gsd: 10
+    crs: "EPSG:4326"
+    sign: planetary_computer
+    category: topography
+    temporal: false
+    variables:
+      - name: elevation
+        band: 1
+        units: "m"
+        long_name: "Surface elevation above NAVD88"
+        categorical: false
+    derived_variables:
+      - name: slope
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain slope"
+      - name: aspect
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain aspect (clockwise from north)"
+
+  # --- Soils (continuous, multiple variables) ---
+  # Not yet implemented in code; registry entry validates schema generality.
+  polaris_100m:
+    description: "POLARIS soil properties, 100m resolution"
+    strategy: converted_zarr
+    source: "s3://hytest/polaris/polaris_100m_mean.zarr"
+    crs: "EPSG:4326"
+    category: soils
+    temporal: false
+    variables:
+      - name: sand_pct
+        units: "%"
+        long_name: "Sand content"
+        categorical: false
+      - name: clay_pct
+        units: "%"
+        long_name: "Clay content"
+        categorical: false
+      - name: ksat
+        units: "cm/hr"
+        long_name: "Saturated hydraulic conductivity"
+        categorical: false
+      - name: theta_s
+        units: "m3/m3"
+        long_name: "Saturated water content"
+        categorical: false
+
+  # --- Vegetation / Land Cover (categorical) ---
+  # Not yet implemented in code; registry entry validates schema generality.
+  nlcd_2021:
+    description: "NLCD 2021 Land Cover, 30m"
+    strategy: local_tiff
+    source: "data/nlcd_2021_conus.tif"
+    crs: "EPSG:5070"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: land_cover
+        band: 1
+        long_name: "NLCD land cover class"
+        categorical: true

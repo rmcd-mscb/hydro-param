@@ -38,7 +38,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gdp = ["gdptools"]
+gdp = ["gdptools", "exactextract"]
+stac = ["pystac-client", "planetary-computer", "rioxarray"]
 regrid = ["xesmf", "rioxarray"]
 parallel = ["joblib"]
 cloud = ["coiled", "dask-geopandas"]
@@ -76,9 +77,16 @@ module = [
     "shapely.*",
     "xarray.*",
     "numpy.*",
+    "pandas.*",
     "pynhd.*",
+    "gdptools.*",
+    "pystac_client.*",
+    "planetary_computer.*",
+    "rioxarray.*",
+    "exactextract.*",
 ]
 ignore_missing_imports = true
+follow_untyped_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -103,6 +111,16 @@ numpy = ">=1.26"
 # --- Features ---------------------------------------------------------------
 # Each [project.optional-dependencies] group is auto-detected as a feature.
 # Below we add conda overrides and Python-version pins as additional features.
+
+[tool.pixi.feature.gdp.dependencies]
+exactextract = ">=0.2"
+pyarrow = ">=14.0"
+distributed = ">=2024.1"
+
+[tool.pixi.feature.stac.dependencies]
+pystac-client = ">=0.8"
+planetary-computer = "*"
+rioxarray = ">=0.15"
 
 [tool.pixi.feature.regrid.dependencies]
 xesmf = ">=0.8"
@@ -144,5 +162,5 @@ default = { features = ["py311"], solve-group = "py311" }
 dev = { features = ["dev", "py311"], solve-group = "py311" }
 test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
 test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
-full = { features = ["dev", "gdp", "regrid", "parallel", "py311"], solve-group = "py311" }
+full = { features = ["dev", "gdp", "regrid", "parallel", "stac", "py311"], solve-group = "py311" }
 download = { features = ["download", "py311"], solve-group = "py311" }
