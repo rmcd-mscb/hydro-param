@@ -253,8 +253,8 @@ def test_download_info_defaults():
     assert info.notes == ""
 
 
-def test_download_info_requires_url_or_files():
-    """DownloadInfo with neither url nor files is rejected."""
+def test_download_info_requires_url_or_files_or_template():
+    """DownloadInfo with neither url, files, nor url_template is rejected."""
     with pytest.raises(ValidationError, match="requires at least"):
         DownloadInfo()
 
@@ -303,6 +303,115 @@ def test_local_tiff_with_both_source_and_download():
     assert entry.download is not None
 
 
+def test_download_info_with_url_template():
+    info = DownloadInfo(
+        url_template="s3://bucket/{variable}_{year}.tif",
+        year_range=[2020, 2022],
+        variables_available=["lc", "imp"],
+    )
+    assert info.url_template == "s3://bucket/{variable}_{year}.tif"
+    assert info.year_range == [2020, 2022]
+    assert info.variables_available == ["lc", "imp"]
+
+
+def test_download_info_url_template_requires_year_range():
+    with pytest.raises(ValidationError, match="year_range"):
+        DownloadInfo(
+            url_template="s3://bucket/{variable}_{year}.tif",
+            variables_available=["lc"],
+        )
+
+
+def test_download_info_url_template_requires_variables_available():
+    with pytest.raises(ValidationError, match="variables_available"):
+        DownloadInfo(
+            url_template="s3://bucket/{variable}_{year}.tif",
+            year_range=[2020, 2022],
+        )
+
+
+def test_download_info_url_template_invalid_year_range():
+    with pytest.raises(ValidationError, match="year_range"):
+        DownloadInfo(
+            url_template="s3://bucket/{variable}_{year}.tif",
+            year_range=[2022, 2020],  # start > end
+            variables_available=["lc"],
+        )
+
+
+def test_expand_files_from_template():
+    info = DownloadInfo(
+        url_template="s3://bucket/{variable}_{year}.tif",
+        year_range=[2020, 2022],
+        variables_available=["lc", "imp"],
+    )
+    files = info.expand_files()
+    assert len(files) == 6  # 3 years x 2 variables
+    urls = [f.url for f in files]
+    assert "s3://bucket/lc_2020.tif" in urls
+    assert "s3://bucket/imp_2022.tif" in urls
+
+
+def test_expand_files_with_year_filter():
+    info = DownloadInfo(
+        url_template="s3://bucket/{variable}_{year}.tif",
+        year_range=[2020, 2022],
+        variables_available=["lc", "imp"],
+    )
+    files = info.expand_files(years={2021})
+    assert len(files) == 2  # 1 year x 2 variables
+    assert all(f.year == 2021 for f in files)
+
+
+def test_expand_files_with_variable_filter():
+    info = DownloadInfo(
+        url_template="s3://bucket/{variable}_{year}.tif",
+        year_range=[2020, 2022],
+        variables_available=["lc", "imp"],
+    )
+    files = info.expand_files(variables={"lc"})
+    assert len(files) == 3  # 3 years x 1 variable
+    assert all(f.variable == "lc" for f in files)
+
+
+def test_expand_files_with_both_filters():
+    info = DownloadInfo(
+        url_template="s3://bucket/{variable}_{year}.tif",
+        year_range=[2020, 2022],
+        variables_available=["lc", "imp"],
+    )
+    files = info.expand_files(years={2021}, variables={"imp"})
+    assert len(files) == 1
+    assert files[0].year == 2021
+    assert files[0].variable == "imp"
+    assert files[0].url == "s3://bucket/imp_2021.tif"
+
+
+def test_expand_files_from_explicit_files():
+    from hydro_param.dataset_registry import DownloadFile
+
+    info = DownloadInfo(
+        files=[
+            DownloadFile(year=2021, variable="lc", url="s3://bucket/lc_2021.tif"),
+            DownloadFile(year=2019, variable="lc", url="s3://bucket/lc_2019.tif"),
+            DownloadFile(year=2021, variable="imp", url="s3://bucket/imp_2021.tif"),
+        ]
+    )
+    # No filter
+    assert len(info.expand_files()) == 3
+    # Year filter
+    assert len(info.expand_files(years={2021})) == 2
+    # Variable filter
+    assert len(info.expand_files(variables={"lc"})) == 2
+    # Both
+    assert len(info.expand_files(years={2021}, variables={"lc"})) == 1
+
+
+def test_requester_pays_default_false():
+    info = DownloadInfo(url="s3://bucket/file.tif")
+    assert info.requester_pays is False
+
+
 def test_load_real_registry():
     """Test loading the actual configs/datasets.yml file."""
     registry_path = Path("configs/datasets.yml")
@@ -311,16 +420,17 @@ def test_load_real_registry():
     registry = load_registry(registry_path)
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_100m" in registry.datasets
-    assert "nlcd" in registry.datasets
+    assert "nlcd_legacy" in registry.datasets
+    assert "nlcd_annual" in registry.datasets
 
 
-def test_real_registry_nlcd_has_download():
-    """Verify NLCD entry in real registry has multi-file download block."""
+def test_real_registry_nlcd_legacy_has_download():
+    """Verify NLCD legacy entry in real registry has multi-file download block."""
     registry_path = Path("configs/datasets.yml")
     if not registry_path.exists():
         pytest.skip("configs/datasets.yml not found")
     registry = load_registry(registry_path)
-    nlcd = registry.get("nlcd")
+    nlcd = registry.get("nlcd_legacy")
     assert nlcd.strategy == "local_tiff"
     assert nlcd.source is None
     assert nlcd.download is not None
@@ -331,3 +441,23 @@ def test_real_registry_nlcd_has_download():
     assert 2021 in years
     assert "land_cover" in variables
     assert "impervious" in variables
+
+
+def test_real_registry_nlcd_annual_has_template():
+    """Verify NLCD annual entry in real registry has template download."""
+    registry_path = Path("configs/datasets.yml")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets.yml not found")
+    registry = load_registry(registry_path)
+    nlcd = registry.get("nlcd_annual")
+    assert nlcd.strategy == "local_tiff"
+    assert nlcd.download is not None
+    assert nlcd.download.url_template != ""
+    assert nlcd.download.year_range == [1985, 2024]
+    assert "LndCov" in nlcd.download.variables_available
+    assert nlcd.download.requester_pays is True
+    # Verify expand_files works
+    files = nlcd.download.expand_files(years={2020}, variables={"LndCov"})
+    assert len(files) == 1
+    assert "2020" in files[0].url
+    assert "LndCov" in files[0].url

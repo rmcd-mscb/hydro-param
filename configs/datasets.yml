@@ -71,8 +71,8 @@ datasets:
         categorical: false
 
   # --- Vegetation / Land Cover (categorical + continuous) ---
-  nlcd:
-    description: "NLCD Land Cover, Impervious, and Tree Canopy, 30m (Collection 1.1)"
+  nlcd_legacy:
+    description: "NLCD Land Cover, Impervious, and Tree Canopy, 30m (Collection 1.1, epoch snapshots 2001-2021)"
     strategy: local_tiff
     crs: "EPSG:5070"
     x_coord: "x"
@@ -164,4 +164,45 @@ datasets:
       - name: tree_canopy
         band: 1
         long_name: "Percent tree canopy cover"
+        categorical: false
+
+  nlcd_annual:
+    description: "Annual NLCD, 30m (Collection 1.1, 1985-2024)"
+    strategy: local_tiff
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    download:
+      url_template: "s3://usgs-landcover/annual-nlcd/c1/v0/cu/mosaic/Annual_NLCD_{variable}_{year}_CU_C1V0.tif"
+      year_range: [1985, 2024]
+      variables_available: [LndCov, LndChg, LndCnf, FctImp, ImpDsc, SpcChg]
+      requester_pays: true
+      format: "COG"
+      notes: "Requester-pays S3 bucket (us-west-2). Requires AWS credentials."
+    variables:
+      - name: LndCov
+        band: 1
+        long_name: "Land cover class"
+        categorical: true
+      - name: LndChg
+        band: 1
+        long_name: "Land cover change"
+        categorical: true
+      - name: LndCnf
+        band: 1
+        long_name: "Land cover confidence"
+        categorical: false
+      - name: FctImp
+        band: 1
+        long_name: "Fractional impervious surface"
+        categorical: false
+      - name: ImpDsc
+        band: 1
+        long_name: "Impervious descriptor"
+        categorical: true
+      - name: SpcChg
+        band: 1
+        long_name: "Spectral change day of year"
         categorical: false

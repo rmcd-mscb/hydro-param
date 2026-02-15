@@ -308,6 +308,14 @@ def fetch_local_tiff(
                     f"downloadable files. Run:\n"
                     f"  hydro-param datasets info {dataset_name}"
                 )
+            elif entry.download.url_template:
+                start, end = entry.download.year_range
+                n_vars = len(entry.download.variables_available)
+                msg += (
+                    f"\n\nThis dataset has templated downloads "
+                    f"({end - start + 1} years x {n_vars} variables). Run:\n"
+                    f"  hydro-param datasets info {dataset_name}"
+                )
             elif entry.download.url:
                 msg += f"\n\nDownload from: {entry.download.url}"
                 if entry.download.size_gb:

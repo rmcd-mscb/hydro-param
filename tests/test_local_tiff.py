@@ -209,3 +209,21 @@ def test_fetch_local_tiff_no_source_suggests_config():
     msg = str(exc_info.value)
     assert "pipeline config" in msg
     assert "your_dataset_name" in msg
+
+
+def test_fetch_local_tiff_no_source_includes_template_info():
+    """Error message mentions template downloads for url_template datasets."""
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        download={
+            "url_template": "s3://bucket/{variable}_{year}.tif",
+            "year_range": [2020, 2022],
+            "variables_available": ["lc", "imp"],
+        },
+    )
+    with pytest.raises(ValueError, match="templated downloads") as exc_info:
+        fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0], dataset_name="test_ds")
+    msg = str(exc_info.value)
+    assert "3 years" in msg
+    assert "2 variables" in msg
+    assert "hydro-param datasets info test_ds" in msg

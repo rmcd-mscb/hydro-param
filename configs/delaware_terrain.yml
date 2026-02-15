@@ -25,8 +25,8 @@ datasets:
     statistics:
       - mean
   # Uncomment to include NLCD land cover (requires local download).
-  # Run: hydro-param datasets info nlcd
-  # - name: nlcd
+  # Run: hydro-param datasets info nlcd_legacy
+  # - name: nlcd_legacy
   #   source: data/nlcd_2021_land_cover_l48_20230630.tif
   #   variables:
   #     - land_cover

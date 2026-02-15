@@ -51,12 +51,66 @@ class DownloadInfo(BaseModel):
     format: str = ""
     notes: str = ""
     files: list[DownloadFile] = []
+    url_template: str = ""
+    year_range: list[int] = []
+    variables_available: list[str] = []
+    requester_pays: bool = False
 
     @model_validator(mode="after")
-    def _require_url_or_files(self) -> DownloadInfo:
-        if not self.url and not self.files:
-            raise ValueError("DownloadInfo requires at least 'url' or 'files'")
+    def _require_download_source(self) -> DownloadInfo:
+        if not self.url and not self.files and not self.url_template:
+            raise ValueError("DownloadInfo requires at least 'url', 'files', or 'url_template'")
+        if self.url_template:
+            if len(self.year_range) != 2 or self.year_range[0] > self.year_range[1]:
+                raise ValueError(
+                    "url_template requires 'year_range' as [start, end] with start <= end"
+                )
+            if not self.variables_available:
+                raise ValueError("url_template requires a non-empty 'variables_available' list")
         return self
+
+    def expand_files(
+        self,
+        *,
+        years: set[int] | None = None,
+        variables: set[str] | None = None,
+    ) -> list[DownloadFile]:
+        """Expand download sources into a list of files, with optional filtering.
+
+        For template mode, iterates year_range x variables_available and
+        formats the URL template. For explicit files mode, returns the
+        files list with optional year/variable filtering.
+
+        Parameters
+        ----------
+        years
+            If given, only include files matching these years.
+        variables
+            If given, only include files matching these variables.
+
+        Returns
+        -------
+        list[DownloadFile]
+        """
+        if self.url_template:
+            start, end = self.year_range
+            result = []
+            for yr in range(start, end + 1):
+                if years is not None and yr not in years:
+                    continue
+                for var in self.variables_available:
+                    if variables is not None and var not in variables:
+                        continue
+                    url = self.url_template.format(variable=var, year=yr)
+                    result.append(DownloadFile(year=yr, variable=var, url=url))
+            return result
+
+        result = list(self.files)
+        if years is not None:
+            result = [f for f in result if f.year in years]
+        if variables is not None:
+            result = [f for f in result if f.variable in variables]
+        return result
 
 
 class DatasetEntry(BaseModel):
