@@ -5,7 +5,7 @@
 **Author:** Rich McDonald / Claude (AI-assisted brainstorm)
 **Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis), v5.1 (Data Category Taxonomy), v5.2 (Project-Scoped Data Staging)
 
-> **Note:** This document includes both implemented features and planned design work. Sections marked with "planned" or "future work" describe features that are documented for design purposes but not yet implemented. See the Phase 1 checklist (§11.8) for implementation status.
+> **Note:** This document includes both implemented features and planned design work. Sections marked with "planned" or "future work" describe features that are documented for design purposes but not yet implemented. See the Phase 1 checklist (§10.4) for implementation status.
 
 ---
 
@@ -973,7 +973,7 @@ datasets:
         long_name: "Saturated hydraulic conductivity"
 ```
 
-> **Implementation status:** The `download` block schema (lines 918-925 in the YAML example above) and the `climr_cat` strategy (lines 932-952) are documented here for design purposes but not yet implemented. The current implementation supports `stac_cog` and `local_tiff` strategies with a required `source` field. See Phase 1 checklist (§11.8) for implementation roadmap.
+> **Implementation status:** The `download` block schema (lines 918-925 in the YAML example above) and the `climr_cat` strategy (lines 932-952) are documented here for design purposes but not yet implemented. The current implementation supports `stac_cog` and `local_tiff` strategies with a required `source` field. See Phase 1 checklist (§10.4) for implementation roadmap.
 
 **Pipeline config `source` override (planned):** For `local_tiff` datasets, the registry describes the dataset schema and download location, but the user provides the actual local path in their pipeline config:
 
@@ -2027,7 +2027,7 @@ This implementation resolves or partially resolves several open questions from �
 
 > **New section (v5.4).** The MVP provides a minimal CLI to make the system user-friendly. The CLI is the primary interface for discovering datasets, downloading local data, and running the pipeline. Built with `cyclopts` — a modern, type-hint-driven CLI framework with minimal dependencies.
 
-> **Implementation status:** The CLI commands described in this section are **planned for a future PR** and are not yet implemented. This section documents the intended design. The current implementation can be invoked via `python -m hydro_param.pipeline <config.yml>`. See Phase 1 checklist (§11.8) for status.
+> **Implementation status:** The CLI commands described in this section are **planned for a future PR** and are not yet implemented. This section documents the intended design. The current implementation can be invoked via `python -m hydro_param.pipeline <config.yml>`. See Phase 1 checklist (§10.4) for status.
 
 **Commands:**
 
