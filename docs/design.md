@@ -1012,7 +1012,7 @@ cache:
 
 2. **Provenance tracking is still critical.** Each cached file's `manifest.json` records: source URL, download timestamp, dataset version/vintage, checksum, and the bbox used. This makes results reproducible and flags stale data.
 
-3. **Idempotency.** Requesting a dataset twice detects existing cached data and skips re-download. If the domain bbox changes, the cache key changes and a new fetch occurs. Hashing the config parameters that affect download scope handles this.
+3. **Idempotency.** Requesting a dataset twice detects existing cached data and skips re-download. If the domain bbox changes, the cache key changes and a new fetch occurs. Cache keys MUST be derived from a deterministic, canonical representation of only the parameters that affect download scope (e.g., fabric stable ID, dataset ID/version, CRS, domain type/bounds, and method), and then optionally hashed with a stable cross-platform algorithm (such as SHA-256 over a JSON serialization with sorted keys). Do not use language- or runtime-dependent object hashes, and do not hash raw geometry coordinates; geometries participate in cache keys only via their stable IDs and CRS.
 
 4. **Cache is disposable.** Deleting `~/.cache/hydro-param/` simply triggers re-downloads on next run. No user data is lost.
 
