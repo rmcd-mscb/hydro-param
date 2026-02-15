@@ -1,9 +1,9 @@
 # Hydrologic Model Parameterization System — Complete Design Document
 
-**Version:** 5.1 — Data Category Taxonomy & Derivation Architecture
-**Date:** 2025-02-14
+**Version:** 5.3 — Gemini 2.5 Pro Review Integration
+**Date:** 2026-02-14
 **Author:** Rich McDonald / Claude (AI-assisted brainstorm)
-**Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis)
+**Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis), v5.1 (Data Category Taxonomy), v5.2 (Project-Scoped Data Staging)
 
 ---
 
@@ -850,6 +850,114 @@ The eight data categories (§1.3) differ in their access patterns, processing re
 
 5. **Resolution hierarchy is handled at the processing level.** Datasets span orders of magnitude in resolution (1m lidar to 4km gridMET). The ZonalGen aggregation step is inherently resolution-aware — it operates on the intersection of source grid cells and target polygons regardless of source resolution. The spatial batching system (§5.5) ensures efficient I/O at any source resolution by keeping batch bounding boxes compact.
 
+### 6.11 Data Staging: Library-Managed Caching
+
+> **Design revision (v5.3):** An external review (Appendix B, item 2A) identified that the original "Project Directory" pattern introduced a stateful, local filesystem dependency conflicting with the "config-driven, run-anywhere" vision. The design now adopts **library-managed transparent caching** (pooch-style) instead of user-managed project scaffolding. The pipeline config is the single source of truth — no separate `project.yaml`.
+
+The three-tier strategy (§6.1) addresses how datasets are *served* — cloud-native Zarr, virtual references, or curated conversions. But not every dataset has a clean cloud-native access path. Many fall into access tiers that require local staging before the pipeline can consume them:
+
+| Access Tier | Description | Examples |
+|-------------|-------------|----------|
+| **Tier 1 — Streamable** | Cloud-native, queryable by bbox on-the-fly | gNATSGO on Planetary Computer (STAC), DAYMET/gridMET (OPeNDAP), 3DEP (web services), NLCD via WMS/WCS |
+| **Tier 2 — Downloadable** | Available programmatically but must be fetched and staged locally | gSSURGO file geodatabases, SSURGO via Soil Data Access API, Gleeson global permeability raster, SNODAS daily archives, NHDPlus HR bulk GeoPackages |
+| **Tier 3 — Manual/Awkward** | Custom download logic or manual acquisition required | State geological surveys, older STATSGO products, USGS pre-processed soil property GeoTIFFs on ScienceBase |
+
+#### Transparent Caching (pooch-style)
+
+Rather than requiring users to manage a project directory structure, the library manages data caching transparently. The user's config requests `dataset: polaris`. The system checks a configured cache path, and if missing/stale, fetches it (or streams it). Local files are a **caching detail**, not a required scaffold.
+
+```python
+class DataCache:
+    """Library-managed transparent data cache."""
+
+    def __init__(self, cache_dir: Path | None = None):
+        # Default: ~/.cache/hydro-param or XDG_CACHE_HOME
+        self.cache_dir = cache_dir or _default_cache_dir()
+
+    def get(self, dataset_id: str, bbox: tuple, **kwargs) -> Path:
+        """Return path to cached data, fetching if needed."""
+        cache_key = self._cache_key(dataset_id, bbox)
+        cached = self.cache_dir / cache_key
+        if cached.exists() and not self._is_stale(cached):
+            return cached
+        return self._fetch_and_cache(dataset_id, bbox, cached, **kwargs)
+
+    def _cache_key(self, dataset_id: str, bbox: tuple) -> str:
+        """Deterministic key from dataset ID + bbox."""
+        ...
+
+    def _is_stale(self, path: Path) -> bool:
+        """Check manifest for staleness."""
+        ...
+
+    def _fetch_and_cache(self, dataset_id, bbox, dest, **kwargs) -> Path:
+        """Download, log provenance, return path."""
+        ...
+```
+
+The cache directory structure is managed by the library, not the user:
+
+```text
+~/.cache/hydro-param/          # or user-configured path
+├── raw/
+│   ├── polaris_100m__bbox_-109.5_37.0_-105.5_40.5/
+│   │   ├── data.zarr
+│   │   └── manifest.json    # provenance: source URL, download time, checksum
+│   ├── gleeson_permeability__bbox_-109.5_37.0_-105.5_40.5/
+│   │   ├── data.tif
+│   │   └── manifest.json
+│   └── ...
+└── weights/                   # weight cache (§A.2)
+    └── ...
+```
+
+The pipeline config controls everything — no separate project config:
+
+```yaml
+# Pipeline config IS the single source of truth
+target_fabric:
+  path: "data/upper_colorado/catchments.gpkg"
+  id_field: "featureid"
+  crs: "EPSG:4326"
+
+domain:
+  type: bbox
+  bbox: [-109.5, 37.0, -105.5, 40.5]
+
+datasets:
+  - name: polaris_100m       # system checks cache, fetches if needed
+  - name: nlcd_2021
+  - name: dem_3dep_10m
+
+cache:
+  path: "~/.cache/hydro-param"   # optional override; default is XDG_CACHE_HOME
+```
+
+#### Design Principles
+
+1. **No staging barrier.** A user switching from desktop to cloud should not have to "stage" data to a project directory first. The cache is transparent — data flows to wherever compute runs.
+
+2. **Provenance tracking is still critical.** Each cached file's `manifest.json` records: source URL, download timestamp, dataset version/vintage, checksum, and the bbox used. This makes results reproducible and flags stale data.
+
+3. **Idempotency.** Requesting a dataset twice detects existing cached data and skips re-download. If the domain bbox changes, the cache key changes and a new fetch occurs. Hashing the config parameters that affect download scope handles this.
+
+4. **Cache is disposable.** Deleting `~/.cache/hydro-param/` simply triggers re-downloads on next run. No user data is lost.
+
+5. **Relationship to the dataset registry.** The dataset registry (§6.6) describes *what* data exists and how to access it. The cache is *where* local copies live. A `local_tiff` or `local_file` strategy in the registry can point to user-provided paths, bypassing the cache entirely for pre-staged data.
+
+6. **CLI for cache management.** Simple commands for inspection, not scaffolding:
+
+```bash
+# Show what's cached
+hydro-param cache --status
+
+# Clear stale entries
+hydro-param cache --clean
+
+# Clear everything
+hydro-param cache --purge
+```
+
 ---
 
 ## 7. Soils Data: The POLARIS Recommendation
@@ -1051,7 +1159,11 @@ The `metadata.json` records enough provenance to invalidate caches when upstream
 
 **Response: Agree strongly. This is the correct architecture.**
 
-The core engine produces a **Standardized Internal Representation (SIR)** — an `xarray.Dataset` with CF-compliant metadata, consistent naming, and full provenance attributes. Output formatters are adapters:
+The core engine produces a **Standardized Internal Representation (SIR)** — an `xarray.Dataset` with CF-compliant metadata, consistent naming, and full provenance attributes.
+
+> **Design revision (v5.3):** An external review (Appendix B, item 2D) identified that the SIR must be more than "an xarray Dataset" — it needs **strict schema validation** with enforced standard names and units. Without this, Model A might expect slope in degrees while Model B expects radians, leading to silent errors. The SIR producer (core engine) must guarantee a canonical set of variable names (e.g., `elevation_m`, not `elev_ft`) and units. A validation step ensures all SIR variables conform to the schema before passing to derivation plugins or formatters. See §A.8 for the naming conventions.
+
+Output formatters are adapters:
 
 ```python
 class OutputFormatter:
@@ -1228,6 +1340,13 @@ Source Data  →  Core Pipeline (§4, §11)  →  SIR (xr.Dataset)
 
 **A. The SIR contains physical properties, not model parameters.** The SIR should contain values like `elevation_mean`, `slope_mean`, `clay_pct_mean`, `nlcd_class_21_frac`. These are model-independent physical measurements of each feature in the target fabric. Anyone can use them regardless of which model they are parameterizing.
 
+**A′. The SIR enforces a strict schema with standard names and units (v5.3).** Per external review (Appendix B, item 2D), the SIR is not just "an xarray Dataset" — it must validate against a declared schema:
+
+- **Standard variable names:** A canonical vocabulary (e.g., `elevation_m`, `slope_deg`, `clay_pct`, `ksat_cm_hr`, `nlcd_class_21_frac`). Names encode both the physical quantity and the unit to prevent ambiguity.
+- **Guaranteed units:** The SIR producer converts all source data to canonical units during processing. Slope is always in degrees, elevation in meters, Ksat in cm/hr, etc. Unit conversions happen once, at the SIR boundary.
+- **Schema validation:** A `validate_sir(ds: xr.Dataset)` function checks that all variables have the expected names, units attributes, and reasonable value ranges before the SIR is passed to derivation plugins or formatters. This catches silent unit or naming errors early.
+- **CF-1.8 attributes:** Every SIR variable carries `units`, `long_name`, `standard_name` (where CF conventions define one), and `valid_range` attributes.
+
 **B. Model-specific derivation is plugin code, not config.** The relationship between SIR variables and model parameters is complex, model-specific, and sometimes requires domain judgment (e.g., choosing between Penman-Monteith and Hamon PET). This logic belongs in Python plugin classes, not in YAML configuration. Each model gets a derivation plugin:
 
 ```python
@@ -1288,8 +1407,12 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - ~~Weight file format?~~ → Parquet; cache key from stable IDs not geometry hashes (Appendix A.2)
 - ~~Output formatter architecture~~ → Plugin/adapter pattern with standardized internal representation (Appendix A.3)
 - ~~Config philosophy~~ → Strictly declarative; logic in Python scripts (Appendix A.4)
-- ~~Partial failure handling~~ → Tolerant mode + failed log + patch runs (Appendix A.6)
+- ~~Partial failure handling~~ → Tolerant mode + failed log + patch runs (Appendix A.6); skip/log implemented in MVP (Appendix B.2B)
 - ~~Custom parameter derivations~~ → Model-specific derivation plugins consuming the SIR (Appendix A.8)
+- ~~Project directory scaffolding~~ → Replaced with library-managed transparent caching, pooch-style (Appendix B.2A, §6.11 revised)
+- ~~Fabric acquisition scope~~ → hydro-param does NOT fetch/subset fabrics; input is a path to a geospatial file (Appendix B.3A)
+- ~~SIR schema enforcement~~ → Strict schema with standard names, guaranteed units, and validation function (Appendix B.2D, §A.8 A′)
+- ~~CRS handling in exactextract~~ → Already handled by gdptools, which reprojects target geometry to source CRS by design (Appendix B.2C, §11.5)
 
 ### 10.2 Open Design Questions
 
@@ -1309,9 +1432,11 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 14. **Output provenance and lineage:** What metadata travels with output files? When someone receives a PRMS parameter file, can they trace every value back to its source dataset, version, processing method, and config? Matters for USGS data releases and reproducibility claims. CF conventions help but don't cover the full lineage.
 15. **Dataset registry versioning:** `hydro-param-data` will evolve — POLARIS Zarr stores may be reprocessed, NLCD 2023 replaces 2021, conversion bugs are found. How do we version the data products themselves, separate from code version? Affects cache invalidation strategy (§A.2).
 16. ~~**Custom parameter derivations:** Many model parameters aren't a direct zonal mean — they're derived (depth-weighted soil averages, NLCD class fractions, slope-aspect combinations, seasonal climate normals from daily data). Where does transformation logic live? Dataset registry metadata, config, or Python code?~~ → Model-specific derivation plugins that consume the SIR (Appendix A.8)
-17. **Fabric acquisition and subsetting:** Step 1 (§4) is "resolve target fabric" but the path from "I want to model the Delaware River Basin" to a GeoDataFrame of HRUs involves non-trivial subsetting (pynhd for GFv1.1, different toolchains for NextGen, manual for custom fabrics). How much of this does hydro-param own vs. expect the user to provide?
+17. ~~**Fabric acquisition and subsetting:** Step 1 (§4) is "resolve target fabric" but the path from "I want to model the Delaware River Basin" to a GeoDataFrame of HRUs involves non-trivial subsetting (pynhd for GFv1.1, different toolchains for NextGen, manual for custom fabrics). How much of this does hydro-param own vs. expect the user to provide?~~ → **hydro-param owns none of it.** The input must be a valid, flat file (GeoPackage/Parquet) of polygons. Let tools like pynhd or hydrodata handle subsetting. Attempting to build fabric subsetting is massive scope creep (Appendix B.3A).
 18. **POLARIS licensing (CC BY-NC 4.0):** The NC (non-commercial) restriction on POLARIS — does it propagate to derived parameter values in model outputs? Matters for any operational or commercial use of parameterization results. May need legal guidance or an alternative pathway (gNATSGO) for affected users.
 19. **Category enum governance:** The `category` field on `DatasetEntry` will become a `Literal` enum constrained to the 8 canonical categories (§1.3, §6.10). Decision: **Yes, Literal enum** — catches typos, enables IDE completion. Implementation deferred to code PR.
+20. ~~**Project directory scaffolding:** Should the `project/` folder (§6.11) live inside the hydro-param repository as a template/example, or should hydro-param provide a scaffolding command (`hydro-param init --name upper_colorado --bbox ...`) that creates a project directory structure?~~ → **Dropped.** Replaced with library-managed transparent caching. The pipeline config is the single source of truth; no separate project config (Appendix B.2A, §6.11 revised).
+21. **Dataset registry versioning:** The `hydro-param-data` registry will evolve — POLARIS Zarr stores may be reprocessed, conversion bugs fixed, new datasets added. The pipeline config should pin the registry version (e.g., `registry_version: "2024.02.1"`) to ensure re-running a config 6 months later yields identical results. This intersects with weight cache invalidation (§A.2) and data provenance (Q14). See Appendix B.3B.
 
 ### 10.3 Completed Actions
 
@@ -1325,6 +1450,7 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [x] Cloud compute evaluation (§5.8)
 - [x] External review response — Gemini 3 Pro (Appendix A)
 - [x] Containerization strategy — Apptainer/Docker (§5.9)
+- [x] External review response — Gemini 2.5 Pro (Appendix B)
 
 ### 10.4 Next Steps
 
@@ -1347,8 +1473,11 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [x] SIR output as xr.Dataset with CF-1.8 metadata
 - [ ] Processing pathway bifurcation (gdptools vs xesmf routing)
 - [ ] Compute backend interface (serial + joblib backends first)
-- [ ] Fault tolerance: tolerant/strict modes, failed HRU logging, patch runs
+- [x] Fault tolerance: skip/log in MVP (v5.3); patch runs deferred to Phase 2
 - [ ] Spatial correctness validation strategy (regression tests, known-answer tests)
+- [ ] SIR schema validation with standard names and units (§A.8 A′)
+- [ ] Library-managed data caching (pooch-style, §6.11 v5.3 revision)
+- [ ] Registry version pinning in pipeline config (§B.3B)
 - [ ] Dockerfile and Apptainer conversion documentation (§5.9)
 
 **Phase 2: Integration & Scaling**
@@ -1398,8 +1527,10 @@ The MVP implements the core pipeline loop (§4 stages 1–5) with enough infrast
 | Weight caching | gdptools ZonalGen manages weights internally |
 | Output formatters (PRMS, NextGen, pywatershed) | NetCDF/Parquet sufficient for validation |
 | native_zarr and local_tiff access strategies | Implemented in registry schema but not in code; STAC COG is the working strategy |
-| Tolerant failure mode with patch runs | Strict mode only for MVP |
+| Patch runs (retry failed HRUs with different settings) | Tolerant mode with skip/log is sufficient for MVP |
 | Spatial batching caching | Batching is fast enough to recompute (~seconds for 7K features) |
+
+> **Design revision (v5.3):** An external review (Appendix B, item 2B) identified that strict-only failure mode makes the MVP frustrating for real-world testing — even at HUC2 scale, invalid geometries, self-intersections, and sliver polygons causing empty intersections are inevitable. The MVP now implements **tolerant mode with skip/log** as the default. A `try/except` around each spatial batch logs the failing batch ID and continues processing. See §A.6 for the full fault tolerance design.
 
 ### 11.2 Spatial Batching: Enabling Desktop-Scale Processing at 10m
 
@@ -1467,6 +1598,8 @@ UserTiffData(source_ds=batch_tiff, target_gdf=batch_catchments, target_id=id_fie
 
 **Why exactextract:** C++ implementation, 10–100x faster than serial Python. Handles its own memory management — reads only the raster window needed for each polygon, so memory usage is O(single polygon extent) regardless of total raster size.
 
+**CRS alignment (v5.3):** An external review (Appendix B, item 2C) flagged that grid-based zonal stats engines can be sensitive to micro-misalignments between raster grids and vector coordinates when CRS definitions differ subtly (e.g., different WKT versions of the same EPSG code). **This is already handled by gdptools by design** — `ZonalGen` reprojects the target geometry into the source data's CRS before invoking exactextract, ensuring CRS-aligned inputs. Because hydro-param uses exactextract exclusively through `gdptools.ZonalGen(zonal_engine="exactextract")`, not as a standalone library, this class of error is mitigated at the gdptools layer. No additional reprojection logic is needed in hydro-param's batch processing.
+
 **Continuous vs categorical:**
 
 - `categorical=False`: Returns statistical summaries (mean, min, max, std) per polygon. Used for elevation, slope, aspect, soil properties.
@@ -1491,6 +1624,8 @@ datasets:
     variables: [elevation, slope, aspect]
     statistics: [mean]
 
+registry_version: "2024.02.1"    # pin registry for reproducibility (§B.3B)
+
 output:
   path: "./output"
   format: netcdf
@@ -1498,7 +1633,7 @@ output:
 
 processing:
   engine: exactextract
-  failure_mode: strict
+  failure_mode: tolerant           # skip/log bad features, don't crash (§B.2B)
   batch_size: 500
 ```
 
@@ -1535,6 +1670,106 @@ This implementation resolves or partially resolves several open questions from �
 | Q8 Test domain | Delaware River Basin confirmed (7,268 NHDPlus catchments) |
 | Q16 Custom derivations | Derived variables declared in dataset registry metadata (`derived_variables` section) |
 | Q17 Fabric acquisition | User provides pre-downloaded fabric file; download is a separate script |
+
+---
+
+## Appendix B: Response to External Review (Gemini 2.5 Pro)
+
+A second independent review was conducted by Gemini 2.5 Pro on the v5.2 document. The review returned a **GO** verdict: "The design document is exceptionally high-quality, demonstrating a deep understanding of the problem domain and the specific pitfalls of scaling geospatial compute." The review's summary recommendation: "The design is sound."
+
+### B.1 Validated Strengths (No Action Needed)
+
+The reviewer validated the following design decisions, confirming they are architecturally correct:
+
+| Design Choice | Reviewer Assessment |
+| --- | --- |
+| **No dask.distributed** — shift to spatial batching + joblib/SLURM (§5.3–5.7) | "The correct architectural choice for this workload. Avoids fragile memory management issues common with distributed Dask on HPC." |
+| **Strictly declarative configs** (§A.4) | "Crucial for long-term maintainability." |
+| **Three-layer separation** — SIR → Derivation Plugins → Output Formatters (§A.8) | "Effectively isolates model-specific logic from the core processing engine." |
+| **KD-tree recursive bisection** for spatial batching (§5.5, §11.2) | "A standout design choice. Solves the specific problem of scattered HRUs causing massive I/O amplification." |
+| **Cloud vs. HPC cost/benefit analysis** (§5.8) and container strategy (§5.9) | "Shows a mature understanding of the deployment environment." |
+
+### B.2 Critical Feedback — Responses
+
+#### B.2A Project Directory Pattern (§6.11) — REVISED
+
+**Concern:** The "Project Directory" concept introduced a stateful, local filesystem dependency conflicting with the "config-driven, run-anywhere" vision. Requiring a `project/data/raw` structure creates a "staging phase" barrier. Cloud users would need massive transfers to compute nodes, negating the "compute-to-data" advantage.
+
+**Recommendation:** Treat local files as a caching detail. Move towards a transparent caching mechanism (pooch or fsspec caching) managed by the library. The pipeline config should be the single source of truth — no separate `project.yaml`.
+
+**Response: Agree. §6.11 has been rewritten.** The explicit project directory scaffolding is replaced with library-managed transparent caching. The user's config requests datasets by name; the system checks a cache path and fetches if missing/stale. The pipeline config is the single source of truth. See revised §6.11 for the `DataCache` pattern and cache directory structure.
+
+**Design impact:** Open question Q20 (project directory scaffolding) is now resolved. The `hydro-param init` scaffolding CLI is dropped; replaced with `hydro-param cache --status/--clean/--purge` for cache management.
+
+#### B.2B MVP Strict Mode Viability (§11.1) — REVISED
+
+**Concern:** The MVP specifies `failure_mode: strict`. At any meaningful scale (even a HUC2 like Delaware), invalid geometries, self-intersections, and sliver polygons cause empty intersections. Strict mode crashes the entire pipeline on the first bad feature, making the MVP frustrating for real-world testing.
+
+**Recommendation:** Even for MVP, implement a basic "Skip and Log" behavior. A `try/except` around each spatial batch that logs the failing batch ID is sufficient. Don't let one bad polygon kill a 4-hour run.
+
+**Response: Agree. §11.1 has been revised.** The MVP now defaults to `failure_mode: tolerant` with skip/log behavior. Each batch is wrapped in error handling that logs the failing features and continues processing. The more sophisticated patch-run mechanism (retry failed HRUs with different settings) remains deferred to Phase 2, but basic fault tolerance is now a Day 1 feature.
+
+**Design impact:** §11.6 pipeline config example updated to show `failure_mode: tolerant`. §A.6 fault tolerance design remains the target architecture; MVP implements the core skip/log subset.
+
+#### B.2C exactextract and CRS Precision (§11.5) — ALREADY HANDLED BY gdptools
+
+**Concern:** Strictly grid-based zonal stats engines like exactextract can be sensitive to micro-misalignments between raster grids and vector coordinates, especially with on-the-fly reprojection. Different WKT versions of the same EPSG code can cause row/col lookup shifts, leading to silent data degradation.
+
+**Recommendation:** Enforce explicit reprojection in the pipeline. Never rely on implicit transforms during the exactextract call. The batching step should crop the raster and reproject the vector batch to the exact raster CRS/transform before passing both to exactextract.
+
+**Response: Valid concern, but already mitigated.** hydro-param does not call exactextract directly — it uses `gdptools.ZonalGen(zonal_engine="exactextract")`, and **gdptools reprojects the target geometry into the source data's CRS by design** before invoking exactextract. This means CRS alignment is guaranteed at the gdptools layer without additional reprojection logic in hydro-param's batch processing. §11.5 has been annotated to document this architectural safeguard.
+
+#### B.2D The SIR Schema (§A.3, §A.8) — ADOPTED
+
+**Concern:** The SIR design glosses over internal schema enforcement. If the SIR is just a "bag of variables," Model A might expect slope in degrees and Model B in radians. The derivation plugins mitigate this, but valid SIR state (units, naming conventions) must be strictly enforced.
+
+**Recommendation:** The SIR must define a core set of standard names (e.g., `elevation_m` vs `elev_ft`). The SIR producer (core engine) must guarantee these units.
+
+**Response: Agree. §A.3 and §A.8 have been strengthened.** The SIR now requires:
+
+1. **Standard variable names** encoding both quantity and unit (e.g., `elevation_m`, `slope_deg`, `ksat_cm_hr`)
+2. **Guaranteed units** — the SIR producer converts all source data to canonical units during processing
+3. **Schema validation** — a `validate_sir()` function checks names, units, and value ranges
+4. **CF-1.8 attributes** — every variable carries `units`, `long_name`, `standard_name`, and `valid_range`
+
+This ensures derivation plugins receive consistently formatted data regardless of source dataset quirks.
+
+### B.3 Missing Considerations — Responses
+
+#### B.3A Fabric Subsetting Scope — ADOPTED
+
+**Concern:** The document (Q17) asks "How much of fabric subsetting does hydro-param own?" The reviewer's verdict: **own none of it.** Building a tool that also subsets NHDPlus/NextGen fabrics is massive scope creep.
+
+**Recommendation:** The input to the system must be a valid, flat file (GeoPackage/Parquet) of polygons. Let tools like pynhd or hydrodata handle the fetching/subsetting before hydro-param runs.
+
+**Response: Agree. This is now a hard constraint.** Open question Q17 is resolved. The `target_fabric` config field accepts a `path` to a pre-existing geospatial file. hydro-param does not fetch, subset, or construct fabrics. This was already the de facto MVP behavior (§11.6 shows `target_fabric.path`), but it is now an explicit architectural boundary.
+
+**Implication for documentation:** Example workflows should show a two-step pattern: (1) use pynhd/pygeohydro to subset the fabric, (2) point hydro-param at the resulting file.
+
+#### B.3B Dataset Registry Versioning — ADOPTED
+
+**Concern:** Moving the registry to `hydro-param-data` is smart, but there must be a mechanism for config reproducibility. Re-running a config 6 months later might yield different results if the `polaris` definition changed.
+
+**Recommendation:** The pipeline config should pin the registry version: `registry_version: "2024.02.1"`.
+
+**Response: Agree. Added to the pipeline config schema.** The `registry_version` field is now part of the pipeline config (§11.6). The `hydro-param-data` package will use calendar-based versioning (e.g., `2024.02.1`) so that pinning a version guarantees identical dataset definitions, access paths, and variable schemas.
+
+**Implementation plan:**
+- `hydro-param-data` publishes versioned registry snapshots
+- The pipeline validates the installed registry version against `registry_version` in the config
+- Mismatch produces a clear error: "Config requires registry v2024.02.1 but v2024.08.0 is installed"
+- This is new open question Q21 in §10.2
+
+### B.4 Summary of Review-Driven Changes
+
+| Issue | Section(s) Modified | Change |
+| --- | --- | --- |
+| Project directory → library-managed caching | §6.11 (rewritten), §10.1, §10.2 Q20, §10.4 | Dropped scaffolding; adopted pooch-style transparent caching |
+| MVP strict mode → tolerant with skip/log | §11.1, §11.6 | Default `failure_mode: tolerant` in MVP |
+| CRS alignment via gdptools | §11.5 | Already handled — gdptools reprojects target to source CRS by design |
+| SIR schema validation | §A.3, §A.8 | Standard names, guaranteed units, `validate_sir()` |
+| Hard-scope fabric input | §10.1, §10.2 Q17 | hydro-param does NOT fetch/subset fabrics |
+| Registry version pinning | §11.6, §10.2 Q21 | `registry_version` field in pipeline config |
 
 ---
 
