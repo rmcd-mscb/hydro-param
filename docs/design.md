@@ -1,9 +1,11 @@
 # Hydrologic Model Parameterization System — Complete Design Document
 
-**Version:** 5.4 — Registry, CLI, User Workflow, and Processing Pathways
+**Version:** 5.4 — Registry, CLI, User Workflow, and Processing Pathways (Design)
 **Date:** 2026-02-15
 **Author:** Rich McDonald / Claude (AI-assisted brainstorm)
 **Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis), v5.1 (Data Category Taxonomy), v5.2 (Project-Scoped Data Staging)
+
+> **Note:** This document includes both implemented features and planned design work. Sections marked with "planned" or "future work" describe features that are documented for design purposes but not yet implemented. See the Phase 1 checklist (§11.8) for implementation status.
 
 ---
 
@@ -971,7 +973,9 @@ datasets:
         long_name: "Saturated hydraulic conductivity"
 ```
 
-**Pipeline config `source` override:** For `local_tiff` datasets, the registry describes the dataset schema and download location, but the user provides the actual local path in their pipeline config:
+> **Implementation status:** The `download` block schema (lines 918-925 in the YAML example above) and the `climr_cat` strategy (lines 932-952) are documented here for design purposes but not yet implemented. The current implementation supports `stac_cog` and `local_tiff` strategies with a required `source` field. See Phase 1 checklist (§11.8) for implementation roadmap.
+
+**Pipeline config `source` override (planned):** For `local_tiff` datasets, the registry describes the dataset schema and download location, but the user provides the actual local path in their pipeline config:
 
 ```yaml
 # Pipeline config (user-specific, per-project)
@@ -981,6 +985,8 @@ datasets:
     variables: [land_cover]
     statistics: [majority, coverage]
 ```
+
+> **Implementation status:** The pipeline config `source` override feature is planned but not yet implemented. Currently, `local_tiff` datasets require the `source` field directly in the registry entry. The override mechanism and helpful error messages described below will be added in a future PR.
 
 If a `local_tiff` dataset is referenced without a `source` override and the registry has no default `source`, the pipeline raises a helpful error including the download URL and instructions from the registry's `download` block. See §11.9 for the CLI commands that expose this information.
 
@@ -2017,9 +2023,11 @@ This implementation resolves or partially resolves several open questions from �
 | Q16 Custom derivations | Derived variables declared in dataset registry metadata (`derived_variables` section) |
 | Q17 Fabric acquisition | User provides pre-downloaded fabric file; download is a separate script |
 
-### 11.9 CLI Design
+### 11.9 CLI Design (Planned for Future Implementation)
 
 > **New section (v5.4).** The MVP provides a minimal CLI to make the system user-friendly. The CLI is the primary interface for discovering datasets, downloading local data, and running the pipeline. Built with `cyclopts` — a modern, type-hint-driven CLI framework with minimal dependencies.
+
+> **Implementation status:** The CLI commands described in this section are **planned for a future PR** and are not yet implemented. This section documents the intended design. The current implementation can be invoked via `python -m hydro_param.pipeline <config.yml>`. See Phase 1 checklist (§11.8) for status.
 
 **Commands:**
 
@@ -2102,9 +2110,11 @@ Then set 'source' in your pipeline config:
 hydro-param = "hydro_param.cli:main"
 ```
 
-### 11.10 User Workflow: Setting Up a New Project
+### 11.10 User Workflow: Setting Up a New Project (Planned)
 
 > **New section (v5.4).** Documents the end-to-end workflow for a user starting a new parameterization project. The "project" is a pipeline config YAML file — no scaffolding, no directory structure imposed by the library.
+
+> **Implementation status:** This workflow depends on CLI commands (§11.9) and registry features (§6.6) that are **planned for future implementation**. This section documents the intended user experience. The current workflow requires users to manually download datasets and provide file paths directly in the registry or pipeline config.
 
 **Step 1: Install hydro-param**
 
