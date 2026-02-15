@@ -412,6 +412,114 @@ def test_requester_pays_default_false():
     assert info.requester_pays is False
 
 
+# ---------------------------------------------------------------------------
+# Directory-based registry loading
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def registry_dir(tmp_path: Path) -> Path:
+    """Create a registry directory with two category files."""
+    reg_dir = tmp_path / "datasets"
+    reg_dir.mkdir()
+
+    topo = {
+        "datasets": {
+            "dem_test": {
+                "strategy": "stac_cog",
+                "catalog_url": "https://example.com/stac/v1",
+                "collection": "3dep-seamless",
+                "category": "topography",
+                "variables": [{"name": "elevation", "band": 1, "categorical": False}],
+            },
+        }
+    }
+    (reg_dir / "topography.yml").write_text(yaml.dump(topo))
+
+    lc = {
+        "datasets": {
+            "nlcd_test": {
+                "strategy": "local_tiff",
+                "crs": "EPSG:5070",
+                "category": "land_cover",
+                "download": {"url": "s3://bucket/nlcd.tif"},
+                "variables": [{"name": "land_cover", "band": 1, "categorical": True}],
+            },
+        }
+    }
+    (reg_dir / "land_cover.yml").write_text(yaml.dump(lc))
+    return reg_dir
+
+
+def test_load_registry_from_directory(registry_dir: Path):
+    """Loading from a directory merges all category files."""
+    registry = load_registry(registry_dir)
+    assert "dem_test" in registry.datasets
+    assert "nlcd_test" in registry.datasets
+    assert len(registry.datasets) == 2
+
+
+def test_load_registry_dir_duplicate_name_raises(tmp_path: Path):
+    """Duplicate dataset name across files raises ValueError."""
+    reg_dir = tmp_path / "datasets"
+    reg_dir.mkdir()
+
+    file_a = {
+        "datasets": {
+            "dup_name": {
+                "strategy": "local_tiff",
+                "variables": [{"name": "v", "band": 1, "categorical": False}],
+            }
+        }
+    }
+    (reg_dir / "a.yml").write_text(yaml.dump(file_a))
+    (reg_dir / "b.yml").write_text(yaml.dump(file_a))
+
+    with pytest.raises(ValueError, match="Duplicate dataset name 'dup_name'"):
+        load_registry(reg_dir)
+
+
+def test_load_registry_dir_empty_raises(tmp_path: Path):
+    """Directory with no YAML files raises FileNotFoundError."""
+    reg_dir = tmp_path / "empty"
+    reg_dir.mkdir()
+    with pytest.raises(FileNotFoundError, match="No YAML files"):
+        load_registry(reg_dir)
+
+
+def test_load_registry_dir_no_datasets_raises(tmp_path: Path):
+    """Directory with YAML files but no datasets raises FileNotFoundError."""
+    reg_dir = tmp_path / "datasets"
+    reg_dir.mkdir()
+    (reg_dir / "empty.yml").write_text("datasets: {}")
+    with pytest.raises(FileNotFoundError, match="No datasets found"):
+        load_registry(reg_dir)
+
+
+def test_load_registry_dir_skips_non_registry_files(registry_dir: Path):
+    """Files without a datasets key are silently skipped."""
+    (registry_dir / "readme.yml").write_text("notes: just a note")
+    registry = load_registry(registry_dir)
+    assert len(registry.datasets) == 2
+
+
+def test_load_registry_nonexistent_path_raises(tmp_path: Path):
+    """Non-existent path raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        load_registry(tmp_path / "nonexistent")
+
+
+def test_load_registry_file_still_works(registry_yaml: Path):
+    """Single file mode continues to work via auto-detection."""
+    registry = load_registry(registry_yaml)
+    assert "dem_test" in registry.datasets
+
+
+# ---------------------------------------------------------------------------
+# Real registry integration tests
+# ---------------------------------------------------------------------------
+
+
 def test_load_real_registry():
     """Test loading the actual configs/datasets.yml file."""
     registry_path = Path("configs/datasets.yml")
