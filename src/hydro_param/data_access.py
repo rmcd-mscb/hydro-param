@@ -295,11 +295,18 @@ def fetch_local_tiff(
     if entry.source is None:
         msg = "Dataset requires a local file (strategy: local_tiff) but no 'source' path set."
         if entry.download:
-            msg += f"\n\nDownload from: {entry.download.url}"
-            if entry.download.size_gb:
-                msg += f"\nExpected size: ~{entry.download.size_gb} GB"
-            if entry.download.notes:
-                msg += f"\n{entry.download.notes.strip()}"
+            if entry.download.files:
+                msg += (
+                    f"\n\nThis dataset has {len(entry.download.files)} "
+                    f"downloadable files. Run:\n"
+                    f"  hydro-param datasets info <name>"
+                )
+            elif entry.download.url:
+                msg += f"\n\nDownload from: {entry.download.url}"
+                if entry.download.size_gb:
+                    msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+                if entry.download.notes:
+                    msg += f"\n{entry.download.notes.strip()}"
             msg += (
                 "\n\nSet 'source' in your pipeline config:\n"
                 "  datasets:\n"

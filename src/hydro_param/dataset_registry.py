@@ -34,13 +34,23 @@ class DerivedVariableSpec(BaseModel):
     long_name: str = ""
 
 
+class DownloadFile(BaseModel):
+    """A single downloadable file in a multi-file dataset."""
+
+    year: int
+    variable: str
+    url: str
+    size_gb: float | None = None
+
+
 class DownloadInfo(BaseModel):
     """Download provenance for datasets requiring local staging."""
 
-    url: str
+    url: str = ""
     size_gb: float | None = None
     format: str = ""
     notes: str = ""
+    files: list[DownloadFile] = []
 
 
 class DatasetEntry(BaseModel):
