@@ -874,24 +874,97 @@ class DataCache:
         # Default: ~/.cache/hydro-param or XDG_CACHE_HOME
         self.cache_dir = cache_dir or _default_cache_dir()
 
-    def get(self, dataset_id: str, bbox: tuple, **kwargs) -> Path:
-        """Return path to cached data, fetching if needed."""
-        cache_key = self._cache_key(dataset_id, bbox)
+    def get(
+        self,
+        dataset_id: str,
+        bbox: tuple[float, float, float, float],
+        registry_version: str | None = None,
+        **kwargs: object,
+    ) -> Path:
+        """Return path to cached data, fetching if needed.
+
+        The cache key is derived from:
+
+        - dataset_id
+        - registry_version / dataset version
+        - a canonicalized bbox (west, south, east, north) with fixed rounding
+        - additional byte-affecting options in **kwargs (sorted by key)
+        """
+        cache_key = self._cache_key(
+            dataset_id,
+            bbox,
+            registry_version=registry_version,
+            **kwargs,
+        )
         cached = self.cache_dir / cache_key
         if cached.exists() and not self._is_stale(cached):
             return cached
-        return self._fetch_and_cache(dataset_id, bbox, cached, **kwargs)
+        return self._fetch_and_cache(
+            dataset_id,
+            bbox,
+            cached,
+            registry_version=registry_version,
+            **kwargs,
+        )
 
-    def _cache_key(self, dataset_id: str, bbox: tuple) -> str:
-        """Deterministic key from dataset ID + bbox."""
-        ...
+    def _cache_key(
+        self,
+        dataset_id: str,
+        bbox: tuple[float, float, float, float],
+        *,
+        registry_version: str | None = None,
+        **kwargs: object,
+    ) -> str:
+        """Deterministic key from dataset ID, version, canonical bbox, and options.
+
+        Notes
+        -----
+        - Bbox is always interpreted as (west, south, east, north).
+        - Coordinates are rounded to a fixed number of decimal places so that
+          equivalent floating-point values serialize to the same string.
+        - Additional parameters that affect the bytes on disk are included as
+          sorted key=value segments to avoid accidental cache collisions.
+        - No geometry hashing is used; the key is a composite stable identifier.
+        """
+        west, south, east, north = bbox
+
+        def _round_coord(value: float, ndigits: int = 6) -> str:
+            return f"{value:.{ndigits}f}"
+
+        bbox_str = "_".join(
+            [
+                _round_coord(west),
+                _round_coord(south),
+                _round_coord(east),
+                _round_coord(north),
+            ]
+        )
+
+        version = registry_version or "unversioned"
+
+        # Include additional, byte-affecting options in a stable, sorted way.
+        extra_parts: list[str] = []
+        for key in sorted(kwargs):
+            value = kwargs[key]
+            extra_parts.append(f"{key}={value}")
+        extra_str = "__".join(extra_parts) if extra_parts else "default"
+
+        return f"{dataset_id}__v={version}__bbox={bbox_str}__opts={extra_str}"
 
     def _is_stale(self, path: Path) -> bool:
         """Check manifest for staleness."""
         ...
 
-    def _fetch_and_cache(self, dataset_id, bbox, dest, **kwargs) -> Path:
-        """Download, log provenance, return path."""
+    def _fetch_and_cache(
+        self,
+        dataset_id: str,
+        bbox: tuple[float, float, float, float],
+        dest: Path,
+        *,
+        registry_version: str | None = None,
+        **kwargs: object,
+    ) -> Path:
+        """Download, log provenance (including version + bbox), and return path."""
         ...
 ```
 
