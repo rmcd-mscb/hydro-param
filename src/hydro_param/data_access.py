@@ -1,8 +1,8 @@
-"""Data access: STAC COG loading, terrain derivation, raster I/O.
+"""Data access: STAC COG loading, local GeoTIFF loading, terrain derivation.
 
 Handles fetching source data from various backends (STAC, local files)
 and deriving variables (slope, aspect from elevation). See design.md
-section 11.4 for STAC integration details.
+sections 6.12 and 11.4 for access strategy details.
 """
 
 from __future__ import annotations
@@ -250,6 +250,75 @@ def fetch_stac_cog(
 
     logger.info("Loaded raster: shape=%s, crs=%s", result.shape, result.rio.crs)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Local GeoTIFF data access
+# ---------------------------------------------------------------------------
+
+
+def fetch_local_tiff(
+    entry: DatasetEntry,
+    bbox: list[float],
+) -> xr.DataArray:
+    """Load a local GeoTIFF clipped to the bounding box.
+
+    Reads the file referenced by ``entry.source`` and clips to the
+    bounding box.  The bbox is assumed to be in the dataset's CRS
+    (``entry.crs``).
+
+    Parameters
+    ----------
+    entry : DatasetEntry
+        Registry entry with ``strategy="local_tiff"`` and a ``source``
+        path pointing to a GeoTIFF file.
+    bbox : list[float]
+        ``[west, south, east, north]`` in the dataset's CRS.
+
+    Returns
+    -------
+    xr.DataArray
+        Raster data clipped to the bounding box.
+
+    Raises
+    ------
+    ValueError
+        If ``entry.source`` is None.
+    FileNotFoundError
+        If the source file does not exist.
+    RuntimeError
+        If no data remains after clipping to the bounding box.
+    """
+    import rioxarray  # noqa: F401
+    from rioxarray.exceptions import NoDataInBounds
+
+    if entry.source is None:
+        raise ValueError("DatasetEntry with strategy='local_tiff' must have a 'source' path")
+
+    source_path = Path(entry.source)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Local GeoTIFF not found: {source_path}")
+
+    logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
+
+    da = rioxarray.open_rasterio(source_path, masked=True)
+    da = da.squeeze("band", drop=True)
+
+    try:
+        da = da.rio.clip_box(
+            minx=bbox[0],
+            miny=bbox[1],
+            maxx=bbox[2],
+            maxy=bbox[3],
+        )
+    except (NoDataInBounds, ValueError) as exc:
+        raise RuntimeError(f"No data in bbox={bbox} for {source_path}") from exc
+
+    if da.size == 0:
+        raise RuntimeError(f"Empty raster after clipping to bbox={bbox}")
+
+    logger.info("Loaded local raster: shape=%s, crs=%s", da.shape, da.rio.crs)
+    return da
 
 
 def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
