@@ -1807,6 +1807,9 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [x] Pipeline orchestrator (5-stage batch loop) — §11.7
 - [x] SIR output as xr.Dataset with CF-1.8 metadata
 - [x] Fault tolerance: skip/log in MVP (v5.3); patch runs deferred to Phase 2
+
+**Remaining Phase 1 work** (documented in §6.6, §11.9, §11.10 but not yet implemented):
+
 - [ ] CLI: `hydro-param datasets list/info/download` + `hydro-param run` — §11.9
 - [ ] Registry `download` block for NLCD with real download URLs — §6.6
 - [ ] Pipeline config `source` override for `local_tiff` datasets — §6.6

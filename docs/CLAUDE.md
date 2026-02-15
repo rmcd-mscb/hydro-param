@@ -17,10 +17,13 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 | 1. Resolve fabric | Working | `pipeline.py` → `stage1_resolve_fabric()` |
 | 2. Resolve datasets | Working | `pipeline.py` → `stage2_resolve_datasets()` |
 | 3. Compute weights | Working (gdptools internal) | — |
-| 4. Process datasets | Working (stac_cog + local_tiff) | `pipeline.py` → `stage4_process()` |
+| 4. Process datasets | Working (stac_cog + local_tiff*) | `pipeline.py` → `stage4_process()` |
 | 5. Format output | Working (NetCDF/Parquet) | `pipeline.py` → `stage5_format_output()` |
 
+\* `local_tiff` requires the `source` path to be manually specified in the dataset registry entry. CLI-based download and pipeline config `source` override are planned for Phase 1.
+
 **Implemented data access strategies:** `stac_cog` (Planetary Computer), `local_tiff` (local GeoTIFF).
+**Planned (Phase 1):** CLI with `datasets download` command, registry `download` blocks, pipeline config `source` override for user-supplied paths.
 **Planned (Phase 2):** `climr_cat` (gridMET via ClimateR-Catalog + gdptools ClimRCatData/AggGen).
 **Not yet implemented:** `native_zarr`, `converted_zarr`.
 
@@ -54,13 +57,17 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 
 ```
 src/hydro_param/
-  cli.py               — CLI entry point (cyclopts): datasets list/info/download, run
   config.py            — Pydantic config schema + YAML loader
   dataset_registry.py  — Registry schema + YAML loader + variable resolution
   data_access.py       — STAC COG fetch, local GeoTIFF fetch, terrain derivation
   batching.py          — KD-tree spatial batching
   processing.py        — gdptools ZonalGen wrapper (continuous + categorical)
   pipeline.py          — 5-stage orchestrator with batch loop
+```
+
+**Planned (Phase 1):**
+```
+  cli.py               — CLI entry point: datasets list/info/download, run
 ```
 
 **Config files:**
@@ -73,7 +80,7 @@ configs/
 ## Dependencies & Environment
 
 - Python ≥ 3.11
-- Core: xarray, geopandas, numpy, pydantic (config validation), cyclopts (CLI)
+- Core: xarray, geopandas, numpy, pydantic (config validation)
 - Spatial: gdptools, rioxarray, pyproj
 - Compute: joblib (default), optional: coiled, boto3
 - I/O: zarr, fsspec, s3fs
