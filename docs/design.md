@@ -1234,7 +1234,15 @@ The `metadata.json` records enough provenance to invalidate caches when upstream
 
 The core engine produces a **Standardized Internal Representation (SIR)** — an `xarray.Dataset` with CF-compliant metadata, consistent naming, and full provenance attributes.
 
-> **Design revision (v5.3):** An external review (Appendix B, item 2D) identified that the SIR must be more than "an xarray Dataset" — it needs **strict schema validation** with enforced standard names and units. Without this, Model A might expect slope in degrees while Model B expects radians, leading to silent errors. The SIR producer (core engine) must guarantee a canonical set of variable names (e.g., `elevation_m`, not `elev_ft`) and units. A validation step ensures all SIR variables conform to the schema before passing to derivation plugins or formatters. See §A.8 for the naming conventions.
+> **Design revision (v5.3):** An external review (Appendix B, item 2D) identified that the SIR must be more than "an xarray Dataset" — it needs **strict schema validation** with enforced standard names and units. Without this, Model A might expect slope in degrees while Model B expects radians, leading to silent errors. The SIR producer (core engine) must guarantee a canonical set of variable names and units using a single naming pattern:
+>
+> - Variable names follow: `<base>_<unit>[_<aggregation>]`.
+> - `<base>` is the physical quantity (e.g., `elevation`, `slope`, `soil_depth`).
+> - `<unit>` is a canonical abbreviation in SI or accepted derived units (e.g., `m`, `deg`, `m_s`, `kg_m2`); dimensionless quantities omit the unit and use just `<base>[_<aggregation>]` (e.g., `curve_number_mean`).
+> - `<aggregation>` is optional and encodes the statistic or operation (`mean`, `min`, `max`, `std`, `sum`, `pXX`, etc.) computed over space and/or time.
+> - Examples: `elevation_m_mean`, `slope_deg_mean`, `soil_depth_m_min`, `lai_m2_m2_mean`, `curve_number_mean`. Older examples like `elevation_mean` and `slope_mean` are to be interpreted as `elevation_m_mean` and `slope_deg_mean` under this convention.
+>
+> A validation step ensures all SIR variables conform to this schema before passing to derivation plugins or formatters. See §A.8 for the complete variable list and any allowed exceptions.
 
 Output formatters are adapters:
 
