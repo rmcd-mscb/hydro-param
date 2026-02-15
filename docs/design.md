@@ -1757,7 +1757,7 @@ This ensures derivation plugins receive consistently formatted data regardless o
 **Implementation plan:**
 - `hydro-param-data` publishes versioned registry snapshots
 - The pipeline validates the installed registry version against `registry_version` in the config
-- Mismatch produces a clear error: "Config requires registry v2024.02.1 but v2024.08.0 is installed"
+- Mismatch produces a clear error: "Config requires registry 2024.02.1 but 2024.08.0 is installed"
 - This is new open question Q21 in §10.2
 
 ### B.4 Summary of Review-Driven Changes
