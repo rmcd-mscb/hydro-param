@@ -1,5 +1,5 @@
-"""Allow ``python -m hydro_param <config.yml>``."""
+"""Allow ``python -m hydro_param``."""
 
-from hydro_param.pipeline import main
+from hydro_param.cli import main
 
-raise SystemExit(main())
+main()

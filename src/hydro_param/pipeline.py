@@ -131,13 +131,20 @@ def stage2_resolve_datasets(
                 f"(strategy: local_tiff) but no 'source' path is set."
             )
             if entry.download:
-                msg += f"\n\nDownload from: {entry.download.url}"
-                if entry.download.size_gb:
-                    msg += f"\nExpected size: ~{entry.download.size_gb} GB"
-                if entry.download.format:
-                    msg += f"\nFormat: {entry.download.format}"
-                if entry.download.notes:
-                    msg += f"\n{entry.download.notes.strip()}"
+                if entry.download.files:
+                    msg += (
+                        f"\n\nThis dataset has {len(entry.download.files)} "
+                        f"downloadable files. Run:\n"
+                        f"  hydro-param datasets info {ds_req.name}"
+                    )
+                elif entry.download.url:
+                    msg += f"\n\nDownload from: {entry.download.url}"
+                    if entry.download.size_gb:
+                        msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+                    if entry.download.format:
+                        msg += f"\nFormat: {entry.download.format}"
+                    if entry.download.notes:
+                        msg += f"\n{entry.download.notes.strip()}"
             msg += (
                 f"\n\nThen set 'source' in your pipeline config:\n"
                 f"  datasets:\n"
@@ -189,7 +196,7 @@ def _process_batch(
         if dataset_entry.strategy == "stac_cog":
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
-            return fetch_local_tiff(dataset_entry, fetch_bbox)
+            return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for var_spec in var_specs:

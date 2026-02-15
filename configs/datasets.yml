@@ -70,9 +70,9 @@ datasets:
         long_name: "Saturated water content"
         categorical: false
 
-  # --- Vegetation / Land Cover (categorical) ---
-  nlcd_2021:
-    description: "NLCD 2021 Land Cover, 30m (Collection 1.1)"
+  # --- Vegetation / Land Cover (categorical + continuous) ---
+  nlcd:
+    description: "NLCD Land Cover, Impervious, and Tree Canopy, 30m (Collection 1.1)"
     strategy: local_tiff
     crs: "EPSG:5070"
     x_coord: "x"
@@ -80,15 +80,88 @@ datasets:
     category: land_cover
     temporal: false
     download:
-      url: "s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif"
-      size_gb: 1.5
       format: "COG"
       notes: >
         Download via AWS CLI (no credentials required):
-        aws s3 cp --no-sign-request
-        s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif .
+        aws s3 cp --no-sign-request <url> .
+      files:
+        # --- Land Cover ---
+        - year: 2021
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif"
+          size_gb: 1.5
+        - year: 2019
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2019_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2016
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2016_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2013
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2013_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2011
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2011_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2008
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2008_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2006
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2006_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2004
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2004_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        - year: 2001
+          variable: land_cover
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2001_land_cover_l48_20210604.tif"
+          size_gb: 1.5
+        # --- Impervious Surface ---
+        - year: 2021
+          variable: impervious
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2021_impervious_l48_20230630.tif"
+          size_gb: 1.2
+        - year: 2019
+          variable: impervious
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2019_impervious_l48_20210604.tif"
+          size_gb: 1.2
+        - year: 2016
+          variable: impervious
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2016_impervious_l48_20210604.tif"
+          size_gb: 1.2
+        - year: 2011
+          variable: impervious
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2011_impervious_l48_20210604.tif"
+          size_gb: 1.2
+        # --- Tree Canopy ---
+        - year: 2021
+          variable: tree_canopy
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2021_treecanopy_l48_20230630.tif"
+          size_gb: 1.0
+        - year: 2016
+          variable: tree_canopy
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2016_treecanopy_l48_20210604.tif"
+          size_gb: 1.0
+        - year: 2011
+          variable: tree_canopy
+          url: "s3://usgs-landcover/collection-1-1/nlcd_2011_treecanopy_l48_20210604.tif"
+          size_gb: 1.0
     variables:
       - name: land_cover
         band: 1
         long_name: "NLCD land cover class"
         categorical: true
+      - name: impervious
+        band: 1
+        long_name: "Percent developed imperviousness"
+        categorical: false
+      - name: tree_canopy
+        band: 1
+        long_name: "Percent tree canopy cover"
+        categorical: false

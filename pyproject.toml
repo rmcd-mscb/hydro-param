@@ -35,7 +35,11 @@ dependencies = [
     "numpy",
     "pyyaml",
     "pydantic>=2.0",
+    "cyclopts",
 ]
+
+[project.scripts]
+hydro-param = "hydro_param.cli:main"
 
 [project.optional-dependencies]
 gdp = ["gdptools", "exactextract"]
@@ -84,6 +88,7 @@ module = [
     "planetary_computer.*",
     "rioxarray.*",
     "exactextract.*",
+    "cyclopts.*",
 ]
 ignore_missing_imports = true
 follow_untyped_imports = true

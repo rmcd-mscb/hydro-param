@@ -34,13 +34,29 @@ class DerivedVariableSpec(BaseModel):
     long_name: str = ""
 
 
+class DownloadFile(BaseModel):
+    """A single downloadable file in a multi-file dataset."""
+
+    year: int
+    variable: str
+    url: str
+    size_gb: float | None = None
+
+
 class DownloadInfo(BaseModel):
     """Download provenance for datasets requiring local staging."""
 
-    url: str
+    url: str = ""
     size_gb: float | None = None
     format: str = ""
     notes: str = ""
+    files: list[DownloadFile] = []
+
+    @model_validator(mode="after")
+    def _require_url_or_files(self) -> DownloadInfo:
+        if not self.url and not self.files:
+            raise ValueError("DownloadInfo requires at least 'url' or 'files'")
+        return self
 
 
 class DatasetEntry(BaseModel):

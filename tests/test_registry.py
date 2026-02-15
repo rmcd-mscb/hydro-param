@@ -253,9 +253,33 @@ def test_download_info_defaults():
     assert info.notes == ""
 
 
-def test_download_info_requires_url():
-    with pytest.raises(ValidationError):
+def test_download_info_requires_url_or_files():
+    """DownloadInfo with neither url nor files is rejected."""
+    with pytest.raises(ValidationError, match="requires at least"):
         DownloadInfo()
+
+
+def test_download_file_model():
+    from hydro_param.dataset_registry import DownloadFile
+
+    f = DownloadFile(year=2021, variable="land_cover", url="s3://bucket/lc.tif", size_gb=1.5)
+    assert f.year == 2021
+    assert f.variable == "land_cover"
+    assert f.url == "s3://bucket/lc.tif"
+    assert f.size_gb == 1.5
+
+
+def test_download_info_with_files():
+    from hydro_param.dataset_registry import DownloadFile
+
+    info = DownloadInfo(
+        files=[
+            DownloadFile(year=2021, variable="land_cover", url="s3://bucket/lc_2021.tif"),
+            DownloadFile(year=2019, variable="land_cover", url="s3://bucket/lc_2019.tif"),
+        ]
+    )
+    assert len(info.files) == 2
+    assert info.url == ""  # No single URL for multi-file
 
 
 def test_local_tiff_with_download_block():
@@ -287,17 +311,23 @@ def test_load_real_registry():
     registry = load_registry(registry_path)
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_100m" in registry.datasets
-    assert "nlcd_2021" in registry.datasets
+    assert "nlcd" in registry.datasets
 
 
 def test_real_registry_nlcd_has_download():
-    """Verify NLCD entry in real registry has download block, no source."""
+    """Verify NLCD entry in real registry has multi-file download block."""
     registry_path = Path("configs/datasets.yml")
     if not registry_path.exists():
         pytest.skip("configs/datasets.yml not found")
     registry = load_registry(registry_path)
-    nlcd = registry.get("nlcd_2021")
+    nlcd = registry.get("nlcd")
     assert nlcd.strategy == "local_tiff"
     assert nlcd.source is None
     assert nlcd.download is not None
-    assert "usgs-landcover" in nlcd.download.url
+    assert len(nlcd.download.files) > 0
+    # Verify multi-file structure
+    years = {f.year for f in nlcd.download.files}
+    variables = {f.variable for f in nlcd.download.files}
+    assert 2021 in years
+    assert "land_cover" in variables
+    assert "impervious" in variables
