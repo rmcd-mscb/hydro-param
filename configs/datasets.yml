@@ -71,16 +71,22 @@ datasets:
         categorical: false
 
   # --- Vegetation / Land Cover (categorical) ---
-  # Not yet implemented in code; registry entry validates schema generality.
   nlcd_2021:
-    description: "NLCD 2021 Land Cover, 30m"
+    description: "NLCD 2021 Land Cover, 30m (Collection 1.1)"
     strategy: local_tiff
-    source: "data/nlcd_2021_conus.tif"
     crs: "EPSG:5070"
     x_coord: "x"
     y_coord: "y"
     category: land_cover
     temporal: false
+    download:
+      url: "s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif"
+      size_gb: 1.5
+      format: "COG"
+      notes: >
+        Download via AWS CLI (no credentials required):
+        aws s3 cp --no-sign-request
+        s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif .
     variables:
       - name: land_cover
         band: 1

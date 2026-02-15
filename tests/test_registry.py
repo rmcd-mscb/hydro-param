@@ -10,6 +10,7 @@ from hydro_param.dataset_registry import (
     DatasetEntry,
     DatasetRegistry,
     DerivedVariableSpec,
+    DownloadInfo,
     VariableSpec,
     load_registry,
 )
@@ -54,6 +55,24 @@ def registry_yaml(tmp_path: Path) -> Path:
                 ],
             },
             "nlcd_test": {
+                "strategy": "local_tiff",
+                "crs": "EPSG:5070",
+                "category": "land_cover",
+                "download": {
+                    "url": "s3://usgs-landcover/nlcd_2021.tif",
+                    "size_gb": 1.5,
+                    "format": "COG",
+                    "notes": "aws s3 cp --no-sign-request <url> .",
+                },
+                "variables": [
+                    {
+                        "name": "land_cover",
+                        "band": 1,
+                        "categorical": True,
+                    },
+                ],
+            },
+            "nlcd_with_source": {
                 "strategy": "local_tiff",
                 "source": "data/nlcd.tif",
                 "crs": "EPSG:5070",
@@ -146,10 +165,22 @@ def test_stac_cog_entry_fields(registry_yaml: Path):
     assert entry.asset_key == "data"
 
 
-def test_local_tiff_entry_fields(registry_yaml: Path):
+def test_local_tiff_entry_with_download(registry_yaml: Path):
     registry = load_registry(registry_yaml)
     entry = registry.get("nlcd_test")
+    assert entry.source is None
+    assert entry.download is not None
+    assert entry.download.url == "s3://usgs-landcover/nlcd_2021.tif"
+    assert entry.download.size_gb == 1.5
+    assert entry.download.format == "COG"
+    assert entry.crs == "EPSG:5070"
+
+
+def test_local_tiff_entry_with_source(registry_yaml: Path):
+    registry = load_registry(registry_yaml)
+    entry = registry.get("nlcd_with_source")
     assert entry.source == "data/nlcd.tif"
+    assert entry.download is None
     assert entry.crs == "EPSG:5070"
 
 
@@ -158,9 +189,11 @@ def test_stac_cog_requires_catalog_url_and_collection():
         DatasetEntry(strategy="stac_cog")
 
 
-def test_local_tiff_requires_source():
-    with pytest.raises(ValidationError, match="local_tiff strategy requires"):
-        DatasetEntry(strategy="local_tiff")
+def test_local_tiff_valid_without_source():
+    """local_tiff strategy no longer requires source at schema level."""
+    entry = DatasetEntry(strategy="local_tiff")
+    assert entry.source is None
+    assert entry.download is None
 
 
 def test_coordinate_defaults():
@@ -205,6 +238,47 @@ def test_temporal_with_t_coord_valid():
     assert entry.temporal is True
 
 
+def test_download_info_model():
+    info = DownloadInfo(url="s3://bucket/file.tif", size_gb=2.0, format="COG", notes="Use aws cli")
+    assert info.url == "s3://bucket/file.tif"
+    assert info.size_gb == 2.0
+    assert info.format == "COG"
+    assert info.notes == "Use aws cli"
+
+
+def test_download_info_defaults():
+    info = DownloadInfo(url="s3://bucket/file.tif")
+    assert info.size_gb is None
+    assert info.format == ""
+    assert info.notes == ""
+
+
+def test_download_info_requires_url():
+    with pytest.raises(ValidationError):
+        DownloadInfo()
+
+
+def test_local_tiff_with_download_block():
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        download={"url": "s3://bucket/data.tif", "size_gb": 1.5},
+    )
+    assert entry.download is not None
+    assert entry.download.url == "s3://bucket/data.tif"
+    assert entry.download.size_gb == 1.5
+    assert entry.source is None
+
+
+def test_local_tiff_with_both_source_and_download():
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        source="data/local.tif",
+        download={"url": "s3://bucket/data.tif"},
+    )
+    assert entry.source == "data/local.tif"
+    assert entry.download is not None
+
+
 def test_load_real_registry():
     """Test loading the actual configs/datasets.yml file."""
     registry_path = Path("configs/datasets.yml")
@@ -214,3 +288,16 @@ def test_load_real_registry():
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_100m" in registry.datasets
     assert "nlcd_2021" in registry.datasets
+
+
+def test_real_registry_nlcd_has_download():
+    """Verify NLCD entry in real registry has download block, no source."""
+    registry_path = Path("configs/datasets.yml")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets.yml not found")
+    registry = load_registry(registry_path)
+    nlcd = registry.get("nlcd_2021")
+    assert nlcd.strategy == "local_tiff"
+    assert nlcd.source is None
+    assert nlcd.download is not None
+    assert "usgs-landcover" in nlcd.download.url

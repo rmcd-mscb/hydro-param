@@ -167,3 +167,45 @@ def test_fetch_local_tiff_no_data_in_bbox_raises(tmp_path: Path):
     bbox = [0.0, 0.0, 1.0, 1.0]
     with pytest.raises(RuntimeError, match="No data in bbox"):
         fetch_local_tiff(entry, bbox)
+
+
+# ---------------------------------------------------------------------------
+# Tests: missing source error messages
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_local_tiff_no_source_raises():
+    """ValueError when source is None and no download info."""
+    entry = DatasetEntry(strategy="local_tiff")
+    with pytest.raises(ValueError, match="no 'source' path set"):
+        fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0])
+
+
+def test_fetch_local_tiff_no_source_includes_download_info():
+    """Error message includes download URL, size, and notes when available."""
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        download={
+            "url": "s3://bucket/nlcd.tif",
+            "size_gb": 1.5,
+            "notes": "Use aws s3 cp",
+        },
+    )
+    with pytest.raises(ValueError, match="s3://bucket/nlcd.tif") as exc_info:
+        fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0])
+    msg = str(exc_info.value)
+    assert "~1.5 GB" in msg
+    assert "aws s3 cp" in msg
+
+
+def test_fetch_local_tiff_no_source_suggests_config():
+    """Error message suggests setting source in pipeline config."""
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        download={"url": "s3://bucket/data.tif"},
+    )
+    with pytest.raises(ValueError, match="source") as exc_info:
+        fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0])
+    msg = str(exc_info.value)
+    assert "pipeline config" in msg
+    assert "your_dataset_name" in msg

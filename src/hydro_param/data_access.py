@@ -293,7 +293,20 @@ def fetch_local_tiff(
     from rioxarray.exceptions import NoDataInBounds
 
     if entry.source is None:
-        raise ValueError("DatasetEntry with strategy='local_tiff' must have a 'source' path")
+        msg = "Dataset requires a local file (strategy: local_tiff) but no 'source' path set."
+        if entry.download:
+            msg += f"\n\nDownload from: {entry.download.url}"
+            if entry.download.size_gb:
+                msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+            if entry.download.notes:
+                msg += f"\n{entry.download.notes.strip()}"
+            msg += (
+                "\n\nSet 'source' in your pipeline config:\n"
+                "  datasets:\n"
+                "    - name: your_dataset_name\n"
+                "      source: /path/to/downloaded/file.tif"
+            )
+        raise ValueError(msg)
 
     source_path = Path(entry.source)
     if not source_path.exists():
