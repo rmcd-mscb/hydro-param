@@ -169,7 +169,12 @@ def _process_batch(
             derive_fn = DERIVATION_FUNCTIONS.get(var_spec.name)
             if derive_fn is None:
                 raise ValueError(f"No derivation function for '{var_spec.name}'")
-            da = derive_fn(source_da, method=var_spec.method)
+            da = derive_fn(
+                source_da,
+                method=var_spec.method,
+                x_coord=entry.x_coord,
+                y_coord=entry.y_coord,
+            )
         else:
             # Raw variable: fetch directly
             # TODO: Pass var_spec.band to fetch routine for multi-band datasets
@@ -196,6 +201,9 @@ def _process_batch(
             engine=config.processing.engine,
             statistics=ds_req.statistics,
             categorical=categorical,
+            source_crs=entry.crs,
+            x_coord=entry.x_coord,
+            y_coord=entry.y_coord,
         )
         results[var_spec.name] = df
 
