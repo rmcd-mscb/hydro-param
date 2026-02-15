@@ -196,7 +196,7 @@ def _process_batch(
         if dataset_entry.strategy == "stac_cog":
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
-            return fetch_local_tiff(dataset_entry, fetch_bbox)
+            return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for var_spec in var_specs:

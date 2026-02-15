@@ -321,6 +321,27 @@ def test_datasets_download_multi_file_no_match(
         )
 
 
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_invalid_year(
+    mock_which,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """Non-integer --years value raises a clean error."""
+    with pytest.raises(SystemExit, match="1"):
+        _run(
+            "datasets",
+            "download",
+            "nlcd_multi",
+            "--dest",
+            str(tmp_path),
+            "--years",
+            "abc",
+            "--registry",
+            str(registry_yaml),
+        )
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------

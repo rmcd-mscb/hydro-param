@@ -256,13 +256,24 @@ def _download_multi_file(
 
     # Filter by years
     if years_str is not None:
-        year_set = {int(y.strip()) for y in years_str.split(",")}
-        files = [f for f in files if f.year in year_set]
+        year_set: set[int] = set()
+        for raw_year in years_str.split(","):
+            year_token = raw_year.strip()
+            if not year_token:
+                continue
+            try:
+                year_set.add(int(year_token))
+            except ValueError:
+                print(f"Error: Invalid year value '{year_token}' in --years.", file=sys.stderr)
+                raise SystemExit(1) from None
+        if year_set:
+            files = [f for f in files if f.year in year_set]
 
     # Filter by variables
     if variables_str is not None:
-        var_set = {v.strip() for v in variables_str.split(",")}
-        files = [f for f in files if f.variable in var_set]
+        var_set = {v.strip() for v in variables_str.split(",") if v.strip()}
+        if var_set:
+            files = [f for f in files if f.variable in var_set]
 
     if not files:
         print(f"Error: No matching files for dataset '{name}'.", file=sys.stderr)

@@ -253,11 +253,10 @@ def test_download_info_defaults():
     assert info.notes == ""
 
 
-def test_download_info_url_defaults_empty():
-    """url is optional (defaults to empty string) for multi-file datasets."""
-    info = DownloadInfo()
-    assert info.url == ""
-    assert info.files == []
+def test_download_info_requires_url_or_files():
+    """DownloadInfo with neither url nor files is rejected."""
+    with pytest.raises(ValidationError, match="requires at least"):
+        DownloadInfo()
 
 
 def test_download_file_model():

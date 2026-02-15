@@ -260,6 +260,8 @@ def fetch_stac_cog(
 def fetch_local_tiff(
     entry: DatasetEntry,
     bbox: list[float],
+    *,
+    dataset_name: str = "unknown",
 ) -> xr.DataArray:
     """Load a local GeoTIFF clipped to the bounding box.
 
@@ -274,6 +276,8 @@ def fetch_local_tiff(
         path pointing to a GeoTIFF file.
     bbox : list[float]
         ``[west, south, east, north]`` in the dataset's CRS.
+    dataset_name : str
+        Dataset name for use in error messages.
 
     Returns
     -------
@@ -293,13 +297,16 @@ def fetch_local_tiff(
     from rioxarray.exceptions import NoDataInBounds
 
     if entry.source is None:
-        msg = "Dataset requires a local file (strategy: local_tiff) but no 'source' path set."
+        msg = (
+            f"Dataset '{dataset_name}' requires a local file "
+            f"(strategy: local_tiff) but no 'source' path set."
+        )
         if entry.download:
             if entry.download.files:
                 msg += (
                     f"\n\nThis dataset has {len(entry.download.files)} "
                     f"downloadable files. Run:\n"
-                    f"  hydro-param datasets info <name>"
+                    f"  hydro-param datasets info {dataset_name}"
                 )
             elif entry.download.url:
                 msg += f"\n\nDownload from: {entry.download.url}"
@@ -308,10 +315,10 @@ def fetch_local_tiff(
                 if entry.download.notes:
                     msg += f"\n{entry.download.notes.strip()}"
             msg += (
-                "\n\nSet 'source' in your pipeline config:\n"
-                "  datasets:\n"
-                "    - name: your_dataset_name\n"
-                "      source: /path/to/downloaded/file.tif"
+                f"\n\nSet 'source' in your pipeline config:\n"
+                f"  datasets:\n"
+                f"    - name: {dataset_name}\n"
+                f"      source: /path/to/downloaded/file.tif"
             )
         raise ValueError(msg)
 

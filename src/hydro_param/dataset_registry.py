@@ -52,6 +52,12 @@ class DownloadInfo(BaseModel):
     notes: str = ""
     files: list[DownloadFile] = []
 
+    @model_validator(mode="after")
+    def _require_url_or_files(self) -> DownloadInfo:
+        if not self.url and not self.files:
+            raise ValueError("DownloadInfo requires at least 'url' or 'files'")
+        return self
+
 
 class DatasetEntry(BaseModel):
     """A single dataset in the registry."""
