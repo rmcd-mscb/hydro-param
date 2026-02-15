@@ -186,14 +186,6 @@ datasets:
         band: 1
         long_name: "Land cover class"
         categorical: true
-      - name: FctImp
-        band: 1
-        long_name: "Fractional impervious surface"
-        categorical: false
-      - name: ImpDsc
-        band: 1
-        long_name: "Impervious descriptor"
-        categorical: true
       - name: LndChg
         band: 1
         long_name: "Land cover change"
@@ -202,6 +194,14 @@ datasets:
         band: 1
         long_name: "Land cover confidence"
         categorical: false
+      - name: FctImp
+        band: 1
+        long_name: "Fractional impervious surface"
+        categorical: false
+      - name: ImpDsc
+        band: 1
+        long_name: "Impervious descriptor"
+        categorical: true
       - name: SpcChg
         band: 1
         long_name: "Spectral change day of year"

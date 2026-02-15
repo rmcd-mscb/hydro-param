@@ -241,7 +241,9 @@ def datasets_download(
     if entry.download.files or entry.download.url_template:
         _download_multi_file(name, entry, dest, years, variables)
     elif entry.download.url:
-        _download_single_file(entry.download.url, dest)
+        _download_single_file(
+            entry.download.url, dest, requester_pays=entry.download.requester_pays
+        )
     else:
         print(f"Error: Dataset '{name}' has no download URLs.", file=sys.stderr)
         raise SystemExit(1)
