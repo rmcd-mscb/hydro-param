@@ -119,6 +119,33 @@ def stage2_resolve_datasets(
     resolved = []
     for ds_req in config.datasets:
         entry = registry.get(ds_req.name)
+
+        # Apply pipeline config source override
+        if ds_req.source is not None:
+            entry = entry.model_copy(update={"source": str(ds_req.source)})
+
+        # Validate: local_tiff datasets must have a source
+        if entry.strategy == "local_tiff" and entry.source is None:
+            msg = (
+                f"Dataset '{ds_req.name}' requires a local file "
+                f"(strategy: local_tiff) but no 'source' path is set."
+            )
+            if entry.download:
+                msg += f"\n\nDownload from: {entry.download.url}"
+                if entry.download.size_gb:
+                    msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+                if entry.download.format:
+                    msg += f"\nFormat: {entry.download.format}"
+                if entry.download.notes:
+                    msg += f"\n{entry.download.notes.strip()}"
+            msg += (
+                f"\n\nThen set 'source' in your pipeline config:\n"
+                f"  datasets:\n"
+                f"    - name: {ds_req.name}\n"
+                f"      source: /path/to/downloaded/file.tif"
+            )
+            raise ValueError(msg)
+
         var_specs = [registry.resolve_variable(ds_req.name, v) for v in ds_req.variables]
         resolved.append((entry, ds_req, var_specs))
         logger.info(

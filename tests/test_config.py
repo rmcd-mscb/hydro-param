@@ -91,6 +91,32 @@ def test_dataset_request_defaults():
     ds = DatasetRequest(name="dem")
     assert ds.variables == []
     assert ds.statistics == ["mean"]
+    assert ds.source is None
+
+
+def test_dataset_request_accepts_source():
+    ds = DatasetRequest(name="nlcd", source=Path("/data/nlcd.tif"))
+    assert ds.source == Path("/data/nlcd.tif")
+
+
+def test_dataset_request_source_from_yaml(tmp_path: Path):
+    raw = {
+        "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {
+                "name": "nlcd_2021",
+                "source": "data/nlcd.tif",
+                "variables": ["land_cover"],
+                "statistics": ["majority"],
+            },
+        ],
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert config.datasets[0].source == Path("data/nlcd.tif")
 
 
 def test_target_fabric_requires_path_and_id():

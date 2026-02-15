@@ -200,6 +200,105 @@ def test_stage2_resolves_datasets(config_yaml: Path, registry_yaml: Path):
     assert var_specs[1].name == "slope"
 
 
+def test_stage2_applies_source_override(tmp_path: Path):
+    """Pipeline config source overrides registry source for local_tiff."""
+    reg_raw = {
+        "datasets": {
+            "nlcd_2021": {
+                "strategy": "local_tiff",
+                "source": "/registry/default.tif",
+                "variables": [{"name": "land_cover", "band": 1, "categorical": True}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+    resolved = stage2_resolve_datasets(config, registry)
+
+    entry, ds_req, var_specs = resolved[0]
+    assert entry.source == "/user/override.tif"
+
+
+def test_stage2_source_override_does_not_mutate_registry(tmp_path: Path):
+    """Source override creates a copy; original registry entry is unchanged."""
+    reg_raw = {
+        "datasets": {
+            "nlcd_2021": {
+                "strategy": "local_tiff",
+                "source": "/registry/default.tif",
+                "variables": [{"name": "land_cover", "band": 1, "categorical": True}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+    stage2_resolve_datasets(config, registry)
+
+    # Original registry entry must be unchanged
+    assert registry.get("nlcd_2021").source == "/registry/default.tif"
+
+
+def test_stage2_missing_source_for_local_tiff_raises(tmp_path: Path):
+    """local_tiff with no source in registry or config raises with helpful message."""
+    reg_raw = {
+        "datasets": {
+            "nlcd_2021": {
+                "strategy": "local_tiff",
+                "download": {"url": "s3://bucket/nlcd.tif", "size_gb": 1.5},
+                "variables": [{"name": "land_cover", "band": 1, "categorical": True}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "nlcd_2021", "variables": ["land_cover"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="nlcd_2021") as exc_info:
+        stage2_resolve_datasets(config, registry)
+    msg = str(exc_info.value)
+    assert "s3://bucket/nlcd.tif" in msg
+    assert "~1.5 GB" in msg
+    assert "source" in msg
+
+
 def test_stage2_rejects_unknown_dataset(config_yaml: Path, tmp_path: Path):
     # Registry with no matching dataset
     raw = {"datasets": {"other_ds": {"strategy": "local_tiff", "source": "x.tif"}}}

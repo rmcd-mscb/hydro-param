@@ -41,6 +41,7 @@ class DatasetRequest(BaseModel):
     """A dataset + variable selection from the pipeline config."""
 
     name: str
+    source: Path | None = None
     variables: list[str] = []
     statistics: list[str] = Field(default_factory=lambda: ["mean"])
 
