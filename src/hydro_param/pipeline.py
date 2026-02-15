@@ -27,6 +27,7 @@ from hydro_param.batching import spatial_batch
 from hydro_param.config import DatasetRequest, PipelineConfig, load_config
 from hydro_param.data_access import (
     DERIVATION_FUNCTIONS,
+    fetch_local_tiff,
     fetch_stac_cog,
     save_to_geotiff,
 )
@@ -156,14 +157,19 @@ def _process_batch(
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
 
+    def _fetch(dataset_entry: DatasetEntry, fetch_bbox: list[float]) -> xr.DataArray:
+        """Dispatch to the correct fetch function based on strategy."""
+        if dataset_entry.strategy == "stac_cog":
+            return fetch_stac_cog(dataset_entry, fetch_bbox)
+        if dataset_entry.strategy == "local_tiff":
+            return fetch_local_tiff(dataset_entry, fetch_bbox)
+        raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
+
     for var_spec in var_specs:
         if isinstance(var_spec, DerivedVariableSpec):
             # Load source once, then derive
             if var_spec.source not in source_cache:
-                if entry.strategy == "stac_cog":
-                    source_cache[var_spec.source] = fetch_stac_cog(entry, bbox)
-                else:
-                    raise NotImplementedError(f"Strategy '{entry.strategy}' not yet supported")
+                source_cache[var_spec.source] = _fetch(entry, bbox)
 
             source_da = source_cache[var_spec.source]
             derive_fn = DERIVATION_FUNCTIONS.get(var_spec.name)
@@ -178,10 +184,7 @@ def _process_batch(
         else:
             # Raw variable: fetch directly
             # TODO: Pass var_spec.band to fetch routine for multi-band datasets
-            if entry.strategy == "stac_cog":
-                da = fetch_stac_cog(entry, bbox)
-            else:
-                raise NotImplementedError(f"Strategy '{entry.strategy}' not yet supported")
+            da = _fetch(entry, bbox)
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
 
