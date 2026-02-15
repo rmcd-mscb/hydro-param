@@ -6,7 +6,7 @@ This file provides context for AI coding assistants (Claude Code, GitHub Copilot
 
 hydro-param is a configuration-driven hydrologic parameterization system. It generates static physical parameters (soils, vegetation, topography, land cover) for hydrologic models by intersecting geospatial source datasets with target model fabrics.
 
-**Read `docs/design.md` (v5.3) for the full architecture.** It contains detailed design decisions, trade-off analyses, two external review responses (Appendix A: Gemini 3 Pro, Appendix B: Gemini 2.5 Pro), and the rationale behind every major architectural choice.
+**Read `docs/design.md` (v5.4) for the full architecture.** It contains detailed design decisions, trade-off analyses, two external review responses (Appendix A: Gemini 3 Pro, Appendix B: Gemini 2.5 Pro), CLI design, user workflow, processing pathway bifurcation, and the rationale behind every major architectural choice.
 
 ## Current Status
 
@@ -21,6 +21,7 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 | 5. Format output | Working (NetCDF/Parquet) | `pipeline.py` → `stage5_format_output()` |
 
 **Implemented data access strategies:** `stac_cog` (Planetary Computer), `local_tiff` (local GeoTIFF).
+**Planned (Phase 2):** `climr_cat` (gridMET via ClimateR-Catalog + gdptools ClimRCatData/AggGen).
 **Not yet implemented:** `native_zarr`, `converted_zarr`.
 
 ## Key Architectural Decisions
@@ -53,6 +54,7 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 
 ```
 src/hydro_param/
+  cli.py               — CLI entry point (cyclopts): datasets list/info/download, run
   config.py            — Pydantic config schema + YAML loader
   dataset_registry.py  — Registry schema + YAML loader + variable resolution
   data_access.py       — STAC COG fetch, local GeoTIFF fetch, terrain derivation
@@ -71,7 +73,7 @@ configs/
 ## Dependencies & Environment
 
 - Python ≥ 3.11
-- Core: xarray, geopandas, numpy, pydantic (config validation)
+- Core: xarray, geopandas, numpy, pydantic (config validation), cyclopts (CLI)
 - Spatial: gdptools, rioxarray, pyproj
 - Compute: joblib (default), optional: coiled, boto3
 - I/O: zarr, fsspec, s3fs
@@ -141,11 +143,24 @@ If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lo
 
 ## Open Work (design.md §10.4)
 
-**Phase 1 priorities (not yet implemented):**
-- Processing pathway bifurcation (gdptools vs xesmf routing)
+**Phase 1 priorities (current sprint):**
+
+- CLI: `hydro-param datasets list/info/download` + `hydro-param run` (cyclopts) — §11.9
+- Registry `download` block for NLCD with real download URLs — §6.6
+- Pipeline config `source` override for `local_tiff` datasets — §6.6
+- NLCD categorical processing end-to-end (Delaware domain test)
+
+**Phase 1 priorities (remaining):**
+
+- Processing pathway bifurcation: polygon vs grid targets (gdptools vs xesmf)
 - Compute backend interface (serial + joblib)
 - SIR schema validation with `validate_sir()`
 - Library-managed transparent data caching
 - Registry version pinning
 - Spatial correctness validation (regression tests)
 - Dockerfile + Apptainer docs
+
+**Phase 2 (designed, deferred):**
+
+- Temporal processing: gridMET via ClimRCatData → WeightGen → AggGen — §11.11
+- Weight caching (critical for AggGen reuse across variables)

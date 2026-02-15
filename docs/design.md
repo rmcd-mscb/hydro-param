@@ -1,7 +1,7 @@
 # Hydrologic Model Parameterization System — Complete Design Document
 
-**Version:** 5.3 — Gemini 2.5 Pro Review Integration
-**Date:** 2026-02-14
+**Version:** 5.4 — Registry, CLI, User Workflow, and Processing Pathways
+**Date:** 2026-02-15
 **Author:** Rich McDonald / Claude (AI-assisted brainstorm)
 **Synthesized from:** v1.0 (Foundation), v2.0 (Compute), v3.0 (Data Strategy), v3.1 (Soils), v4.0 (Landscape), v5.0 (Comprehensive Synthesis), v5.1 (Data Category Taxonomy), v5.2 (Project-Scoped Data Staging)
 
@@ -869,48 +869,131 @@ All three tiers resolve through the **Dataset Registry (YAML)** to a uniform acc
 
 ### 6.6 Dataset Registry Schema
 
+The dataset registry serves two purposes: (1) a **curated catalog** of known datasets shipped with the package, encoding hard-won operational knowledge about access strategies, download locations, and variable semantics; and (2) a **user-extensible** configuration that users can add custom datasets to.
+
+> **Design revision (v5.4):** The registry schema now includes a `download` block for datasets requiring local staging, and a `climr_cat` strategy for datasets accessed via the ClimateR-Catalog through gdptools `ClimRCatData`. The `source` field is no longer required on `local_tiff` entries — it can be overridden in the pipeline config per project. See §11.9 for how the CLI exposes registry information and download support to users.
+
+**Registry entry types by access strategy:**
+
 ```yaml
 datasets:
-  conus404_daily:
-    strategy: native_zarr
-    source: "s3://hytest/conus404/conus404_daily.zarr"
-    variables: [T2D, RAIN, SNOW, U10, V10, Q2D, PSFC, SWDOWN, LWDOWN]
-    spatial_coords: [x, y]
+  # ---- Strategy: stac_cog (remote, no download needed) ----
+  dem_3dep_10m:
+    description: "USGS 3DEP Seamless DEM, 1/3 arc-second (~10m)"
+    category: topography
+    strategy: stac_cog
+    catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+    collection: "3dep-seamless"
+    asset_key: "data"
+    gsd: 10
+    sign: planetary_computer
     crs: "EPSG:4326"
-    category: climate_forcing
-    temporal: true
-    time_range: ["1979-10-01", "2023-09-30"]
+    x_coord: "x"
+    y_coord: "y"
+    temporal: false
+    variables:
+      - name: elevation
+        band: 1
+        units: "m"
+        long_name: "Surface elevation above NAVD88"
+        categorical: false
+    derived_variables:
+      - name: slope
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain slope"
 
+  # ---- Strategy: local_tiff (download required, user provides path) ----
+  nlcd_2021:
+    description: "NLCD 2021 Land Cover, 30m (Collection 1.1)"
+    category: land_cover
+    strategy: local_tiff
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    temporal: false
+    download:
+      url: "s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif"
+      size_gb: 1.5
+      format: "COG"
+      notes: >
+        Download via AWS CLI: aws s3 cp --no-sign-request
+        s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif .
+        No STAC catalog available. See §6.12 for access strategy rationale.
+    variables:
+      - name: land_cover
+        band: 1
+        long_name: "NLCD land cover class"
+        categorical: true
+
+  # ---- Strategy: climr_cat (remote via ClimateR-Catalog + gdptools) ----
+  gridmet:
+    description: "gridMET daily meteorological data, ~4km"
+    category: climate
+    strategy: climr_cat
+    catalog_id: gridmet
+    crs: "EPSG:4326"
+    x_coord: "lon"
+    y_coord: "lat"
+    t_coord: "day"
+    temporal: true
+    variables:
+      - name: tmmn
+        units: "K"
+        long_name: "Daily minimum temperature"
+      - name: tmmx
+        units: "K"
+        long_name: "Daily maximum temperature"
+      - name: pr
+        units: "mm"
+        long_name: "Daily precipitation"
+
+  # ---- Strategy: converted_zarr (curated conversion) ----
   polaris_100m:
+    description: "POLARIS soil properties, 100m resolution"
+    category: soils
     strategy: converted_zarr
     source: "s3://our-bucket/curated/polaris_100m_mean.zarr"
     original_source: "http://hydrology.cee.duke.edu/POLARIS/"
-    variables: [sand_pct, silt_pct, clay_pct, ksat, theta_s, theta_r,
-                vg_alpha, vg_n, bc_lambda, bc_hb, bulk_density, ph, om]
-    spatial_coords: [lon, lat]
-    depth_layers: [0-5cm, 5-15cm, 15-30cm, 30-60cm, 60-100cm, 100-200cm]
     crs: "EPSG:4326"
-    category: soils
+    x_coord: "lon"
+    y_coord: "lat"
     temporal: false
+    depth_layers: [0-5cm, 5-15cm, 15-30cm, 30-60cm, 60-100cm, 100-200cm]
     license: "CC BY-NC 4.0"
-
-  nlcd_2021:
-    strategy: converted_zarr
-    source: "s3://our-bucket/curated/nlcd_2021.zarr"
-    original_source: "https://www.mrlc.gov/data/nlcd-2021-land-cover-conus"
-    variables: [land_cover]
-    crs: "EPSG:5070"
-    category: land_cover
-    temporal: false
-
-  modis_ndvi:
-    strategy: virtual_zarr
-    source: "s3://our-bucket/references/modis_ndvi.json"
-    reference_format: kerchunk
-    variables: [NDVI, EVI]
-    category: vegetation
-    temporal: true
+    variables:
+      - name: sand_pct
+        units: "%"
+        long_name: "Sand content"
+      - name: ksat
+        units: "cm/hr"
+        long_name: "Saturated hydraulic conductivity"
 ```
+
+**Pipeline config `source` override:** For `local_tiff` datasets, the registry describes the dataset schema and download location, but the user provides the actual local path in their pipeline config:
+
+```yaml
+# Pipeline config (user-specific, per-project)
+datasets:
+  - name: nlcd_2021
+    source: /data/nlcd/nlcd_2021_land_cover_l48_20230630.tif  # user's local path
+    variables: [land_cover]
+    statistics: [majority, coverage]
+```
+
+If a `local_tiff` dataset is referenced without a `source` override and the registry has no default `source`, the pipeline raises a helpful error including the download URL and instructions from the registry's `download` block. See §11.9 for the CLI commands that expose this information.
+
+**Key schema fields:**
+
+| Field | Strategies | Purpose |
+|-------|-----------|---------|
+| `download` | `local_tiff` | Provenance metadata: URL, size, format, download instructions |
+| `download.url` | `local_tiff` | Where to obtain the file (also used by `hydro-param datasets download`) |
+| `catalog_id` | `climr_cat` | Identifier in the ClimateR-Catalog parquet (e.g., `gridmet`, `terraclim`) |
+| `t_coord` | `climr_cat`, temporal datasets | Time coordinate name for gdptools |
+| `source` | `local_tiff`, `converted_zarr`, `native_zarr` | Default path/URL; overrideable in pipeline config for local strategies |
+| `sign` | `stac_cog` | URL signing method (e.g., `planetary_computer`) |
 
 ### 6.7 Conversion Pipeline
 
@@ -1659,6 +1742,11 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - ~~Fabric acquisition scope~~ → hydro-param does NOT fetch/subset fabrics; input is a path to a geospatial file (Appendix B.3A)
 - ~~SIR schema enforcement~~ → Strict schema with standard names, guaranteed units, and validation function (Appendix B.2D, §A.8 A′)
 - ~~CRS handling in exactextract~~ → Already handled by gdptools, which reprojects target geometry to source CRS by design (Appendix B.2C, §11.5)
+- ~~Dataset registry download provenance~~ → Registry entries include `download` block with URL, size, format, and instructions (§6.6 v5.4)
+- ~~Pipeline config source override~~ → `local_tiff` datasets specify local path in pipeline config, not registry (§6.6 v5.4)
+- ~~CLI design~~ → Minimal CLI: `datasets list/info/download` + `run` using cyclopts (§11.9 v5.4)
+- ~~User workflow~~ → Pipeline config YAML is the project; no scaffolding (§11.10 v5.4)
+- ~~Static vs temporal processing~~ → ZonalGen for static, ClimRCatData + AggGen for temporal; strategy field dispatches (§11.11 v5.4)
 
 ### 10.2 Open Design Questions
 
@@ -1714,12 +1802,17 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [x] Dataset registry implementation (YAML schema + variable resolution)
 - [x] Spatial batching implementation (KD-tree recursive bisection) — §11.2
 - [x] STAC COG data access (Planetary Computer integration) — §11.4
+- [x] Local GeoTIFF data access (`fetch_local_tiff`) — §11.4
 - [x] gdptools ZonalGen + exactextract integration — §11.5
 - [x] Pipeline orchestrator (5-stage batch loop) — §11.7
 - [x] SIR output as xr.Dataset with CF-1.8 metadata
-- [ ] Processing pathway bifurcation (gdptools vs xesmf routing)
-- [ ] Compute backend interface (serial + joblib backends first)
 - [x] Fault tolerance: skip/log in MVP (v5.3); patch runs deferred to Phase 2
+- [ ] CLI: `hydro-param datasets list/info/download` + `hydro-param run` — §11.9
+- [ ] Registry `download` block for NLCD with real download URLs — §6.6
+- [ ] Pipeline config `source` override for `local_tiff` datasets — §6.6
+- [ ] NLCD categorical processing end-to-end (test with Delaware domain)
+- [ ] Processing pathway bifurcation: polygon vs grid targets (gdptools vs xesmf) — §A.1
+- [ ] Compute backend interface (serial + joblib backends first)
 - [ ] Spatial correctness validation strategy (regression tests, known-answer tests)
 - [ ] SIR schema validation with standard names and units (§A.8 A′)
 - [ ] Library-managed data caching (pooch-style, §6.11 v5.3 revision)
@@ -1727,13 +1820,15 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [ ] Dockerfile and Apptainer conversion documentation (§5.9)
 
 **Phase 2: Integration & Scaling**
+- [ ] Temporal processing pathway: ClimRCatData → WeightGen → AggGen (gridMET) — §11.11
+- [ ] Weight caching with ID-based keys and Parquet storage (critical for AggGen)
 - [ ] gdptools integration layer (wrapper API)
 - [ ] Output formatter plugin system (Parquet → pywatershed → PRMS)
-- [ ] Weight caching with ID-based keys and Parquet storage
 - [ ] SLURM and Coiled compute backends
 - [ ] Container integration in SlurmArrayBackend and AWSBatchBackend (§5.9)
 - [ ] Output provenance and lineage metadata in SIR
 - [ ] Parameter derivation framework (depth-weighting, class fractions, etc.)
+- [ ] Helper functions for registry entry generation (from local files, STAC, URLs)
 - [ ] Project naming, repository setup, packaging
 
 **Phase 3: Community & Outreach**
@@ -1759,22 +1854,25 @@ The MVP implements the core pipeline loop (§4 stages 1–5) with enough infrast
 | Config schema | Pydantic models: TargetFabricConfig, DomainConfig, DatasetRequest, OutputConfig, ProcessingConfig |
 | Dataset registry | YAML file mapping dataset names to access strategies, variable specs, and derivation rules |
 | Spatial batching | KD-tree recursive bisection (§5.5.1 Approach 5) |
-| Data access | STAC COG strategy via Planetary Computer (pystac-client + planetary-computer + rioxarray) |
+| Data access | STAC COG (Planetary Computer) + local GeoTIFF strategies |
 | Processing | gdptools ZonalGen with exactextract engine; continuous and categorical modes |
+| CLI | `hydro-param datasets list/info/download` + `hydro-param run` (§11.9) |
 | Output | SIR as xr.Dataset with CF-1.8 metadata; NetCDF writer |
 | Test domain | Delaware River Basin, 7,268 NHDPlus catchments |
-| Test dataset | 3DEP 1/3 arc-second (~10m) DEM with derived slope and aspect |
+| Test datasets | 3DEP DEM (STAC COG, continuous + derived) and NLCD (local_tiff, categorical) |
 
 **Deferred to later phases:**
 
 | Component | Rationale |
 | --- | --- |
+| Temporal processing (gridMET via ClimRCatData + AggGen) | Requires new processor class, weight caching, and temporal SIR handling (§11.11) |
 | Compute backends (joblib, SLURM, Coiled) | Serial is sufficient for regional-scale MVP |
-| Weight caching | gdptools ZonalGen manages weights internally |
+| Weight caching | gdptools ZonalGen manages weights internally; AggGen weights deferred with temporal pathway |
 | Output formatters (PRMS, NextGen, pywatershed) | NetCDF/Parquet sufficient for validation |
-| native_zarr and local_tiff access strategies | Implemented in registry schema but not in code; STAC COG is the working strategy |
+| native_zarr and converted_zarr access strategies | Implemented in registry schema but not in code |
 | Patch runs (retry failed HRUs with different settings) | Tolerant mode with skip/log is sufficient for MVP |
 | Spatial batching caching | Batching is fast enough to recompute (~seconds for 7K features) |
+| Helper functions for registry entry generation | Users edit YAML directly for MVP; auto-detection from files/URLs deferred |
 
 > **Design revision (v5.3):** An external review (Appendix B, item 2B) identified that strict-only failure mode makes the MVP frustrating for real-world testing — even at HUC2 scale, invalid geometries, self-intersections, and sliver polygons causing empty intersections are inevitable. The MVP now implements **tolerant mode with skip/log** as the default. A `try/except` around each spatial batch logs the failing batch ID and continues processing. See §A.6 for the full fault tolerance design.
 
@@ -1805,13 +1903,14 @@ This is the "chunk by space, not by time" principle (§5.4). The serial batch lo
 
 The dataset registry (`configs/datasets.yml`) maps human-readable dataset names to access strategies. The schema supports three dataset categories with different characteristics:
 
-| Category | Example | Strategy | Variable Type | Key Difference |
-| --- | --- | --- | --- | --- |
-| Topography | 3DEP DEM | `stac_cog` | Continuous + derived | Derived variables (slope, aspect) computed from source (elevation) |
-| Soils | POLARIS | `converted_zarr` | Continuous, multi-variable | Multiple independent variables; future: depth dimension |
-| Land Cover | NLCD | `local_tiff` | Categorical | Class fractions, not means; `categorical: true` flag |
+| Category | Example | Strategy | Variable Type | Key Difference | Status |
+| --- | --- | --- | --- | --- | --- |
+| Topography | 3DEP DEM | `stac_cog` | Continuous + derived | Derived variables (slope, aspect) computed from source (elevation) | **Implemented** |
+| Land Cover | NLCD | `local_tiff` | Categorical | Class fractions, not means; `categorical: true` flag | **Implemented** |
+| Climate | gridMET | `climr_cat` | Continuous, temporal | Time-varying; uses AggGen not ZonalGen (§11.11) | **Planned (Phase 2)** |
+| Soils | POLARIS | `converted_zarr` | Continuous, multi-variable | Multiple independent variables; future: depth dimension | Schema only |
 
-The MVP implements three of the eight data categories defined in §1.3. The full category processing profiles — including hydrography (vector join), climate (temporal aggregation), and cross-category parameter derivation — are described in §6.10 and Appendix A.8.
+The MVP implements two of the eight data categories defined in §1.3 (topography and land cover) with two access strategies (`stac_cog` and `local_tiff`). Climate (gridMET via `climr_cat`) is designed and documented (§11.11) but deferred to Phase 2 due to the temporal processing pathway requirement. The full category processing profiles — including hydrography (vector join) and cross-category parameter derivation — are described in §6.10 and Appendix A.8.
 
 **Registry schema design decisions:**
 
@@ -1894,15 +1993,16 @@ processing:
 
 ```text
 src/hydro_param/
+  cli.py               — CLI entry point (datasets list/info/download, run)
   config.py            — Pydantic config schema + YAML loader
   dataset_registry.py  — Registry schema + YAML loader + variable resolution
-  data_access.py       — STAC COG fetch, terrain derivation, tile mosaic
+  data_access.py       — STAC COG fetch, local GeoTIFF fetch, terrain derivation
   batching.py          — KD-tree spatial batching
   processing.py        — gdptools ZonalGen wrapper (continuous + categorical)
   pipeline.py          — 5-stage orchestrator with batch loop
 ```
 
-Each module has a single responsibility and minimal coupling. The pipeline orchestrator calls the others in sequence but doesn't implement data access, batching, or processing logic itself.
+Each module has a single responsibility and minimal coupling. The pipeline orchestrator calls the others in sequence but doesn't implement data access, batching, or processing logic itself. The CLI module is a thin wrapper that parses arguments and delegates to the appropriate module.
 
 ### 11.8 Resolved Open Questions
 
@@ -1916,6 +2016,237 @@ This implementation resolves or partially resolves several open questions from �
 | Q8 Test domain | Delaware River Basin confirmed (7,268 NHDPlus catchments) |
 | Q16 Custom derivations | Derived variables declared in dataset registry metadata (`derived_variables` section) |
 | Q17 Fabric acquisition | User provides pre-downloaded fabric file; download is a separate script |
+
+### 11.9 CLI Design
+
+> **New section (v5.4).** The MVP provides a minimal CLI to make the system user-friendly. The CLI is the primary interface for discovering datasets, downloading local data, and running the pipeline. Built with `cyclopts` — a modern, type-hint-driven CLI framework with minimal dependencies.
+
+**Commands:**
+
+```bash
+# List available datasets, grouped by category
+hydro-param datasets list
+
+# Show details about a specific dataset (description, variables, download info)
+hydro-param datasets info <name>
+
+# Download a dataset to local storage
+hydro-param datasets download <name> [--dest <path>]
+
+# Run the pipeline
+hydro-param run <config.yml> [--registry <registry.yml>]
+```
+
+**`datasets list`** reads the registry and displays datasets grouped by the eight canonical categories (§1.3). For each dataset, it shows the name, description, strategy, and a flag indicating whether download is required:
+
+```
+Topography:
+  dem_3dep_10m     USGS 3DEP Seamless DEM, 1/3 arc-second    [stac_cog, remote]
+
+Land Cover:
+  nlcd_2021        NLCD 2021 Land Cover, 30m                  [local_tiff, download required]
+
+Climate:
+  gridmet          gridMET daily meteorological data, ~4km     [climr_cat, remote]
+
+Soils:
+  polaris_100m     POLARIS soil properties, 100m              [converted_zarr, not yet available]
+```
+
+**`datasets info <name>`** shows the full registry entry for a dataset, including variables, CRS, and — for datasets requiring download — the download URL, expected size, and CLI command:
+
+```
+Dataset: nlcd_2021
+Description: NLCD 2021 Land Cover, 30m (Collection 1.1)
+Strategy: local_tiff (download required)
+CRS: EPSG:5070
+Variables: land_cover (categorical)
+
+Download:
+  URL: s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif
+  Size: ~1.5 GB (COG, internally compressed)
+  Command: aws s3 cp --no-sign-request <url> .
+
+To use in your pipeline config:
+  datasets:
+    - name: nlcd_2021
+      source: /path/to/your/downloaded/nlcd_2021.tif
+      variables: [land_cover]
+```
+
+**`datasets download <name>`** executes the download for datasets with a `download` block in the registry. For NLCD, this runs the AWS CLI command. The `--dest` flag specifies the download directory (default: current directory). The command prints the downloaded file path so the user can reference it in their pipeline config.
+
+**`run <config.yml>`** replaces the current `python -m hydro_param.pipeline` entry point. Configures logging and executes the pipeline.
+
+**Error messages as user guidance:** When a pipeline references a `local_tiff` dataset without a `source` path, the error message includes the download instructions:
+
+```
+Error: Dataset 'nlcd_2021' requires a local file (strategy: local_tiff).
+
+Download from: s3://usgs-landcover/collection-1-1/nlcd_2021_land_cover_l48_20230630.tif
+Expected size: ~1.5 GB (COG, internally compressed)
+
+Or run: hydro-param datasets download nlcd_2021
+
+Then set 'source' in your pipeline config:
+  datasets:
+    - name: nlcd_2021
+      source: /path/to/downloaded/nlcd_2021.tif
+      variables: [land_cover]
+```
+
+**Implementation:** A single `cli.py` module added to `src/hydro_param/`. Entry point registered in `pyproject.toml` under `[project.scripts]`:
+
+```toml
+[project.scripts]
+hydro-param = "hydro_param.cli:main"
+```
+
+### 11.10 User Workflow: Setting Up a New Project
+
+> **New section (v5.4).** Documents the end-to-end workflow for a user starting a new parameterization project. The "project" is a pipeline config YAML file — no scaffolding, no directory structure imposed by the library.
+
+**Step 1: Install hydro-param**
+
+```bash
+pip install hydro-param
+# or: pixi add hydro-param
+```
+
+**Step 2: Get a target fabric** (outside hydro-param)
+
+hydro-param does not fetch or subset fabrics (§B.3A). The user must provide a pre-existing geospatial file (GeoPackage, Parquet, or Shapefile) containing their target polygons. Tools like `pynhd` or `pygeohydro` handle this:
+
+```python
+# Example: download NHDPlus catchments for the Delaware River Basin
+import pynhd
+# ... fetch catchments, save as delaware_catchments.gpkg
+```
+
+**Step 3: Discover available datasets**
+
+```bash
+hydro-param datasets list           # see what's available
+hydro-param datasets info nlcd_2021 # get download instructions
+```
+
+**Step 4: Download required datasets**
+
+For datasets with `strategy: local_tiff` (or other strategies requiring local files), the user downloads the data. The registry's `download` block tells them exactly what to do:
+
+```bash
+hydro-param datasets download nlcd_2021 --dest /data/nlcd/
+```
+
+Remote-viable datasets (`stac_cog`, `climr_cat`) need no download — the pipeline accesses them directly.
+
+**Step 5: Write a pipeline config**
+
+The user creates a YAML config file specifying their target fabric, domain, datasets, and output preferences. Example configs ship with the package as templates:
+
+```yaml
+target_fabric:
+  path: /home/alice/projects/willamette/catchments.gpkg
+  id_field: hru_id
+
+domain:
+  type: bbox
+  bbox: [-124.0, 43.0, -121.5, 46.0]
+
+datasets:
+  - name: dem_3dep_10m            # remote — just works
+    variables: [elevation, slope, aspect]
+    statistics: [mean]
+  - name: nlcd_2021               # local — user provides path
+    source: /data/nlcd/nlcd_2021_land_cover_l48_20230630.tif
+    variables: [land_cover]
+    statistics: [majority, coverage]
+
+output:
+  path: ./output
+  format: netcdf
+  sir_name: willamette_params
+
+processing:
+  engine: exactextract
+  failure_mode: tolerant
+  batch_size: 500
+```
+
+**Step 6: Run the pipeline**
+
+```bash
+hydro-param run willamette_config.yml
+```
+
+**Key design principle:** The YAML files themselves are the documentation for MVP. Well-commented registry entries and a template pipeline config teach the user the workflow. CLI tooling provides discoverability. Formal quickstart guides and tutorials come in Phase 2.
+
+### 11.11 Processing Pathway Bifurcation: Static vs Temporal
+
+> **New section (v5.4).** The pipeline requires two fundamentally different processing pathways based on whether the source dataset is static or time-varying. This section documents the two pathways and their gdptools integration.
+
+The design already identifies two target-based pathways (§A.1): polygon targets use gdptools, grid targets use xesmf. This section adds a second axis: **static vs temporal source data**, which determines which gdptools processing class to use.
+
+#### 11.11.1 Static Pathway: UserTiffData → ZonalGen
+
+For static raster datasets (DEM, NLCD, soils), the pipeline uses `gdptools.UserTiffData` with `ZonalGen`:
+
+```text
+fetch_stac_cog() or fetch_local_tiff()
+  → save as GeoTIFF
+  → UserTiffData(source_ds=tiff, target_gdf=batch, target_id=id_field)
+  → ZonalGen(user_data, zonal_engine="exactextract")
+  → calculate_zonal(categorical=True|False)
+  → pd.DataFrame (features × statistics)
+```
+
+**Characteristics:**
+- No time dimension — output is one value per feature per statistic
+- Weights computed internally by ZonalGen (no separate WeightGen step)
+- Supports both continuous (mean, min, max, std) and categorical (class fractions) modes
+- Engines: serial, parallel, dask, exactextract
+- **Implemented in MVP** for `stac_cog` and `local_tiff` strategies
+
+#### 11.11.2 Temporal Pathway: ClimRCatData → WeightGen → AggGen
+
+For time-varying gridded datasets (gridMET, Daymet, TerraClimate), the pipeline uses `gdptools.ClimRCatData` with `WeightGen` and `AggGen`:
+
+```text
+Load ClimateR-Catalog (parquet)
+  → Filter for dataset variables (e.g., gridmet tmmn, tmmx, pr)
+  → ClimRCatData(source_cat_dict, target_gdf, target_id, source_time_period)
+  → WeightGen(user_data, method="serial"|"parallel", weight_gen_crs=6931)
+  → calculate_weights() → intersection weights DataFrame
+  → AggGen(user_data, stat_method="mean", weights=weights, ...)
+  → calculate_agg()
+  → (gpd.GeoDataFrame, xr.Dataset) with dims (time, features)
+```
+
+**Characteristics:**
+- Preserves full time dimension — output is a time series per feature per variable
+- **Requires pre-computed weights** via `WeightGen` (expensive, should be cached)
+- All variables sharing the same grid reuse the same weights (e.g., all gridMET variables)
+- Engines: serial, parallel, dask (no exactextract — that's ZonalGen only)
+- Output is `xr.Dataset` with CF-1.8 metadata, not `pd.DataFrame`
+- **Deferred to Phase 2** — requires new processor class, weight caching, and temporal SIR handling
+
+**ClimRCatData auto-configures from the catalog:** The ClimateR-Catalog parquet file (~108K records) contains dataset metadata including OPeNDAP URLs, coordinate names (`X_name`, `Y_name`, `T_name`), CRS, resolution, and temporal extent. `ClimRCatData` extracts all access parameters from a catalog record — no manual configuration needed beyond the catalog ID and variable names.
+
+**Weight caching is critical for temporal data:** Weight computation (spatial intersection of source grid with target polygons) is the expensive step for AggGen. For gridMET (~4km grid → 7K polygons), weight generation takes minutes. Since all gridMET variables share the same grid, weights computed once can be reused across all variables and time periods. The weight cache (§A.2) must support this reuse pattern.
+
+**Operational note (from experience):** gridMET via OPeNDAP works well for serial access, even at CONUS scale. Parallel weight generation with 2–6 workers is beneficial. Unlike datasets that choke under spatial batching (e.g., Daymet via THREDDS), gridMET's OPeNDAP endpoint handles moderate concurrency reliably. This makes `climr_cat` a viable remote-access strategy without requiring local download — in contrast to NLCD, where local COG is the only practical option (§6.12).
+
+#### 11.11.3 Strategy-to-Pathway Mapping
+
+| Strategy | Pathway | gdptools Classes | When to Use |
+|----------|---------|------------------|-------------|
+| `stac_cog` | Static | UserTiffData → ZonalGen | Remote rasters with STAC catalog (3DEP) |
+| `local_tiff` | Static | UserTiffData → ZonalGen | Downloaded rasters (NLCD, custom GeoTIFFs) |
+| `converted_zarr` | Static | UserTiffData → ZonalGen | Curated Zarr stores (POLARIS) |
+| `climr_cat` | Temporal | ClimRCatData → WeightGen → AggGen | ClimateR-Catalog datasets (gridMET, Daymet) |
+| `native_zarr` | Either | UserCatData → WeightGen → AggGen | Cloud-native Zarr (CONUS404) |
+
+The `strategy` field in the dataset registry determines which pathway the pipeline uses. The pipeline's batch processing loop (§11.7, `_process_batch()`) dispatches to the correct pathway based on strategy.
 
 ---
 
