@@ -282,12 +282,15 @@ def fetch_local_tiff(
 
     Raises
     ------
+    ValueError
+        If ``entry.source`` is None.
     FileNotFoundError
         If the source file does not exist.
     RuntimeError
         If no data remains after clipping to the bounding box.
     """
     import rioxarray  # noqa: F401
+    from rioxarray.exceptions import NoDataInBounds
 
     if entry.source is None:
         raise ValueError("DatasetEntry with strategy='local_tiff' must have a 'source' path")
@@ -308,7 +311,7 @@ def fetch_local_tiff(
             maxx=bbox[2],
             maxy=bbox[3],
         )
-    except Exception as exc:
+    except (NoDataInBounds, ValueError) as exc:
         raise RuntimeError(f"No data in bbox={bbox} for {source_path}") from exc
 
     if da.size == 0:

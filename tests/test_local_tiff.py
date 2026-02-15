@@ -16,7 +16,7 @@ import xarray as xr
 
 from hydro_param.dataset_registry import DatasetEntry
 
-rioxarray = pytest.importorskip("rioxarray")
+pytest.importorskip("rioxarray")
 
 from hydro_param.data_access import fetch_local_tiff  # noqa: E402, I001
 
@@ -116,7 +116,12 @@ def test_fetch_local_tiff_loads_categorical(tmp_path: Path):
 
     assert isinstance(da, xr.DataArray)
     # Should contain our NLCD classes
-    unique = np.unique(da.values[~np.isnan(da.values)])
+    values = da.values
+    if np.issubdtype(values.dtype, np.floating):
+        mask = np.isnan(values)
+    else:
+        mask = np.zeros_like(values, dtype=bool)
+    unique = np.unique(values[~mask])
     assert 11 in unique or 21 in unique or 41 in unique
 
 
