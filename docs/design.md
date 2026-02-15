@@ -193,6 +193,126 @@ The core spatial processing engine.
 
 **Fabric flexibility (open question):** Treat grids as special case of polygons (rasterize to cell polygons) or separate pathway? For NHG (1km MODFLOW grid), polygon approach works. For high-res regular grids, xesmf-based regridding may be more efficient.
 
+### Pipeline Flow Diagram
+
+```mermaid
+flowchart TD
+    %% ── Styles ──
+    classDef config fill:#e8f4f8,stroke:#2980b9,stroke-width:2px,color:#000
+    classDef process fill:#eaf5ea,stroke:#27ae60,stroke-width:2px,color:#000
+    classDef decision fill:#fef9e7,stroke:#f39c12,stroke-width:2px,color:#000
+    classDef data fill:#f5eef8,stroke:#8e44ad,stroke-width:2px,color:#000
+    classDef output fill:#fdedec,stroke:#e74c3c,stroke-width:2px,color:#000
+    classDef cache fill:#f0f0f0,stroke:#7f8c8d,stroke-width:1px,stroke-dasharray:5 5,color:#000
+
+    %% ── Stage 0: Configuration ──
+    subgraph S0["Stage 0 — Configuration"]
+        CONFIG["Pipeline Config\n(YAML, declarative)"]:::config
+        VALIDATE["Validate Config\n(Pydantic models)"]:::process
+        REGISTRY[("Dataset Registry\n hydro-param-data\npinned version")]:::data
+    end
+    CONFIG --> VALIDATE
+    VALIDATE --> REGISTRY
+
+    %% ── Stage 1: Resolve Target Fabric ──
+    subgraph S1["Stage 1 — Resolve Target Fabric"]
+        LOAD_FABRIC["Load Target Fabric\n(user-provided GeoPackage/Parquet)"]:::process
+        FABRIC_GDF[/"GeoDataFrame\ntarget polygons or grid"/]:::data
+        FABRIC_TYPE{{"Polygon or\nGrid target?"}}:::decision
+    end
+    VALIDATE --> LOAD_FABRIC
+    LOAD_FABRIC --> FABRIC_GDF
+    FABRIC_GDF --> FABRIC_TYPE
+
+    %% ── Stage 2: Resolve Source Datasets ──
+    subgraph S2["Stage 2 — Resolve Datasets"]
+        RESOLVE["Resolve Dataset Entries\n(registry lookup per dataset)"]:::process
+        TIER{{"Access Tier?"}}:::decision
+        STREAM["Tier 1 — Streamable\nSTAC COG, OPeNDAP, Zarr"]:::data
+        FETCH["Tier 2 — Downloadable\ncheck cache, fetch if needed"]:::data
+        LOCAL["Tier 3 — Local file\nuser-provided path"]:::data
+        DATACACHE[("Transparent Cache\n~/.cache/hydro-param")]:::cache
+    end
+    REGISTRY --> RESOLVE
+    RESOLVE --> TIER
+    TIER -- "streamable" --> STREAM
+    TIER -- "downloadable" --> FETCH
+    TIER -- "local" --> LOCAL
+    FETCH <-.-> DATACACHE
+
+    %% ── Stage 3: Spatial Batching ──
+    subgraph S3["Stage 3 — Spatial Batching"]
+        BATCH["Assign Spatial Batches\n(KD-tree recursive bisection)"]:::process
+        BATCHES[/"N batches with\ncompact bounding boxes"/]:::data
+    end
+    FABRIC_TYPE -- "polygon" --> BATCH
+    BATCH --> BATCHES
+
+    %% ── Grid pathway ──
+    FABRIC_TYPE -- "grid" --> REGRID["Regrid Processor\n(xesmf conservative)"]:::process
+
+    %% ── Stage 4: Per-Batch Processing ──
+    subgraph S4["Stage 4 — Process Datasets (per batch)"]
+        FETCH_BATCH["Fetch Source Data\n(clip to batch bbox)"]:::process
+        REPROJECT["CRS Alignment\n(gdptools reprojects\ntarget to source CRS)"]:::process
+        VARTYPE{{"Variable type?"}}:::decision
+        TEMPORAL{{"Temporal?"}}:::decision
+        ZONAL_CONT["gdptools ZonalGen\n(exactextract)\ncontinuous stats"]:::process
+        ZONAL_CAT["gdptools ZonalGen\n(exactextract)\nclass fractions"]:::process
+        AGGGEN["gdptools AggGen\narea-weighted\ntemporal aggregation"]:::process
+        BATCH_RESULT[/"Batch Results\n(pd.DataFrame)"/]:::data
+        FAULT{{"Valid result?"}}:::decision
+        LOG_FAIL["Log to failed_hrus.csv\n(tolerant mode)"]:::output
+    end
+    BATCHES --> FETCH_BATCH
+    STREAM --> FETCH_BATCH
+    FETCH --> FETCH_BATCH
+    LOCAL --> FETCH_BATCH
+    FETCH_BATCH --> REPROJECT
+    REPROJECT --> VARTYPE
+    VARTYPE -- "continuous" --> TEMPORAL
+    VARTYPE -- "categorical" --> ZONAL_CAT
+    TEMPORAL -- "static" --> ZONAL_CONT
+    TEMPORAL -- "time-varying" --> AGGGEN
+    ZONAL_CONT --> FAULT
+    ZONAL_CAT --> FAULT
+    AGGGEN --> FAULT
+    FAULT -- "success" --> BATCH_RESULT
+    FAULT -- "failure" --> LOG_FAIL
+    LOG_FAIL -.-> BATCH_RESULT
+
+    %% ── Stage 5: Assembly & Output ──
+    subgraph S5["Stage 5 — SIR Assembly and Output"]
+        MERGE["Merge Batch Results"]:::process
+        SIR["Assemble SIR\n(xr.Dataset, CF-1.8)\nvalidate schema"]:::process
+        DERIV_Q{{"Derivation\nneeded?"}}:::decision
+        DERIV_PLUGIN["Derivation Plugin\nPRMS / NextGen / custom\nmodel-specific parameters"]:::process
+        FORMATTER["Output Formatter\n(plugin adapter)"]:::output
+        OUT_PARQUET["Parquet / NetCDF"]:::output
+        OUT_PRMS["PRMS .param\n(via pyPRMS)"]:::output
+        OUT_NEXTGEN["NextGen YAML"]:::output
+        OUT_PYWS["pywatershed\nparam set"]:::output
+        REPORT["Post-Processing Report\nsuccess / failure summary"]:::output
+    end
+    BATCH_RESULT --> MERGE
+    REGRID --> MERGE
+    MERGE --> SIR
+    SIR --> DERIV_Q
+    DERIV_Q -- "yes" --> DERIV_PLUGIN
+    DERIV_Q -- "no (generic)" --> FORMATTER
+    DERIV_PLUGIN --> FORMATTER
+    FORMATTER --> OUT_PARQUET
+    FORMATTER --> OUT_PRMS
+    FORMATTER --> OUT_NEXTGEN
+    FORMATTER --> OUT_PYWS
+    LOG_FAIL -.-> REPORT
+    FORMATTER --> REPORT
+
+    %% ── Weight Cache (side channel) ──
+    WEIGHTCACHE[("Weight Cache\nParquet, ID-based keys")]:::cache
+    REPROJECT <-.-> WEIGHTCACHE
+```
+
 ---
 
 ## 5. Compute & Parallelism Strategy
@@ -1030,6 +1150,51 @@ hydro-param cache --clean
 # Clear everything
 hydro-param cache --purge
 ```
+
+### 6.12 NLCD Access Strategy: Local COG over Remote Services
+
+NLCD (National Land Cover Database) Collection 1.1 — the new annually-consistent time series covering 1985–2024 — is available as Cloud-Optimized GeoTIFFs (COGs) on AWS S3 (`s3://usgs-landcover/annual-nlcd/`, requester-pays, `us-west-2`) and via WMS/WCS from the MRLC GeoServer. There is **no STAC catalog** for NLCD from any provider. Microsoft Planetary Computer hosts only the outdated 2016 release and does not index it in their STAC API.
+
+The Python package `pygeohydro` (HyRiver suite) provides `nlcd_bygeom()` which accesses **Legacy NLCD only** (epoch snapshots 2001–2021) via MRLC WMS. It does not support Annual NLCD Collection 1.1.
+
+#### Why Local COG, Not Remote Services
+
+The pipeline's spatial batching architecture (§5.5) creates a fundamental tension with remote data services. Each spatial batch fires a separate data request. For a Delaware-scale run (15 batches × 1 NLCD year), that produces 15 remote requests — manageable. For CONUS-scale (200+ batches × multiple years), it produces thousands of requests that overwhelm remote services:
+
+| Failure Mode | Impact |
+|---|---|
+| **Rate limiting / throttling** | MRLC GeoServer and S3 throttle concurrent requests; batches queue server-side, serializing what should be parallel I/O |
+| **Connection timeouts** | Accumulated latency from many small requests exceeds timeout thresholds, triggering retries that compound the problem |
+| **Service instability** | WMS endpoints have had breaking changes (MRLC broke pygeohydro in Sept 2024); depending on remote services makes the pipeline fragile |
+| **Offline environments** | HPC compute nodes often have limited or no internet access; remote-only strategies fail entirely |
+
+Local COGs eliminate all of these. GDAL reads windowed subsets from local COGs via internal tiling — each batch gets O(batch bbox) I/O at disk speed with zero network overhead. This is the same mechanism that makes the spatial batching strategy effective: compact bounding boxes mean small reads, and local disk means those reads are fast and reliable.
+
+#### Access Comparison
+
+| Criterion | Local COG | PyGeoHydro (WMS) | S3 Range Requests |
+|---|---|---|---|
+| **Annual NLCD support** | Yes (any COG) | No (Legacy only) | Yes |
+| **Spatial batching compatibility** | Excellent — windowed reads at disk speed | Poor — N×M remote requests throttle | Moderate — HTTP overhead per batch |
+| **Offline / HPC** | Works | Fails | Fails |
+| **Deterministic performance** | Yes | No (network-dependent) | No |
+| **Disk cost** | ~1.5 GB per year | None | None |
+| **Setup** | One-time download | Zero | Zero |
+| **Dependency footprint** | None (gdptools reads COGs) | pygeohydro + pygeoogc + async-retriever | rioxarray / rasterio |
+
+#### Decision
+
+**Local COG download is the primary NLCD access strategy.** NLCD COGs are downloaded once (via the transparent cache mechanism in §6.11), registered as `local_tiff` in the dataset registry, and processed through the existing `gdptools.UserTiffData` → `ZonalGen(zonal_engine="exactextract")` pathway. This aligns with the MVP implementation (§11.3) and eliminates the entire class of remote-service throttling failures under spatial batching.
+
+Typical file sizes make this practical:
+
+| Scope | Size (compressed COG) |
+|---|---|
+| Single year, CONUS mosaic | ~1–1.5 GB |
+| Full legacy set (2001–2021, ~9 epochs) | ~12 GB |
+| Full Annual NLCD (1985–2024, 40 years) | ~60 GB (land cover only) |
+
+For the MVP (single-year land cover for Delaware), the download is ~1.5 GB — trivial and easily managed by the transparent cache.
 
 ---
 
