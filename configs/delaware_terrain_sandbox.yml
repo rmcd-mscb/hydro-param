@@ -26,8 +26,8 @@ datasets:
       - aspect
     statistics:
       - mean
-  # Uncomment to include NLCD land cover (requires local download):
-  #   hydro-param datasets download nlcd_2021
+  # Uncomment to include NLCD land cover (requires manual local download).
+  # See configs/datasets.yml for the download URL and instructions.
   # - name: nlcd_2021
   #   source: data/nlcd_2021_land_cover_l48_20230630.tif
   #   variables:
