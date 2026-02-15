@@ -81,6 +81,24 @@ def registry_yaml(tmp_path: Path) -> Path:
                     {"name": "impervious", "band": 1, "categorical": False},
                 ],
             },
+            "nlcd_template": {
+                "description": "NLCD template test",
+                "strategy": "local_tiff",
+                "crs": "EPSG:5070",
+                "category": "land_cover",
+                "download": {
+                    "url_template": "s3://bucket/{variable}_{year}.tif",
+                    "year_range": [2020, 2022],
+                    "variables_available": ["lc", "imp"],
+                    "requester_pays": True,
+                    "format": "COG",
+                    "notes": "Requester-pays bucket.",
+                },
+                "variables": [
+                    {"name": "lc", "band": 1, "categorical": True},
+                    {"name": "imp", "band": 1, "categorical": False},
+                ],
+            },
             "remote_ds": {
                 "description": "Remote dataset (no download)",
                 "strategy": "stac_cog",
@@ -340,6 +358,152 @@ def test_datasets_download_invalid_year(
             "--registry",
             str(registry_yaml),
         )
+
+
+# ---------------------------------------------------------------------------
+# datasets info — template
+# ---------------------------------------------------------------------------
+
+
+def test_datasets_info_template(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
+    """Template-based dataset shows year range, variables, requester-pays."""
+    _run("datasets", "info", "nlcd_template", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    assert "6 files via URL template" in out
+    assert "2020-2022" in out
+    assert "lc" in out
+    assert "imp" in out
+    assert "Requester-pays: yes" in out
+    assert "Requester-pays bucket." in out
+
+
+# ---------------------------------------------------------------------------
+# datasets download — template
+# ---------------------------------------------------------------------------
+
+
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_template_all(
+    mock_which,
+    mock_run,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """Download all template-expanded files (3 years x 2 vars = 6)."""
+    mock_run.return_value.returncode = 0
+    _run(
+        "datasets",
+        "download",
+        "nlcd_template",
+        "--dest",
+        str(tmp_path),
+        "--registry",
+        str(registry_yaml),
+    )
+    assert mock_run.call_count == 6
+
+
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_template_filter_years(
+    mock_which,
+    mock_run,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """--years filter on template dataset."""
+    mock_run.return_value.returncode = 0
+    _run(
+        "datasets",
+        "download",
+        "nlcd_template",
+        "--dest",
+        str(tmp_path),
+        "--years",
+        "2021",
+        "--registry",
+        str(registry_yaml),
+    )
+    assert mock_run.call_count == 2  # 1 year x 2 vars
+
+
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_template_filter_variables(
+    mock_which,
+    mock_run,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """--variables filter on template dataset."""
+    mock_run.return_value.returncode = 0
+    _run(
+        "datasets",
+        "download",
+        "nlcd_template",
+        "--dest",
+        str(tmp_path),
+        "--variables",
+        "lc",
+        "--registry",
+        str(registry_yaml),
+    )
+    assert mock_run.call_count == 3  # 3 years x 1 var
+
+
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_requester_pays_flag(
+    mock_which,
+    mock_run,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """Requester-pays datasets use --request-payer=requester."""
+    mock_run.return_value.returncode = 0
+    _run(
+        "datasets",
+        "download",
+        "nlcd_template",
+        "--dest",
+        str(tmp_path),
+        "--years",
+        "2020",
+        "--variables",
+        "lc",
+        "--registry",
+        str(registry_yaml),
+    )
+    assert mock_run.call_count == 1
+    cmd = mock_run.call_args[0][0]
+    assert "--request-payer=requester" in cmd
+    assert "--no-sign-request" not in cmd
+
+
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_datasets_download_no_sign_request_for_public(
+    mock_which,
+    mock_run,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """Public datasets use --no-sign-request."""
+    mock_run.return_value.returncode = 0
+    _run(
+        "datasets",
+        "download",
+        "nlcd_single",
+        "--dest",
+        str(tmp_path),
+        "--registry",
+        str(registry_yaml),
+    )
+    assert mock_run.call_count == 1
+    cmd = mock_run.call_args[0][0]
+    assert "--no-sign-request" in cmd
+    assert "--request-payer=requester" not in cmd
 
 
 # ---------------------------------------------------------------------------

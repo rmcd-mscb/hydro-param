@@ -44,7 +44,9 @@ def _access_status(entry: DatasetEntry) -> str:
     if entry.strategy == "local_tiff":
         if entry.source is not None:
             return "local"
-        if entry.download and (entry.download.url or entry.download.files):
+        if entry.download and (
+            entry.download.url or entry.download.files or entry.download.url_template
+        ):
             return "download required"
         return "not configured"
     if entry.strategy in ("stac_cog", "native_zarr", "climr_cat"):
@@ -146,6 +148,21 @@ def datasets_info(name: str, *, registry: Path | None = None) -> None:
                 print(f"      {f.url}")
             print("\n  Download with:")
             print(f"    hydro-param datasets download {name} --years {years[-1]}")
+        elif dl.url_template:
+            # Template-based dataset
+            start, end = dl.year_range
+            total = (end - start + 1) * len(dl.variables_available)
+            example_url = dl.url_template.format(variable=dl.variables_available[0], year=end)
+            print(f"\nDownload: {total} files via URL template")
+            print(f"  Years: {start}-{end}")
+            print(f"  Products: {', '.join(dl.variables_available)}")
+            print(f"  Requester-pays: {'yes' if dl.requester_pays else 'no'}")
+            print(f"\n  Example URL:\n    {example_url}")
+            if dl.notes:
+                print(f"  {dl.notes.strip()}")
+            first_var = dl.variables_available[0]
+            print("\n  Download with:")
+            print(f"    hydro-param datasets download {name} --years {end} --variables {first_var}")
         elif dl.url:
             # Single-file dataset
             print("\nDownload:")
@@ -221,7 +238,7 @@ def datasets_download(
 
     dest.mkdir(parents=True, exist_ok=True)
 
-    if entry.download.files:
+    if entry.download.files or entry.download.url_template:
         _download_multi_file(name, entry, dest, years, variables)
     elif entry.download.url:
         _download_single_file(entry.download.url, dest)
@@ -230,13 +247,18 @@ def datasets_download(
         raise SystemExit(1)
 
 
-def _download_single_file(url: str, dest: Path) -> None:
+def _download_single_file(url: str, dest: Path, *, requester_pays: bool = False) -> None:
     """Download a single file via aws s3 cp."""
     filename = url.rsplit("/", 1)[-1]
     dest_path = dest / filename
     print(f"Downloading: {url}")
     print(f"        To: {dest_path}")
-    cmd = ["aws", "s3", "cp", "--no-sign-request", url, str(dest_path)]
+    cmd = ["aws", "s3", "cp"]
+    if requester_pays:
+        cmd.append("--request-payer=requester")
+    else:
+        cmd.append("--no-sign-request")
+    cmd.extend([url, str(dest_path)])
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         print(f"Error: Download failed (exit code {result.returncode})", file=sys.stderr)
@@ -251,12 +273,14 @@ def _download_multi_file(
     years_str: str | None,
     variables_str: str | None,
 ) -> None:
-    """Download selected files from a multi-file dataset."""
-    files = entry.download.files  # type: ignore[union-attr]
+    """Download selected files from a multi-file or template dataset."""
+    assert entry.download is not None  # guaranteed by caller
+    dl = entry.download
 
-    # Filter by years
+    # Parse year filter
+    year_set: set[int] | None = None
     if years_str is not None:
-        year_set: set[int] = set()
+        year_set = set()
         for raw_year in years_str.split(","):
             year_token = raw_year.strip()
             if not year_token:
@@ -266,14 +290,13 @@ def _download_multi_file(
             except ValueError:
                 print(f"Error: Invalid year value '{year_token}' in --years.", file=sys.stderr)
                 raise SystemExit(1) from None
-        if year_set:
-            files = [f for f in files if f.year in year_set]
 
-    # Filter by variables
+    # Parse variable filter
+    var_set: set[str] | None = None
     if variables_str is not None:
         var_set = {v.strip() for v in variables_str.split(",") if v.strip()}
-        if var_set:
-            files = [f for f in files if f.variable in var_set]
+
+    files = dl.expand_files(years=year_set, variables=var_set)
 
     if not files:
         print(f"Error: No matching files for dataset '{name}'.", file=sys.stderr)
@@ -282,7 +305,7 @@ def _download_multi_file(
 
     print(f"Downloading {len(files)} file(s) for '{name}':")
     for f in sorted(files, key=lambda x: (x.year, x.variable)):
-        _download_single_file(f.url, dest)
+        _download_single_file(f.url, dest, requester_pays=dl.requester_pays)
 
 
 # ---------------------------------------------------------------------------
