@@ -871,7 +871,7 @@ All three tiers resolve through the **Dataset Registry (YAML)** to a uniform acc
 
 The dataset registry serves two purposes: (1) a **curated catalog** of known datasets shipped with the package, encoding hard-won operational knowledge about access strategies, download locations, and variable semantics; and (2) a **user-extensible** configuration that users can add custom datasets to.
 
-> **Design revision (v5.4):** The registry schema now includes a `download` block for datasets requiring local staging, and a `climr_cat` strategy for datasets accessed via the ClimateR-Catalog through gdptools `ClimRCatData`. The `source` field is no longer required on `local_tiff` entries — it can be overridden in the pipeline config per project. See §11.9 for how the CLI exposes registry information and download support to users.
+> **Design revision (v5.4, planned):** The registry schema will include a `download` block for datasets requiring local staging, and a `climr_cat` strategy for datasets accessed via the ClimateR-Catalog through gdptools `ClimRCatData`. The `source` field will be optional on `local_tiff` entries — it will be overrideable in the pipeline config per project. See §11.9 for how the CLI is intended to expose registry information and download support to users.
 
 **Registry entry types by access strategy:**
 
