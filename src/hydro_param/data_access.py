@@ -303,7 +303,7 @@ def fetch_local_tiff(
             msg += (
                 "\n\nSet 'source' in your pipeline config:\n"
                 "  datasets:\n"
-                "    - name: <dataset_name>\n"
+                "    - name: your_dataset_name\n"
                 "      source: /path/to/downloaded/file.tif"
             )
         raise ValueError(msg)
