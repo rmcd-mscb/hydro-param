@@ -179,3 +179,44 @@ def test_unsupported_aspect_method():
     elev = _make_elevation(data)
     with pytest.raises(ValueError, match="Unsupported aspect method"):
         derive_aspect(elev, method="zevenbergen")
+
+
+# ---------------------------------------------------------------------------
+# Custom coordinate names (e.g., lon/lat instead of x/y)
+# ---------------------------------------------------------------------------
+
+
+def _make_elevation_lonlat(data: np.ndarray) -> xr.DataArray:
+    """Create an elevation DataArray with lon/lat coordinate names."""
+    ny, nx = data.shape
+    lon = np.arange(nx) * 100.0 + 50.0
+    lat = np.arange(ny) * 100.0 + 50.0
+    return xr.DataArray(
+        data,
+        dims=["lat", "lon"],
+        coords={"lat": lat, "lon": lon},
+    )
+
+
+def test_slope_with_custom_coord_names():
+    """Slope derivation works with lon/lat coordinate names."""
+    ny, nx = 10, 10
+    y_idx, x_idx = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
+    data = x_idx.astype(float) * 10.0  # east-facing slope
+    elev = _make_elevation_lonlat(data)
+    slope = derive_slope(elev, x_coord="lon", y_coord="lat")
+    assert slope.shape == elev.shape
+    # Interior cells should have non-zero slope
+    assert slope.values[5, 5] > 0
+
+
+def test_aspect_with_custom_coord_names():
+    """Aspect derivation works with lon/lat coordinate names."""
+    ny, nx = 10, 10
+    y_idx, x_idx = np.meshgrid(np.arange(ny), np.arange(nx), indexing="ij")
+    data = x_idx.astype(float) * 10.0  # east-facing slope
+    elev = _make_elevation_lonlat(data)
+    aspect = derive_aspect(elev, x_coord="lon", y_coord="lat")
+    assert aspect.shape == elev.shape
+    assert (aspect.values >= 0).all()
+    assert (aspect.values < 360).all()

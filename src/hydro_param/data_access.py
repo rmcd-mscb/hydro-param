@@ -57,7 +57,13 @@ def _cell_sizes_meters(
     return dy_m, dx_m
 
 
-def derive_slope(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray:
+def derive_slope(
+    elevation: xr.DataArray,
+    method: str = "horn",
+    *,
+    x_coord: str = "x",
+    y_coord: str = "y",
+) -> xr.DataArray:
     """Compute slope in degrees from an elevation DataArray.
 
     Uses Horn (1981) method via numpy.gradient.
@@ -65,9 +71,13 @@ def derive_slope(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray:
     Parameters
     ----------
     elevation : xr.DataArray
-        2-D elevation raster with y/x coordinates.
+        2-D elevation raster with spatial coordinates.
     method : str
         Derivation method. Only ``"horn"`` is supported.
+    x_coord : str
+        Name of the x coordinate dimension in the DataArray.
+    y_coord : str
+        Name of the y coordinate dimension in the DataArray.
 
     Returns
     -------
@@ -78,8 +88,8 @@ def derive_slope(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray:
         raise ValueError(f"Unsupported slope method: {method}")
 
     elev = elevation.values.astype(np.float64)
-    y_coords = elevation.coords["y"].values
-    x_coords = elevation.coords["x"].values
+    y_coords = elevation.coords[y_coord].values
+    x_coords = elevation.coords[x_coord].values
 
     has_crs = hasattr(elevation, "rio") and elevation.rio.crs
     is_geographic = has_crs and elevation.rio.crs.is_geographic
@@ -95,15 +105,25 @@ def derive_slope(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray:
     return result
 
 
-def derive_aspect(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray:
+def derive_aspect(
+    elevation: xr.DataArray,
+    method: str = "horn",
+    *,
+    x_coord: str = "x",
+    y_coord: str = "y",
+) -> xr.DataArray:
     """Compute aspect in degrees (clockwise from north) from elevation.
 
     Parameters
     ----------
     elevation : xr.DataArray
-        2-D elevation raster with y/x coordinates.
+        2-D elevation raster with spatial coordinates.
     method : str
         Derivation method. Only ``"horn"`` is supported.
+    x_coord : str
+        Name of the x coordinate dimension in the DataArray.
+    y_coord : str
+        Name of the y coordinate dimension in the DataArray.
 
     Returns
     -------
@@ -114,8 +134,8 @@ def derive_aspect(elevation: xr.DataArray, method: str = "horn") -> xr.DataArray
         raise ValueError(f"Unsupported aspect method: {method}")
 
     elev = elevation.values.astype(np.float64)
-    y_coords = elevation.coords["y"].values
-    x_coords = elevation.coords["x"].values
+    y_coords = elevation.coords[y_coord].values
+    x_coords = elevation.coords[x_coord].values
 
     has_crs = hasattr(elevation, "rio") and elevation.rio.crs
     is_geographic = has_crs and elevation.rio.crs.is_geographic

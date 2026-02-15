@@ -29,6 +29,9 @@ class Processor(Protocol):
         engine: str = "exactextract",
         statistics: list[str] | None = None,
         categorical: bool = False,
+        source_crs: str | None = None,
+        x_coord: str = "x",
+        y_coord: str = "y",
     ) -> pd.DataFrame: ...
 
 
@@ -49,6 +52,9 @@ class ZonalProcessor:
         engine: str = "exactextract",
         statistics: list[str] | None = None,
         categorical: bool = False,
+        source_crs: str | None = None,
+        x_coord: str = "x",
+        y_coord: str = "y",
     ) -> pd.DataFrame:
         """Compute zonal statistics for a raster variable.
 
@@ -68,6 +74,13 @@ class ZonalProcessor:
             Which statistics to return. Default is ``["mean"]``.
         categorical : bool
             If True, compute class fractions instead of continuous stats.
+        source_crs : str or None
+            Source dataset CRS from the dataset registry. If None, reads
+            CRS from the GeoTIFF metadata.
+        x_coord : str
+            Source x coordinate name (maps to gdptools ``source_x_coord``).
+        y_coord : str
+            Source y coordinate name (maps to gdptools ``source_y_coord``).
 
         Returns
         -------
@@ -88,16 +101,17 @@ class ZonalProcessor:
             categorical,
         )
 
-        # Read CRS from GeoTIFF for UserTiffData
-        ds = rioxarray.open_rasterio(tiff_path)
-        source_crs = str(ds.rio.crs)
-        ds.close()
+        # Use registry CRS if provided, otherwise read from GeoTIFF
+        if source_crs is None:
+            ds = rioxarray.open_rasterio(tiff_path)
+            source_crs = str(ds.rio.crs)
+            ds.close()
 
         user_data = UserTiffData(
             source_ds=str(tiff_path),
             source_crs=source_crs,
-            source_x_coord="x",
-            source_y_coord="y",
+            source_x_coord=x_coord,
+            source_y_coord=y_coord,
             source_var=variable_name,
             target_gdf=fabric[[id_field, "geometry"]].copy(),
             target_id=id_field,
