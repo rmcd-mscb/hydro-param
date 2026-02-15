@@ -34,6 +34,15 @@ class DerivedVariableSpec(BaseModel):
     long_name: str = ""
 
 
+class DownloadInfo(BaseModel):
+    """Download provenance for datasets requiring local staging."""
+
+    url: str
+    size_gb: float | None = None
+    format: str = ""
+    notes: str = ""
+
+
 class DatasetEntry(BaseModel):
     """A single dataset in the registry."""
 
@@ -47,6 +56,8 @@ class DatasetEntry(BaseModel):
     sign: str | None = None
     # Zarr / local fields
     source: str | None = None
+    # Download provenance (local_tiff datasets that require user download)
+    download: DownloadInfo | None = None
     # Common fields
     crs: str = "EPSG:4326"
     x_coord: str = "x"
@@ -62,9 +73,6 @@ class DatasetEntry(BaseModel):
         if self.strategy == "stac_cog":
             if not self.catalog_url or not self.collection:
                 raise ValueError("stac_cog strategy requires 'catalog_url' and 'collection'")
-        elif self.strategy == "local_tiff":
-            if not self.source:
-                raise ValueError("local_tiff strategy requires 'source' path")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
         return self
