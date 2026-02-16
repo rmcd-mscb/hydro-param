@@ -215,66 +215,66 @@ into pywatershed-compatible files. Here's the proposed interface:
 class PywatershedOutputPlugin:
     """
     Formats hydro-param results for pywatershed consumption.
-    
+
     Produces:
     1. Parameter file (NetCDF) — all static/slow-varying parameters
     2. CBH files (NetCDF) — daily climate forcing time series
     3. Soltab arrays — potential solar radiation lookup tables
     4. Control file — simulation configuration
     """
-    
+
     name = "pywatershed"
     target_versions = ["1.0", "2.0"]
-    
+
     def __init__(self, config: dict):
         self.config = config
         self.unit_system = "prms"  # PRMS uses feet, inches, °F internally
-    
-    def write_parameters(self, params: dict, discretization: dict, 
+
+    def write_parameters(self, params: dict, discretization: dict,
                          output_path: Path):
         """
         Write parameter NetCDF file compatible with pywatershed.
-        
+
         The file must contain:
         - Dimensions: nhru, nsegment, nmonths(12), ndeplval, one
         - Coordinates: nhm_id, nhm_seg
         - All parameters from the parameter_registry
-        
+
         pywatershed loads this via:
             pws.Parameters.from_netcdf(output_path)
         """
         pass
-    
+
     def write_cbh(self, climate_data: dict, output_dir: Path):
         """
         Write Climate-By-HRU NetCDF files.
-        
+
         Produces separate files:
         - prcp.nc (nhru × ntime, units: inches/day)
         - tmax.nc (nhru × ntime, units: °F)
         - tmin.nc (nhru × ntime, units: °F)
-        
+
         pywatershed loads these via Adapter classes.
         """
         pass
-    
+
     def write_soltab(self, soltab_potsw, soltab_horad_potsw, output_path):
         """Write potential solar radiation tables."""
         pass
-    
+
     def write_control(self, config: dict, output_path: Path):
         """
         Write pywatershed control configuration.
-        
+
         Can be YAML (for pywatershed Python API) or PRMS-format text.
         """
         pass
-    
+
     def validate(self, output_dir: Path) -> list[str]:
         """
         Validate that all required parameters are present and within
         valid ranges. Returns list of warnings/errors.
-        
+
         Uses parameter_registry ranges and constraints.
         """
         pass
@@ -283,15 +283,15 @@ class PywatershedOutputPlugin:
     @staticmethod
     def mm_to_inches(values):
         return values / 25.4
-    
+
     @staticmethod
     def celsius_to_fahrenheit(values):
         return values * 9.0 / 5.0 + 32.0
-    
+
     @staticmethod
     def meters_to_feet(values):
         return values * 3.28084
-    
+
     @staticmethod
     def sq_meters_to_acres(values):
         return values * 0.000247105
