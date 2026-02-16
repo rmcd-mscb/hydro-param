@@ -1,0 +1,958 @@
+# =============================================================================
+# pywatershed / NHM-PRMS: Complete Dataset → Parameter Mapping
+# =============================================================================
+# Reference for hydro-param development.
+# Source: Regan et al. 2018 (TM6-B9), Hay et al. 2023 (TM6-B10),
+#         Markstrom et al. 2015 (TM6-B7), pywatershed v2.0 source code.
+#
+# Organization:
+#   1. curated_datasets   — What goes in data.yml files by category
+#   2. parameter_registry — Every PRMS/pywatershed parameter, its source
+#                           dataset, derivation method, and dependencies
+#   3. lookup_tables      — Reclassification and literature value tables
+#   4. defaults           — Standard PRMS default values
+#   5. calibration        — Parameters requiring calibration with initial seeds
+#   6. derivation_pipeline — Ordered processing steps for hydro-param
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. CURATED DATASETS — for data.yml catalog files
+# ─────────────────────────────────────────────────────────────────────────────
+curated_datasets:
+
+  topography:
+    ned_3dep:
+      description: "USGS 3D Elevation Program (NED replacement)"
+      source_org: "USGS"
+      resolution: "10m (1/3 arc-sec) or 30m (1 arc-sec)"
+      coverage: "CONUS + AK + HI"
+      accessor: "pygeohydro.get_3dep_dem"
+      format: "COG / GeoTIFF"
+      variables:
+        - elevation  # meters or feet depending on product
+      derives_parameters:
+        - hru_elev
+        - hru_slope
+        - hru_aspect
+      notes: >
+        Primary topographic source. 10m preferred for slope/aspect accuracy.
+        For large domains (CONUS-scale), 30m may be more practical.
+        The soltab potential solar radiation tables also depend on these
+        derived products (hru_lat, hru_slope, hru_aspect).
+
+  landcover:
+    nlcd:
+      description: "National Land Cover Database"
+      source_org: "USGS MRLC Consortium"
+      resolution: "30m"
+      coverage: "CONUS (multi-epoch: 2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021)"
+      accessor: "pygeohydro.nlcd_bygeom or pygeohydro.get_nlcd"
+      format: "GeoTIFF / COG"
+      variables:
+        - land_cover_class    # 16-class Anderson Level II
+        - impervious_surface  # percent impervious (0-100)
+        - tree_canopy_cover   # percent tree canopy (0-100), separate product
+      derives_parameters:
+        - cov_type
+        - covden_sum
+        - covden_win          # derived from covden_sum + lookup
+        - hru_percent_imperv
+        - srain_intcp         # via lookup on cov_type
+        - wrain_intcp         # via lookup on cov_type
+        - snow_intcp          # via lookup on cov_type
+        - imperv_stor_max     # via lookup on land use
+        - hru_type            # combined with waterbody overlay
+      notes: >
+        Use most recent epoch or match to simulation period.
+        The tree_canopy product provides continuous canopy cover values
+        that are superior to lookup tables for covden_sum.
+        Dynamic land cover (multi-epoch) can be used with PRMS dynamic
+        parameter capability.
+
+  soils:
+    statsgo2:
+      description: "U.S. General Soil Map"
+      source_org: "USDA NRCS"
+      resolution: "~1:250,000 mapping scale"
+      coverage: "CONUS + territories"
+      accessor: "pygeohydro.ssurgo_bygeom (with statsgo flag) or direct NRCS WFS"
+      format: "Shapefile / GDB / tabular"
+      variables:
+        - texture_class       # sand/silt/clay percentages
+        - awc                 # available water capacity (in/in or cm/cm)
+        - ksat                # saturated hydraulic conductivity
+        - soil_depth          # depth to restrictive layer or bedrock
+        - porosity            # total porosity
+        - bulk_density
+      derives_parameters:
+        - soil_type
+        - soil_moist_max
+        - soil_rechr_max_frac
+        - sat_threshold
+        # Also provides initial estimates for calibration params:
+        # soil2gw_max, ssr2gw_rate, slowcoef_lin, fastcoef_lin
+      notes: >
+        NHM uses STATSGO2 for national consistency. SSURGO has higher
+        spatial resolution but incomplete coverage in some areas.
+        Key derivation: soil_moist_max = AWC × root_zone_depth
+        soil_rechr_max_frac = AWC_upper_layers / AWC_total
+
+    ssurgo:
+      description: "Soil Survey Geographic Database (high-res alternative)"
+      source_org: "USDA NRCS"
+      resolution: "~1:12,000 to 1:63,360"
+      coverage: "Most of CONUS (some gaps in western rangelands)"
+      accessor: "pygeohydro.ssurgo_bygeom"
+      format: "SQLite / GDB / Shapefile"
+      variables: same_as_statsgo2
+      notes: "Preferred when available. Fall back to STATSGO2 for gaps."
+
+  climate_forcing:
+    daymet_v4:
+      description: "Daily Surface Weather Data on 1km Grid"
+      source_org: "ORNL DAAC / NASA"
+      resolution: "1km, daily"
+      coverage: "North America, 1980-present"
+      accessor: "pydaymet.get_bygeom or gdptools"
+      format: "NetCDF / Zarr (via Thredds or S3)"
+      variables:
+        - prcp    # mm/day
+        - tmax    # degrees C
+        - tmin    # degrees C
+        - srad    # W/m² (shortwave, can be used for radiation params)
+        - dayl    # seconds (day length, useful for PET)
+        - vp      # Pa (vapor pressure)
+      derives_parameters:
+        - prcp_cbh    # area-weighted daily precip per HRU (convert mm→inches)
+        - tmax_cbh    # area-weighted daily tmax per HRU (convert C→F if needed)
+        - tmin_cbh    # area-weighted daily tmin per HRU
+        - transp_beg  # from growing-season analysis of tmin normals
+        - transp_end  # from killing-frost analysis
+      notes: >
+        This is the primary CBH (Climate-By-HRU) data source used in most
+        NHM applications. The area-weighted averaging over HRU polygons is
+        done by gdptools (or pydaymet, or the old GDP web service).
+        Unit conversions needed: mm→inches, C→F (PRMS internal units).
+
+    gridmet:
+      description: "Gridded Surface Meteorological Data"
+      source_org: "University of Idaho / climatologylab"
+      resolution: "~4km (1/24-deg), daily"
+      coverage: "CONUS, 1979-present"
+      accessor: "pygridmet or gdptools"
+      format: "NetCDF / OPENDAP"
+      variables:
+        - pr      # precipitation (mm)
+        - tmmx    # max temperature (K)
+        - tmmn    # min temperature (K)
+        - srad    # shortwave radiation (W/m²)
+        - pet     # reference ET (grass, mm) — useful for PET comparison
+        - vs      # wind speed (m/s)
+      notes: >
+        Alternative to Daymet. Includes PET and wind which Daymet lacks.
+        Coarser resolution but better in some arid/rain-shadow regions.
+
+    conus404_ba:
+      description: "Bias-Adjusted CONUS404 high-res WRF atmospheric simulation"
+      source_org: "USGS (Zhang et al. 2024)"
+      resolution: "4km, hourly aggregated to daily"
+      coverage: "CONUS, 1980-2021"
+      accessor: "S3 Zarr store / gdptools"
+      format: "Zarr / NetCDF"
+      variables: [T2, RAIN, SNOW, SWDOWN, Q2, PSFC, U10, V10]
+      notes: >
+        Newest forcing option used in NHM v1.1 (Hay et al. 2023).
+        Provides physically consistent atmospheric fields.
+        Requires aggregation from hourly to daily.
+
+  hydrography:
+    geospatial_fabric:
+      description: "NHM Geospatial Fabric for hydrologic modeling"
+      source_org: "USGS (Viger & Bock 2014, updated v1.1)"
+      resolution: "~115K HRUs, ~57K segments (CONUS v1.1)"
+      coverage: "CONUS (AK domain also available)"
+      accessor: "ScienceBase download or onhm-fetcher tool"
+      format: "GDB / Shapefile / GPKG"
+      variables:
+        - hru_polygons        # HRU boundary geometries
+        - segment_polylines   # Stream segment geometries
+        - topology_attributes # tosegment, hru_segment, nhm_id, nhm_seg
+      derives_parameters:
+        - hru_area            # geodesic area → acres
+        - hru_lat             # centroid latitude
+        - tosegment           # from attribute table
+        - hru_segment         # from attribute table
+        - seg_length          # geodesic length of segment polyline
+        - nhm_id              # HRU identifier
+        - nhm_seg             # segment identifier
+      notes: >
+        This is the spatial backbone. For custom domains not on the GF,
+        users need to provide equivalent HRU polygons and segment lines
+        with topology. pynhd can help build this from NHDPlus.
+
+    nhdplus:
+      description: "National Hydrography Dataset Plus"
+      source_org: "USGS / EPA"
+      versions: "v2.1 (medium-res) and HR (high-res)"
+      accessor: "pynhd"
+      format: "GPKG / Parquet / GDB"
+      variables:
+        - flowlines           # stream centerlines with attributes
+        - catchments          # local drainage areas
+        - waterbodies         # lakes, ponds, reservoirs
+        - value_added_attributes  # slope, velocity, etc.
+      derives_parameters:
+        - dprst_frac          # waterbody_area_in_hru / hru_area
+        - dprst_area_max      # clipped waterbody area
+        - K_coef              # from segment slope, length, velocity
+        - obsin_segment       # gage-to-segment mapping
+      notes: >
+        Used to supplement GF data, especially for depression storage
+        parameters and Muskingum routing coefficients.
+        NHDPlus value-added attributes include velocity estimates
+        useful for K_coef derivation.
+
+  groundwater:
+    glhymps:
+      description: "Global Hydrogeology Maps (permeability, porosity)"
+      source_org: "Gleeson et al. 2014/2022"
+      resolution: "~1km polygon"
+      coverage: "Global"
+      accessor: "Direct download or pygeohydro"
+      format: "Shapefile / GeoTIFF"
+      variables:
+        - logK_ice            # log permeability
+        - porosity
+      derives_parameters: []  # Primarily informs calibration initial guesses
+      notes: >
+        Not directly used for PRMS parameters in NHM, but provides
+        physically-based constraints on gwflow_coef initial values.
+
+  solar_radiation:
+    soltab_computed:
+      description: "Potential clear-sky solar radiation lookup tables"
+      source_org: "Derived internally"
+      resolution: "Per HRU × 366 days-of-year"
+      accessor: "pywatershed soltab utility or custom implementation"
+      format: "NumPy arrays / NetCDF"
+      requires: [hru_lat, hru_slope, hru_aspect]
+      derives_parameters:
+        - soltab_potsw
+        - soltab_horad_potsw
+      notes: >
+        Computed via the Swift (1976) algorithm from HRU latitude,
+        slope, and aspect. This is a derived product, not an external
+        dataset. pywatershed can compute these internally. For hydro-param,
+        this would be a post-processing step after DEM-derived params exist.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. PARAMETER REGISTRY — every parameter with its derivation chain
+# ─────────────────────────────────────────────────────────────────────────────
+# derivation_type key:
+#   gis_zonal       = zonal statistics of raster over HRU polygon
+#   gis_reclassify  = reclassify raster via lookup then zonal dominant
+#   gis_geometry    = computed from polygon/line geometry
+#   gis_overlay     = spatial intersection of features
+#   gis_topology    = extracted from network attribute tables
+#   lookup_table    = value assigned from published table keyed on another param
+#   derived_formula = computed from other parameters via documented equation
+#   derived_climate = computed from long-term climate statistics
+#   calibration     = optimized during calibration; hydro-param provides seed
+#   default_value   = well-established PRMS default from literature
+
+parameter_registry:
+
+  # --- Topography-derived ---
+  hru_elev:
+    description: "Mean HRU elevation"
+    units: "feet (PRMS convention) or meters"
+    dimension: nhru
+    source_dataset: ned_3dep
+    derivation_type: gis_zonal
+    method: "zonal_mean(dem_raster, hru_polygon)"
+    dependencies: []
+
+  hru_slope:
+    description: "Mean HRU land surface slope"
+    units: "decimal fraction (rise/run)"
+    dimension: nhru
+    source_dataset: ned_3dep
+    derivation_type: gis_zonal
+    method: "slope_raster = compute_slope(dem); zonal_mean(slope_raster, hru_polygon)"
+    dependencies: [dem]
+
+  hru_aspect:
+    description: "Mean HRU aspect"
+    units: "degrees (0=north, clockwise)"
+    dimension: nhru
+    source_dataset: ned_3dep
+    derivation_type: gis_zonal
+    method: "aspect_raster = compute_aspect(dem); circular_mean(aspect_raster, hru_polygon)"
+    dependencies: [dem]
+    notes: "Circular mean needed — simple arithmetic mean is wrong for aspects."
+
+  hru_lat:
+    description: "Latitude of HRU centroid"
+    units: "decimal degrees"
+    dimension: nhru
+    source_dataset: geospatial_fabric
+    derivation_type: gis_geometry
+    method: "hru_polygon.centroid.y"
+    dependencies: []
+
+  hru_area:
+    description: "Area of HRU"
+    units: "acres"
+    dimension: nhru
+    source_dataset: geospatial_fabric
+    derivation_type: gis_geometry
+    method: "geodesic_area(hru_polygon) * 0.000247105  # m² to acres"
+    dependencies: []
+
+  # --- Land cover derived ---
+  cov_type:
+    description: "Vegetation cover type"
+    units: "integer (0=bare, 1=grasses, 2=shrubs, 3=trees, 4=coniferous)"
+    dimension: nhru
+    source_dataset: nlcd
+    derivation_type: gis_reclassify
+    method: "reclassify NLCD class via nlcd_to_prms_cov_type table, then zonal_dominant"
+    dependencies: [nlcd_to_prms_cov_type_table]
+
+  covden_sum:
+    description: "Summer vegetation cover density"
+    units: "decimal fraction (0–1)"
+    dimension: nhru
+    source_dataset: nlcd  # tree canopy product preferred
+    derivation_type: gis_zonal
+    method: "If tree_canopy available: zonal_mean(canopy/100, hru). Else: lookup(cov_type)"
+    dependencies: []
+
+  covden_win:
+    description: "Winter vegetation cover density"
+    units: "decimal fraction (0–1)"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: derived_formula
+    method: >
+      covden_win = covden_sum * winter_reduction_factor(cov_type)
+      where: bare=0, grass=0.5, shrub=0.5, deciduous=0.5, conifer=1.0
+    dependencies: [covden_sum, cov_type]
+
+  hru_percent_imperv:
+    description: "HRU fraction that is impervious"
+    units: "decimal fraction (0–1)"
+    dimension: nhru
+    source_dataset: nlcd
+    derivation_type: gis_zonal
+    method: "zonal_mean(imperv_raster / 100.0, hru_polygon)"
+    dependencies: []
+
+  hru_type:
+    description: "HRU type"
+    units: "integer (0=inactive, 1=land, 2=lake, 3=swale)"
+    dimension: nhru
+    source_dataset: [geospatial_fabric, nhdplus]
+    derivation_type: gis_overlay
+    method: >
+      Default 1 (land). Set to 2 where HRU contains lake/reservoir from
+      NHDPlus waterbodies covering >50% of HRU area. Set to 0 for inactive.
+    dependencies: []
+
+  srain_intcp:
+    description: "Summer rain interception storage capacity"
+    units: "inches"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: lookup_table
+    method: "lookup cov_type_to_interception_table[cov_type]['srain']"
+    dependencies: [cov_type]
+
+  wrain_intcp:
+    description: "Winter rain interception storage capacity"
+    units: "inches"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: lookup_table
+    method: "lookup cov_type_to_interception_table[cov_type]['wrain']"
+    dependencies: [cov_type]
+
+  snow_intcp:
+    description: "Snow interception storage capacity"
+    units: "inches"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: lookup_table
+    method: "lookup cov_type_to_interception_table[cov_type]['snow']"
+    dependencies: [cov_type]
+
+  imperv_stor_max:
+    description: "Maximum impervious surface retention storage"
+    units: "inches"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: lookup_table
+    method: "Typically 0.01–0.05 inches, uniform or by land use"
+    dependencies: []
+
+  transp_beg:
+    description: "Month transpiration begins"
+    units: "integer month (1–12)"
+    dimension: nhru
+    source_dataset: daymet_v4  # long-term climate normals
+    derivation_type: derived_climate
+    method: >
+      From last spring frost date: month when mean tmin exceeds freezing
+      threshold for N consecutive days, computed from climate normals.
+    dependencies: [tmin_climatology, hru_lat]
+
+  transp_end:
+    description: "Month transpiration ends"
+    units: "integer month (1–12)"
+    dimension: nhru
+    source_dataset: daymet_v4
+    derivation_type: derived_climate
+    method: >
+      From first fall killing frost: month of first occurrence when
+      mean tmin drops below freezing threshold.
+    dependencies: [tmin_climatology]
+
+  # --- Soils derived ---
+  soil_type:
+    description: "Soil type classification"
+    units: "integer (1=sand, 2=loam, 3=clay)"
+    dimension: nhru
+    source_dataset: statsgo2
+    derivation_type: gis_reclassify
+    method: >
+      Reclassify USDA texture triangle classes to 3 PRMS types:
+      sand/loamy_sand → 1, all loams/silt → 2, clay/silty_clay → 3.
+      Then zonal_dominant over HRU.
+    dependencies: []
+
+  soil_moist_max:
+    description: "Maximum available water-holding capacity of capillary reservoir"
+    units: "inches"
+    dimension: nhru
+    source_dataset: statsgo2
+    derivation_type: derived_formula
+    method: >
+      soil_moist_max = AWC_weighted_mean × root_zone_depth
+      AWC from component-weighted average of STATSGO/SSURGO layers.
+      root_zone_depth typically min(soil_depth, 60 inches).
+    dependencies: [awc, soil_depth]
+
+  soil_rechr_max_frac:
+    description: "Max recharge zone storage as fraction of soil_moist_max"
+    units: "decimal fraction (0–1)"
+    dimension: nhru
+    source_dataset: statsgo2
+    derivation_type: derived_formula
+    method: >
+      soil_rechr_max_frac = AWC_upper_18inches / AWC_total_rootzone
+      Uses depth-weighted AWC of upper soil layers vs total.
+    dependencies: [awc, soil_depth]
+
+  sat_threshold:
+    description: "Gravity + preferential reservoir storage capacity"
+    units: "inches"
+    dimension: nhru
+    source_dataset: statsgo2
+    derivation_type: derived_formula
+    method: >
+      sat_threshold = (porosity - field_capacity) × root_zone_depth
+      Or approximated as soil_moist_max × gravity_factor.
+    dependencies: [soil_moist_max, porosity]
+
+  # --- Depression storage (v2.0) ---
+  dprst_frac:
+    description: "Fraction of HRU area that has surface depressions"
+    units: "decimal fraction (0–1)"
+    dimension: nhru
+    source_dataset: nhdplus
+    derivation_type: gis_overlay
+    method: "sum(waterbody_area_clipped_to_hru) / hru_area"
+    dependencies: [hru_area]
+
+  dprst_area_max:
+    description: "Maximum surface depression area"
+    units: "acres"
+    dimension: nhru
+    source_dataset: nhdplus
+    derivation_type: gis_overlay
+    method: "sum(clip(waterbody_polygons, hru_polygon).area) → acres"
+    dependencies: []
+
+  # --- Routing ---
+  tosegment:
+    description: "Downstream segment ID for each segment"
+    units: "integer segment ID (0 = outlet)"
+    dimension: nsegment
+    source_dataset: geospatial_fabric
+    derivation_type: gis_topology
+    method: "Direct from GF attribute table 'tosegment' field"
+    dependencies: []
+
+  hru_segment:
+    description: "Segment ID that each HRU drains to"
+    units: "integer segment ID"
+    dimension: nhru
+    source_dataset: geospatial_fabric
+    derivation_type: gis_topology
+    method: "Direct from GF attribute table 'hru_segment' field"
+    dependencies: []
+
+  seg_length:
+    description: "Length of stream segment"
+    units: "meters"
+    dimension: nsegment
+    source_dataset: geospatial_fabric
+    derivation_type: gis_geometry
+    method: "geodesic_length(segment_polyline)"
+    dependencies: []
+
+  K_coef:
+    description: "Muskingum storage time coefficient"
+    units: "hours (fractional day in 24-hr units for daily timestep)"
+    dimension: nsegment
+    source_dataset: [geospatial_fabric, nhdplus]
+    derivation_type: derived_formula
+    method: >
+      K_coef = seg_length / (velocity × 3600)
+      velocity from Manning's equation or NHDPlus velocity estimate.
+      Clamped to valid range for daily timestep (typically 1–24 hours).
+    dependencies: [seg_length, channel_slope, channel_width]
+    notes: >
+      The muskingum_mann module (Hay et al. 2023) computes K_coef and
+      x_coef from channel characteristics rather than specifying directly.
+
+  x_coef:
+    description: "Muskingum routing weighting factor"
+    units: "dimensionless (0–0.5)"
+    dimension: nsegment
+    source_dataset: derived
+    derivation_type: default_value
+    method: "Default 0.2 or derived via muskingum_mann module"
+    dependencies: []
+
+  # --- Solar radiation / ET ---
+  soltab_potsw:
+    description: "Potential shortwave radiation table"
+    units: "Langleys per day"
+    dimension: [nhru, 366]  # HRU × day-of-year
+    source_dataset: soltab_computed
+    derivation_type: derived_formula
+    method: >
+      Swift (1976) algorithm: compute top-of-atmosphere radiation for
+      each HRU's latitude, then attenuate based on slope and aspect
+      to get potential clear-sky shortwave for each day of year.
+    dependencies: [hru_lat, hru_slope, hru_aspect]
+
+  soltab_horad_potsw:
+    description: "Horizontal (flat) potential shortwave radiation"
+    units: "Langleys per day"
+    dimension: [nhru, 366]
+    source_dataset: soltab_computed
+    derivation_type: derived_formula
+    method: "Same as soltab_potsw but with slope=0 (horizontal surface)"
+    dependencies: [hru_lat]
+
+  jh_coef:
+    description: "Jensen-Haise PET coefficient (monthly)"
+    units: "per degree F per day"
+    dimension: [nmonths]  # 12 monthly values
+    source_dataset: derived
+    derivation_type: derived_formula
+    method: >
+      jh_coef(month) = 27.5 - 0.25 × (sat_vp(mean_tmax) - sat_vp(mean_tmin))
+                        / (sat_vp(mean_tmax))
+      using mean monthly tmax and tmin from climate normals.
+      See PRMS-IV documentation equation 1-26.
+    dependencies: [tmax_climatology, tmin_climatology]
+
+  jh_coef_hru:
+    description: "Per-HRU Jensen-Haise air temperature coefficient"
+    units: "per degree F per day"
+    dimension: nhru
+    source_dataset: derived
+    derivation_type: derived_formula
+    method: >
+      jh_coef_hru = f(hru_elev) based on elevation-dependent saturation
+      vapor pressure. Higher elevations get higher coefficients.
+    dependencies: [hru_elev]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. LOOKUP TABLES — ship with hydro-param as YAML configs
+# ─────────────────────────────────────────────────────────────────────────────
+lookup_tables:
+
+  nlcd_to_prms_cov_type:
+    description: "Reclassify NLCD land cover classes to PRMS cov_type"
+    mapping:
+      # NLCD_class: prms_cov_type
+      11: 0   # Open Water → bare
+      12: 0   # Perennial Ice/Snow → bare
+      21: 1   # Developed, Open Space → grasses
+      22: 1   # Developed, Low Intensity → grasses
+      23: 0   # Developed, Medium Intensity → bare (impervious dominated)
+      24: 0   # Developed, High Intensity → bare
+      31: 0   # Barren Land → bare
+      41: 3   # Deciduous Forest → trees
+      42: 4   # Evergreen Forest → coniferous
+      43: 3   # Mixed Forest → trees (could split by dominant)
+      51: 2   # Dwarf Shrub (AK only) → shrubs
+      52: 2   # Shrub/Scrub → shrubs
+      71: 1   # Grassland/Herbaceous → grasses
+      72: 1   # Sedge/Herbaceous (AK) → grasses
+      73: 1   # Lichens (AK) → grasses
+      74: 0   # Moss (AK) → bare
+      81: 1   # Pasture/Hay → grasses
+      82: 1   # Cultivated Crops → grasses
+      90: 2   # Woody Wetlands → shrubs
+      95: 1   # Emergent Herbaceous Wetlands → grasses
+
+  cov_type_to_interception:
+    description: "Canopy interception storage capacities by PRMS cov_type"
+    # Values in inches
+    columns: [srain_intcp, wrain_intcp, snow_intcp]
+    mapping:
+      0: [0.0,   0.0,   0.0  ]   # bare
+      1: [0.05,  0.05,  0.01 ]   # grasses
+      2: [0.05,  0.05,  0.02 ]   # shrubs
+      3: [0.08,  0.04,  0.04 ]   # deciduous trees
+      4: [0.08,  0.08,  0.06 ]   # coniferous trees
+
+  cov_type_winter_reduction:
+    description: "Multiplier to convert covden_sum → covden_win"
+    mapping:
+      0: 0.0   # bare → 0
+      1: 0.5   # grasses → half of summer
+      2: 0.5   # shrubs → half of summer
+      3: 0.5   # deciduous → lose leaves
+      4: 1.0   # coniferous → retain canopy
+
+  soil_texture_to_prms_type:
+    description: "USDA texture triangle class to PRMS soil_type (1=sand, 2=loam, 3=clay)"
+    mapping:
+      sand: 1
+      loamy_sand: 1
+      sandy_loam: 2
+      loam: 2
+      silt_loam: 2
+      silt: 2
+      sandy_clay_loam: 2
+      clay_loam: 2
+      silty_clay_loam: 3
+      sandy_clay: 3
+      silty_clay: 3
+      clay: 3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. DEFAULTS — Standard PRMS values from literature
+# ─────────────────────────────────────────────────────────────────────────────
+defaults:
+
+  snow_process:
+    den_init: 0.10
+    den_max: 0.60
+    settle_const: 0.10
+    emis_noppt: 0.757
+    freeh2o_cap: 0.05
+    potet_sublim: 0.75
+    tmax_allsnow: 32.0     # °F
+
+  albedo:
+    albset_rna: 0.8         # albedo reset, rain on new snow in acc period
+    albset_snm: 0.1         # albedo reset, snowmelt in melt period
+    albset_rnm: 0.6         # albedo reset, rain in melt period
+    albset_sna: 0.05        # albedo reset, new snow in accumulation period
+
+  radiation:
+    radmax: 0.8
+    radj_sppt: 0.44         # summer precip radiation adjustment
+    radj_wppt: 0.50         # winter precip radiation adjustment
+
+  routing:
+    x_coef: 0.2
+
+  initial_conditions:
+    soil_moist_init_frac: 0.5
+    soil_rechr_init_frac: 0.5
+    ssstor_init_frac: 0.0
+    gwstor_init: 2.0        # inches
+    gwstor_min: 0.0
+    dprst_depth_avg: 24.0   # inches
+
+  transpiration:
+    transp_tmax: 500.0      # accumulated degree-days threshold
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. CALIBRATION PARAMETERS — with physically-based initial seeds
+# ─────────────────────────────────────────────────────────────────────────────
+calibration:
+
+  surface_runoff:
+    carea_max:
+      initial_value: 0.6
+      range: [0.0, 1.0]
+      init_method: "f(soil_type, hru_slope, hru_percent_imperv)"
+      sensitivity: high
+    smidx_coef:
+      initial_value: 0.01
+      range: [0.001, 0.06]
+      init_method: "default"
+      sensitivity: high
+    smidx_exp:
+      initial_value: 0.3
+      range: [0.1, 0.8]
+      init_method: "default"
+      sensitivity: medium
+
+  soil_drainage:
+    soil2gw_max:
+      initial_value: 0.0
+      range: [0.0, 5.0]
+      init_method: "f(ksat) or 0 for simple setup"
+      sensitivity: medium
+    ssr2gw_rate:
+      initial_value: 0.1
+      range: [0.0, 1.0]
+      init_method: "f(ksat × slope)"
+      sensitivity: high
+    ssr2gw_exp:
+      initial_value: 1.0
+      range: [0.0, 3.0]
+      init_method: "default"
+      sensitivity: low
+    slowcoef_lin:
+      initial_value: 0.015
+      range: [0.001, 0.5]
+      init_method: "f(ksat, slope)"
+      sensitivity: high
+    slowcoef_sq:
+      initial_value: 0.1
+      range: [0.0, 1.0]
+      init_method: "default"
+      sensitivity: low
+    fastcoef_lin:
+      initial_value: 0.09
+      range: [0.001, 1.0]
+      init_method: "f(ksat × macroporosity)"
+      sensitivity: medium
+    fastcoef_sq:
+      initial_value: 0.0
+      range: [0.0, 1.0]
+      init_method: "default"
+      sensitivity: low
+    pref_flow_den:
+      initial_value: 0.0
+      range: [0.0, 0.1]
+      init_method: "0.0 for NHM default, or from soil macroporosity data"
+      sensitivity: medium
+
+  groundwater:
+    gwflow_coef:
+      initial_value: 0.015
+      range: [0.001, 0.5]
+      init_method: "Baseflow recession constant from hydrograph analysis"
+      sensitivity: high
+    gwsink_coef:
+      initial_value: 0.0
+      range: [0.0, 1.0]
+      init_method: "0.0 (assume no deep losses) or regional analysis"
+      sensitivity: medium
+
+  snow:
+    snarea_thresh:
+      initial_value: 50.0
+      range: [0.1, 200.0]
+      units: inches
+      init_method: "Historical max SWE from SNODAS or station data"
+      sensitivity: medium
+
+  climate_adjustments:
+    rain_cbh_adj:
+      initial_value: 1.0   # × 12 months
+      range: [0.5, 2.0]
+      init_method: "1.0 or PRISM/Daymet undercatch correction"
+      sensitivity: high
+    snow_cbh_adj:
+      initial_value: 1.0
+      range: [0.5, 2.0]
+      init_method: "1.0 or gauge undercatch correction for snow"
+      sensitivity: high
+    tmax_cbh_adj:
+      initial_value: 0.0
+      range: [-10.0, 10.0]
+      init_method: "Elevation lapse rate residual"
+      sensitivity: medium
+    tmin_cbh_adj:
+      initial_value: 0.0
+      range: [-10.0, 10.0]
+      init_method: "Elevation lapse rate residual"
+      sensitivity: medium
+    tmax_allrain_offset:
+      initial_value: 6.0
+      range: [0.0, 20.0]
+      units: degrees F
+      init_method: "default"
+      sensitivity: high
+    adjmix_rain:
+      initial_value: 1.0
+      range: [0.5, 1.5]
+      init_method: "default"
+      sensitivity: low
+
+  radiation:
+    dday_slope:
+      initial_value: 0.4   # × 12 months
+      range: [0.2, 0.8]
+      init_method: "Regression of obs radiation on tmax by month"
+      sensitivity: medium
+    dday_intcp:
+      initial_value: -10.0  # × 12 months
+      range: [-60.0, 10.0]
+      init_method: "Regression intercept or regional values"
+      sensitivity: medium
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. DERIVATION PIPELINE — ordered processing steps for hydro-param
+# ─────────────────────────────────────────────────────────────────────────────
+derivation_pipeline:
+  description: >
+    Ordered sequence of processing steps. Each step may depend on outputs
+    from previous steps. This defines the DAG for hydro-param execution.
+
+  steps:
+    - step: 1
+      name: "geometry_extraction"
+      description: "Compute basic geometry from Geospatial Fabric"
+      requires_datasets: [geospatial_fabric]
+      produces: [hru_area, hru_lat, seg_length, nhm_id, nhm_seg]
+      method: "GeoPandas geometry operations"
+
+    - step: 2
+      name: "topology_extraction"
+      description: "Extract network connectivity from GF attributes"
+      requires_datasets: [geospatial_fabric]
+      produces: [tosegment, hru_segment]
+      method: "Direct attribute read"
+
+    - step: 3
+      name: "dem_zonal_stats"
+      description: "Compute topographic parameters from DEM"
+      requires_datasets: [ned_3dep]
+      requires_params: [hru_area]  # need HRU polygons
+      produces: [hru_elev, hru_slope, hru_aspect]
+      method: "exactextract or rasterstats zonal operations"
+      notes: "Slope/aspect require intermediate raster computation before zonal."
+
+    - step: 4
+      name: "landcover_zonal_stats"
+      description: "Derive vegetation and impervious parameters from NLCD"
+      requires_datasets: [nlcd]
+      produces: [cov_type, covden_sum, hru_percent_imperv]
+      method: "Reclassify NLCD → cov_type (zonal dominant); canopy/imperv (zonal mean)"
+      lookup_tables_used: [nlcd_to_prms_cov_type]
+
+    - step: 5
+      name: "soils_zonal_stats"
+      description: "Derive soil parameters from STATSGO2/SSURGO"
+      requires_datasets: [statsgo2]
+      produces: [soil_type, soil_moist_max, soil_rechr_max_frac]
+      method: "Weighted average of component layers, then zonal over HRU"
+      lookup_tables_used: [soil_texture_to_prms_type]
+
+    - step: 6
+      name: "waterbody_overlay"
+      description: "Depression storage from NHDPlus waterbodies"
+      requires_datasets: [nhdplus]
+      produces: [dprst_frac, dprst_area_max, hru_type]
+      method: "Spatial overlay of waterbody polygons with HRU polygons"
+
+    - step: 7
+      name: "climate_cbh_generation"
+      description: "Generate Climate-By-HRU forcing time series"
+      requires_datasets: [daymet_v4]  # or gridmet, conus404_ba
+      produces: [prcp_cbh, tmax_cbh, tmin_cbh]
+      method: "Area-weighted spatial average via gdptools or exactextract"
+      notes: "This is the most compute-intensive step for large domains."
+
+    - step: 8
+      name: "lookup_table_application"
+      description: "Apply lookup tables for interception, imperv storage, etc."
+      requires_params: [cov_type]
+      produces: [srain_intcp, wrain_intcp, snow_intcp, imperv_stor_max, covden_win]
+      method: "Vectorized table lookup keyed on cov_type"
+      lookup_tables_used:
+        - cov_type_to_interception
+        - cov_type_winter_reduction
+
+    - step: 9
+      name: "solar_radiation_tables"
+      description: "Compute soltab potential radiation from topo params"
+      requires_params: [hru_lat, hru_slope, hru_aspect]
+      produces: [soltab_potsw, soltab_horad_potsw]
+      method: "Swift (1976) algorithm, vectorized over all HRUs × 366 days"
+
+    - step: 10
+      name: "pet_coefficients"
+      description: "Derive Jensen-Haise PET parameters"
+      requires_params: [hru_elev]
+      requires_datasets: [daymet_v4]  # for climate normals
+      produces: [jh_coef, jh_coef_hru]
+      method: "Empirical formulas from PRMS-IV documentation"
+
+    - step: 11
+      name: "climate_derived_params"
+      description: "Growing season / transpiration timing from climate normals"
+      requires_datasets: [daymet_v4]
+      produces: [transp_beg, transp_end]
+      method: "Frost-free period analysis from long-term tmin statistics"
+
+    - step: 12
+      name: "routing_coefficients"
+      description: "Muskingum routing parameters from channel geometry"
+      requires_params: [seg_length]
+      requires_datasets: [nhdplus]
+      produces: [K_coef, x_coef]
+      method: "K = L/v with velocity from Manning's or NHDPlus; or use muskingum_mann"
+
+    - step: 13
+      name: "defaults_and_initials"
+      description: "Apply all default values and initial conditions"
+      produces:
+        - den_init, den_max, settle_const, emis_noppt, freeh2o_cap
+        - potet_sublim, tmax_allsnow, albset_rna, albset_snm
+        - albset_rnm, albset_sna, radmax, radj_sppt, radj_wppt
+        - soil_moist_init_frac, soil_rechr_init_frac, ssstor_init_frac
+        - gwstor_init, gwstor_min, dprst_depth_avg, transp_tmax
+      method: "Direct assignment from defaults section"
+
+    - step: 14
+      name: "calibration_seeds"
+      description: "Generate physically-based initial values for calibration params"
+      requires_params: [soil_type, hru_slope, hru_percent_imperv, soil_moist_max]
+      produces:
+        - carea_max, smidx_coef, smidx_exp
+        - soil2gw_max, ssr2gw_rate, ssr2gw_exp
+        - slowcoef_lin, slowcoef_sq, fastcoef_lin, fastcoef_sq
+        - pref_flow_den, gwflow_coef, gwsink_coef
+        - snarea_thresh
+        - rain_cbh_adj, snow_cbh_adj, tmax_cbh_adj, tmin_cbh_adj
+        - tmax_allrain_offset, adjmix_rain
+        - dday_slope, dday_intcp
+      method: "Empirical relationships from NHM methodology + literature defaults"
+
+    - step: 15
+      name: "output_formatting"
+      description: "Write parameters in target model format"
+      method: >
+        Plugin-based output formatter. For pywatershed: write to NetCDF
+        DatasetDict or PRMS parameter file format. This is where the
+        hydro-param output plugin system applies.

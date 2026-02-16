@@ -1,5 +1,44 @@
 # Dataset registry: snow datasets.
 # See design.md sections 6.6, 6.10, and 11.3.
-# No datasets registered yet for this category.
 
-datasets: {}
+datasets:
+  snodas:
+    description: "SNODAS daily snow data, ~1km (2006-present)"
+    strategy: nhgf_stac
+    collection: snodas
+    crs: "EPSG:4326"
+    x_coord: "lon"
+    y_coord: "lat"
+    t_coord: "time"
+    category: snow
+    temporal: true
+    # Accessed via gdptools NHGFStacData from the USGS GDP STAC catalog.
+    # Zarr store: s3://hytest/snodas.zarr/
+    # STAC: https://api.water.usgs.gov/gdp/pygeoapi/stac/stac-collection/snodas
+    # Useful for snarea_thresh calibration seed (historical max SWE).
+    variables:
+      - name: SWE
+        band: 1
+        units: "m"
+        long_name: "Modeled Snow Water Equivalent"
+        categorical: false
+      - name: SDP
+        band: 1
+        units: "m"
+        long_name: "Modeled Snow Depth"
+        categorical: false
+      - name: SNM
+        band: 1
+        units: "m"
+        long_name: "24-hour snowmelt rate"
+        categorical: false
+      - name: PRL
+        band: 1
+        units: "kg/m2"
+        long_name: "Modeled liquid precipitation (24h total)"
+        categorical: false
+      - name: PRS
+        band: 1
+        units: "kg/m2"
+        long_name: "Modeled solid precipitation (24h total)"
+        categorical: false

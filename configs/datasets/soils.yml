@@ -1,31 +1,168 @@
 # Dataset registry: soils datasets.
 # See design.md sections 6.6, 6.10, and 11.3.
 
-# Not yet implemented in code; registry entry validates schema generality.
 datasets:
-  polaris_100m:
-    description: "POLARIS soil properties, 100m resolution"
-    strategy: converted_zarr
-    source: "s3://hytest/polaris/polaris_100m_mean.zarr"
+  polaris_30m:
+    description: "POLARIS soil properties, 30m (1 arcsecond), CONUS"
+    strategy: local_tiff
     crs: "EPSG:4326"
-    x_coord: "lon"
-    y_coord: "lat"
+    x_coord: "x"
+    y_coord: "y"
     category: soils
     temporal: false
+    download:
+      format: "GeoTIFF (VRT mosaic over 1-degree tiles)"
+      notes: >
+        POLARIS data is served as VRT mosaics from Duke University.
+        Each VRT file can be opened directly via GDAL/rasterio over HTTP
+        (vsicurl) or downloaded for local use.
+        Base URL: http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/
+        Pattern: {variable}_{statistic}_{depth}.vrt
+        Statistics: mean, mode, p5, p50, p95
+        Depths: 0_5, 5_15, 15_30, 30_60, 60_100, 100_200 (cm)
+        License: CC BY-NC 4.0.
+        Also accessible via pygeohydro.soil_polaris() (HyRiver).
+      files:
+        # Key VRT files for NHM-PRMS parameterization (mean statistic).
+        # Sand/silt/clay -> soil_type reclassification
+        - year: 0
+          variable: sand_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+        - year: 0
+          variable: silt_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/silt_mean_0_5.vrt"
+        - year: 0
+          variable: clay_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/clay_mean_0_5.vrt"
+        # Porosity (theta_s) -> sat_threshold derivation
+        - year: 0
+          variable: theta_s_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_0_5.vrt"
+        - year: 0
+          variable: theta_s_mean_5_15
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_5_15.vrt"
+        - year: 0
+          variable: theta_s_mean_15_30
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_15_30.vrt"
+        - year: 0
+          variable: theta_s_mean_30_60
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_30_60.vrt"
+        - year: 0
+          variable: theta_s_mean_60_100
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_60_100.vrt"
+        - year: 0
+          variable: theta_s_mean_100_200
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_100_200.vrt"
+        # Ksat -> calibration seeds (ssr2gw_rate, slowcoef_lin, fastcoef_lin)
+        - year: 0
+          variable: ksat_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/ksat_mean_0_5.vrt"
+        # Bulk density
+        - year: 0
+          variable: bd_mean_0_5
+          url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bd_mean_0_5.vrt"
     variables:
-      - name: sand_pct
+      - name: sand
+        band: 1
         units: "%"
         long_name: "Sand content"
         categorical: false
-      - name: clay_pct
+      - name: silt
+        band: 1
+        units: "%"
+        long_name: "Silt content"
+        categorical: false
+      - name: clay
+        band: 1
         units: "%"
         long_name: "Clay content"
         categorical: false
-      - name: ksat
-        units: "cm/hr"
-        long_name: "Saturated hydraulic conductivity"
+      - name: bd
+        band: 1
+        units: "g/cm3"
+        long_name: "Bulk density"
         categorical: false
       - name: theta_s
+        band: 1
         units: "m3/m3"
-        long_name: "Saturated water content"
+        long_name: "Saturated water content (porosity)"
         categorical: false
+      - name: theta_r
+        band: 1
+        units: "m3/m3"
+        long_name: "Residual water content"
+        categorical: false
+      - name: ksat
+        band: 1
+        units: "log10(cm/hr)"
+        long_name: "Saturated hydraulic conductivity"
+        categorical: false
+      - name: ph
+        band: 1
+        units: ""
+        long_name: "Soil pH in H2O"
+        categorical: false
+      - name: om
+        band: 1
+        units: "log10(%)"
+        long_name: "Organic matter"
+        categorical: false
+      - name: lambda
+        band: 1
+        units: ""
+        long_name: "Brooks-Corey pore size distribution index"
+        categorical: false
+      - name: hb
+        band: 1
+        units: "log10(kPa)"
+        long_name: "Brooks-Corey bubbling pressure"
+        categorical: false
+      - name: n
+        band: 1
+        units: ""
+        long_name: "Van Genuchten pore size distribution"
+        categorical: false
+      - name: alpha
+        band: 1
+        units: "log10(kPa^-1)"
+        long_name: "Van Genuchten scale parameter"
+        categorical: false
+
+  gnatsgo_rasters:
+    description: "gNATSGO pre-summarized soil properties, 30m (Planetary Computer)"
+    strategy: stac_cog
+    catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+    collection: "gnatsgo-rasters"
+    asset_key: "mukey"
+    gsd: 30
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    sign: planetary_computer
+    category: soils
+    temporal: false
+    variables:
+      - name: aws0_100
+        band: 1
+        units: "cm"
+        long_name: "Available water storage 0-100cm"
+        categorical: false
+        asset_key: "aws0_100"
+      - name: rootznemc
+        band: 1
+        units: "cm"
+        long_name: "Root zone depth"
+        categorical: false
+        asset_key: "rootznemc"
+      - name: rootznaws
+        band: 1
+        units: "cm"
+        long_name: "Root zone available water storage"
+        categorical: false
+        asset_key: "rootznaws"
+      - name: mukey
+        band: 1
+        units: ""
+        long_name: "Map unit key (for tabular join to full soil properties)"
+        categorical: true
+        asset_key: "mukey"
