@@ -1738,14 +1738,14 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - ~~Config philosophy~~ → Strictly declarative; logic in Python scripts (Appendix A.4)
 - ~~Partial failure handling~~ → Tolerant mode + failed log + patch runs (Appendix A.6); skip/log implemented in MVP (Appendix B.2B)
 - ~~Custom parameter derivations~~ → Model-specific derivation plugins consuming the SIR (Appendix A.8)
-- ~~Project directory scaffolding~~ → Replaced with library-managed transparent caching, pooch-style (Appendix B.2A, §6.11 revised)
+- ~~Project directory scaffolding (user-managed)~~ → Library-managed transparent caching + optional `hydro-param init` for project convenience scaffolding (Appendix B.2A, §6.11 revised, §11.9)
 - ~~Fabric acquisition scope~~ → hydro-param does NOT fetch/subset fabrics; input is a path to a geospatial file (Appendix B.3A)
 - ~~SIR schema enforcement~~ → Strict schema with standard names, guaranteed units, and validation function (Appendix B.2D, §A.8 A′)
 - ~~CRS handling in exactextract~~ → Already handled by gdptools, which reprojects target geometry to source CRS by design (Appendix B.2C, §11.5)
 - ~~Dataset registry download provenance~~ → Registry entries include `download` block with URL, size, format, and instructions (§6.6 v5.4)
 - ~~Pipeline config source override~~ → `local_tiff` datasets specify local path in pipeline config, not registry (§6.6 v5.4)
 - ~~CLI design~~ → Minimal CLI: `datasets list/info/download` + `run` using cyclopts (§11.9 v5.4)
-- ~~User workflow~~ → Pipeline config YAML is the project; no scaffolding (§11.10 v5.4)
+- ~~User workflow~~ → Pipeline config YAML is the project; optional `hydro-param init` scaffolding (§11.10 v5.4)
 - ~~Static vs temporal processing~~ → ZonalGen for static, ClimRCatData + AggGen for temporal; strategy field dispatches (§11.11 v5.4)
 
 ### 10.2 Open Design Questions
@@ -1769,7 +1769,7 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 17. ~~**Fabric acquisition and subsetting:** Step 1 (§4) is "resolve target fabric" but the path from "I want to model the Delaware River Basin" to a GeoDataFrame of HRUs involves non-trivial subsetting (pynhd for GFv1.1, different toolchains for NextGen, manual for custom fabrics). How much of this does hydro-param own vs. expect the user to provide?~~ → **hydro-param owns none of it.** The input must be a valid, flat file (GeoPackage/Parquet) of polygons. Let tools like pynhd or hydrodata handle subsetting. Attempting to build fabric subsetting is massive scope creep (Appendix B.3A).
 18. **POLARIS licensing (CC BY-NC 4.0):** The NC (non-commercial) restriction on POLARIS — does it propagate to derived parameter values in model outputs? Matters for any operational or commercial use of parameterization results. May need legal guidance or an alternative pathway (gNATSGO) for affected users.
 19. **Category enum governance:** The `category` field on `DatasetEntry` will become a `Literal` enum constrained to the 8 canonical categories (§1.3, §6.10). Decision: **Yes, Literal enum** — catches typos, enables IDE completion. Implementation deferred to code PR.
-20. ~~**Project directory scaffolding:** Should the `project/` folder (§6.11) live inside the hydro-param repository as a template/example, or should hydro-param provide a scaffolding command (`hydro-param init --name upper_colorado --bbox ...`) that creates a project directory structure?~~ → **Dropped.** Replaced with library-managed transparent caching. The pipeline config is the single source of truth; no separate project config (Appendix B.2A, §6.11 revised).
+20. ~~**Project directory scaffolding:** Should the `project/` folder (§6.11) live inside the hydro-param repository as a template/example, or should hydro-param provide a scaffolding command (`hydro-param init --name upper_colorado --bbox ...`) that creates a project directory structure?~~ → **Implemented as optional convenience.** `hydro-param init` creates a project directory with categorical data subfolders (`data/{category}/`), a template `configs/pipeline.yml`, and a `.gitignore`. The pipeline config remains the single source of truth — the scaffolding is a convenience, not a requirement. Library-managed transparent caching is still the long-term strategy for streamable data (§6.11). A `.hydro-param` marker file enables `datasets download` auto-routing to `data/{category}/`.
 21. **Registry version pinning in pipeline config:** The `hydro-param-data` registry will evolve — POLARIS Zarr stores may be reprocessed, conversion bugs fixed, new datasets added. The pipeline config should pin the registry version (e.g., `registry_version: "2024.02.1"`) to ensure re-running a config 6 months later yields identical results. This intersects with weight cache invalidation (§A.2) and data provenance (Q14). See Appendix B.3B.
 
 ### 10.3 Completed Actions
@@ -1807,7 +1807,7 @@ This connects to the existing `OutputFormatter` plugin via a two-step invocation
 - [x] Pipeline orchestrator (5-stage batch loop) — §11.7
 - [x] SIR output as xr.Dataset with CF-1.8 metadata
 - [x] Fault tolerance: skip/log in MVP (v5.3); patch runs deferred to Phase 2
-- [ ] CLI: `hydro-param datasets list/info/download` + `hydro-param run` — §11.9
+- [x] CLI: `hydro-param init` + `hydro-param datasets list/info/download` + `hydro-param run` — §11.9
 - [ ] Registry `download` block for NLCD with real download URLs — §6.6
 - [ ] Pipeline config `source` override for `local_tiff` datasets — §6.6
 - [ ] NLCD categorical processing end-to-end (test with Delaware domain)
@@ -1856,7 +1856,7 @@ The MVP implements the core pipeline loop (§4 stages 1–5) with enough infrast
 | Spatial batching | KD-tree recursive bisection (§5.5.1 Approach 5) |
 | Data access | STAC COG (Planetary Computer) + local GeoTIFF strategies |
 | Processing | gdptools ZonalGen with exactextract engine; continuous and categorical modes |
-| CLI | `hydro-param datasets list/info/download` + `hydro-param run` (§11.9) |
+| CLI | `hydro-param init` + `hydro-param datasets list/info/download` + `hydro-param run` (§11.9) |
 | Output | SIR as xr.Dataset with CF-1.8 metadata; NetCDF writer |
 | Test domain | Delaware River Basin, 7,268 NHDPlus catchments |
 | Test datasets | 3DEP DEM (STAC COG, continuous + derived) and NLCD (local_tiff, categorical) |
@@ -2024,18 +2024,44 @@ This implementation resolves or partially resolves several open questions from �
 **Commands:**
 
 ```bash
+# Scaffold a new project directory with template config and data subfolders
+hydro-param init [project-dir] [--force] [--registry <registry.yml>]
+
 # List available datasets, grouped by category
 hydro-param datasets list
 
 # Show details about a specific dataset (description, variables, download info)
 hydro-param datasets info <name>
 
-# Download a dataset to local storage
+# Download a dataset to local storage (auto-routes to data/<category>/ inside a project)
 hydro-param datasets download <name> [--dest <path>]
 
 # Run the pipeline
 hydro-param run <config.yml> [--registry <registry.yml>]
 ```
+
+**`init [project-dir]`** creates a standard project directory structure with a template pipeline config, data directories organised by dataset category, and a `.gitignore`. The generated structure:
+
+```
+my_project/
+├── .hydro-param                  # Marker file (name + timestamp)
+├── configs/
+│   └── pipeline.yml              # Well-commented template config
+├── data/
+│   ├── fabrics/                  # Target polygon files (GeoPackage, Parquet)
+│   ├── topography/               # Registry category subfolders
+│   ├── land_cover/
+│   ├── soils/
+│   ├── climate/
+│   └── ...                       # (all 8 categories from §1.3)
+├── output/                       # Pipeline SIR results (NetCDF, Parquet)
+├── models/                       # Model-formatted exports (PRMS, NextGen, etc.)
+└── .gitignore                    # Ignore data files, output, models
+```
+
+The `--force` flag re-initialises an existing project (refreshes the marker and creates missing directories, but never overwrites an existing `configs/pipeline.yml`). The `.hydro-param` marker file enables `datasets download` to auto-detect the project root and route files to `data/{category}/` when `--dest` is omitted. This is a **convenience feature** — the pipeline config remains the single source of truth and works without `init`.
+
+**The project directory as a modeling artifact.** Beyond convenience, the initialised project directory serves as a self-documenting record of the entire parameterization workflow. The directory captures *what* fabric was used (`data/fabrics/`), *which* datasets were downloaded (`data/{category}/`), *how* the pipeline was configured (`configs/pipeline.yml`), and *what* results were produced (`output/`, `models/`). A collaborator — or the same researcher returning months later — can inspect the directory and understand the full provenance without reconstructing steps from shell history or notes. For reproducibility, the project directory (minus the large rasters excluded by `.gitignore`) can be shared or archived: recipients re-download the source data via `datasets download` and rerun the pipeline to reproduce identical results. This aligns with USGS data release and reproducibility requirements, where documenting the chain from source data to derived parameters is essential.
 
 **`datasets list`** reads the registry and displays datasets grouped by the eight canonical categories (§1.3). For each dataset, it shows the name, description, strategy, and a flag indicating whether download is required:
 
@@ -2074,7 +2100,7 @@ To use in your pipeline config:
       variables: [land_cover]
 ```
 
-**`datasets download <name>`** executes the download for datasets with a `download` block in the registry. For NLCD, this runs the AWS CLI command. The `--dest` flag specifies the download directory (default: current directory). The command prints the downloaded file path so the user can reference it in their pipeline config.
+**`datasets download <name>`** executes the download for datasets with a `download` block in the registry. For NLCD, this runs the AWS CLI command. The `--dest` flag specifies the download directory. When `--dest` is omitted inside an initialised project (detected via the `.hydro-param` marker), files are auto-routed to `data/{category}/` based on the dataset's registry category. When `--dest` is omitted outside a project, files download to the current directory. The command prints the downloaded file path so the user can reference it in their pipeline config.
 
 **`run <config.yml>`** replaces the current `python -m hydro_param.pipeline` entry point. Configures logging and executes the pipeline.
 
@@ -2095,7 +2121,7 @@ Then set 'source' in your pipeline config:
       variables: [land_cover]
 ```
 
-**Implementation:** A single `cli.py` module added to `src/hydro_param/`. Entry point registered in `pyproject.toml` under `[project.scripts]`:
+**Implementation:** `cli.py` (command definitions) and `project.py` (scaffolding logic, project root detection, template generation) in `src/hydro_param/`. Entry point registered in `pyproject.toml` under `[project.scripts]`:
 
 ```toml
 [project.scripts]
@@ -2104,7 +2130,7 @@ hydro-param = "hydro_param.cli:main"
 
 ### 11.10 User Workflow: Setting Up a New Project
 
-> **New section (v5.4).** Documents the end-to-end workflow for a user starting a new parameterization project. The "project" is a pipeline config YAML file — no scaffolding, no directory structure imposed by the library.
+> **New section (v5.4, updated v5.5).** Documents the end-to-end workflow for a user starting a new parameterization project. The "project" is a pipeline config YAML file — the `init` command provides optional convenience scaffolding but is not required.
 
 **Step 1: Install hydro-param**
 
@@ -2113,59 +2139,69 @@ pip install hydro-param
 # or: pixi add hydro-param
 ```
 
-**Step 2: Get a target fabric** (outside hydro-param)
+**Step 2: Initialise a project directory** (optional but recommended)
+
+```bash
+hydro-param init my_project
+cd my_project
+```
+
+This creates the standard directory structure (see §11.9) with a template `configs/pipeline.yml`, categorical data subfolders under `data/`, and a `.gitignore`. Users who prefer to manage their own layout can skip this step and create a pipeline config manually.
+
+**Step 3: Get a target fabric** (outside hydro-param)
 
 hydro-param does not fetch or subset fabrics (§B.3A). The user must provide a pre-existing geospatial file (GeoPackage, Parquet, or Shapefile) containing their target polygons. Tools like `pynhd` or `pygeohydro` handle this:
 
 ```python
 # Example: download NHDPlus catchments for the Delaware River Basin
 import pynhd
-# ... fetch catchments, save as delaware_catchments.gpkg
+# ... fetch catchments, save as data/fabrics/delaware_catchments.gpkg
 ```
 
-**Step 3: Discover available datasets**
+**Step 4: Discover available datasets**
 
 ```bash
 hydro-param datasets list           # see what's available
 hydro-param datasets info nlcd_2021 # get download instructions
 ```
 
-**Step 4: Download required datasets**
+**Step 5: Download required datasets**
 
-For datasets with `strategy: local_tiff` (or other strategies requiring local files), the user downloads the data. The registry's `download` block tells them exactly what to do:
+For datasets with `strategy: local_tiff` (or other strategies requiring local files), the user downloads the data. Inside an initialised project, files auto-route to `data/{category}/`:
 
 ```bash
-hydro-param datasets download nlcd_2021 --dest /data/nlcd/
+hydro-param datasets download nlcd_2021
+# → downloads to data/land_cover/ (auto-detected from .hydro-param marker)
 ```
 
-Remote-viable datasets (`stac_cog`, `climr_cat`) need no download — the pipeline accesses them directly.
+Users can still specify `--dest` explicitly to override auto-routing. Remote-viable datasets (`stac_cog`, `climr_cat`) need no download — the pipeline accesses them directly.
 
-**Step 5: Write a pipeline config**
+**Step 6: Edit the pipeline config**
 
-The user creates a YAML config file specifying their target fabric, domain, datasets, and output preferences. Example configs ship with the package as templates:
+If `init` was used, edit the generated `configs/pipeline.yml` — it contains commented fields with example values. Otherwise, create a YAML config file specifying the target fabric, domain, datasets, and output preferences:
 
 ```yaml
 target_fabric:
-  path: /home/alice/projects/willamette/catchments.gpkg
+  path: data/fabrics/delaware_catchments.gpkg
   id_field: hru_id
 
 domain:
   type: bbox
-  bbox: [-124.0, 43.0, -121.5, 46.0]
+  bbox: [-76.5, 38.5, -74.0, 42.6]
 
 datasets:
   - name: dem_3dep_10m            # remote — just works
     variables: [elevation, slope, aspect]
     statistics: [mean]
-  - name: nlcd_2021               # local — user provides path
-    source: /data/nlcd/nlcd_2021_land_cover_l48_20230630.tif
+  - name: nlcd_2021               # local — downloaded to data/land_cover/
+    source: data/land_cover/nlcd_2021_land_cover_l48_20230630.tif
     variables: [land_cover]
     statistics: [majority, coverage]
 
 output:
-  path: ./output
+  path: output
   format: netcdf
-  sir_name: willamette_params
+  sir_name: delaware_params
 
 processing:
   engine: exactextract
@@ -2173,13 +2209,13 @@ processing:
   batch_size: 500
 ```
 
-**Step 6: Run the pipeline**
+**Step 7: Run the pipeline**
 
 ```bash
-hydro-param run willamette_config.yml
+hydro-param run configs/pipeline.yml
 ```
 
-**Key design principle:** The YAML files themselves are the documentation for MVP. Well-commented registry entries and a template pipeline config teach the user the workflow. CLI tooling provides discoverability. Formal quickstart guides and tutorials come in Phase 2.
+**Key design principle:** The initialised project directory is both a workspace and a reproducible artifact. The configs, data layout, and outputs together document the complete parameterization provenance — from source datasets to model-ready parameters. Well-commented registry entries and the template pipeline config teach the user the workflow. CLI tooling provides discoverability (`datasets list/info`) and automated organisation (`datasets download` auto-routing). Formal quickstart guides and tutorials come in Phase 2.
 
 ### 11.11 Processing Pathway Bifurcation: Static vs Temporal
 
@@ -2276,7 +2312,7 @@ The reviewer validated the following design decisions, confirming they are archi
 
 **Response: Agree. §6.11 has been rewritten.** The explicit project directory scaffolding is replaced with library-managed transparent caching. The user's config requests datasets by name; the system checks a cache path and fetches if missing/stale. The pipeline config is the single source of truth. See revised §6.11 for the `DataCache` pattern and cache directory structure.
 
-**Design impact:** Open question Q20 (project directory scaffolding) is now resolved. The `hydro-param init` scaffolding CLI is dropped; replaced with `hydro-param cache --status/--clean/--purge` for cache management.
+**Design impact (updated v5.5):** Open question Q20 (project directory scaffolding) is now resolved with a hybrid approach. `hydro-param init` provides **optional convenience scaffolding** — a project directory with categorical data subfolders, a template pipeline config, and download auto-routing — while library-managed transparent caching remains the long-term strategy for streamable data. The pipeline config is still the single source of truth; the scaffolding reduces friction for new users but is not required. Cache management commands (`hydro-param cache --status/--clean/--purge`) remain planned for Phase 2.
 
 #### B.2B MVP Strict Mode Viability (§11.1) — REVISED
 
@@ -2341,7 +2377,7 @@ This ensures derivation plugins receive consistently formatted data regardless o
 
 | Issue | Section(s) Modified | Change |
 | --- | --- | --- |
-| Project directory → library-managed caching | §6.11 (rewritten), §10.1, §10.2 Q20, §10.4 | Dropped scaffolding; adopted pooch-style transparent caching |
+| Project directory → library-managed caching + optional scaffolding | §6.11 (rewritten), §10.1, §10.2 Q20, §10.4, §11.9, §11.10 | Optional `hydro-param init` scaffolding with transparent caching for streamable data |
 | MVP strict mode → tolerant with skip/log | §11.1, §11.6 | Default `failure_mode: tolerant` in MVP |
 | CRS alignment via gdptools | §11.5 | Already handled — gdptools reprojects target to source CRS by design |
 | SIR schema validation | §A.3, §A.8 | Standard names, guaranteed units, `validate_sir()` |

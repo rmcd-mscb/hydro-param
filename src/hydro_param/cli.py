@@ -1,10 +1,11 @@
 """CLI entry point for hydro-param.
 
 Commands:
-    hydro-param datasets list          — list available datasets
-    hydro-param datasets info <name>   — show dataset details
+    hydro-param init [project-dir]       — scaffold a project directory
+    hydro-param datasets list            — list available datasets
+    hydro-param datasets info <name>     — show dataset details
     hydro-param datasets download <name> — download dataset files
-    hydro-param run <config>           — execute the pipeline
+    hydro-param run <config>             — execute the pipeline
 
 See design.md §11.9 for the full CLI specification.
 """
@@ -21,6 +22,7 @@ from cyclopts import App
 
 from hydro_param.dataset_registry import DatasetEntry, DatasetRegistry, load_registry
 from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline
+from hydro_param.project import find_project_root, init_project
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +197,7 @@ def datasets_info(name: str, *, registry: Path | None = None) -> None:
 def datasets_download(
     name: str,
     *,
-    dest: Path = Path("."),
+    dest: Path | None = None,
     years: str | None = None,
     variables: str | None = None,
     registry: Path | None = None,
@@ -207,7 +209,9 @@ def datasets_download(
     name
         Dataset name as it appears in the registry.
     dest
-        Destination directory for downloaded files.
+        Destination directory for downloaded files.  When omitted inside
+        an initialised project, files are routed to ``data/<category>/``
+        automatically.
     years
         Comma-separated list of years to download (multi-file datasets).
     variables
@@ -226,6 +230,15 @@ def datasets_download(
         print(f"Error: Dataset '{name}' has no download information.", file=sys.stderr)
         print("It may be a remote dataset that does not require downloading.", file=sys.stderr)
         raise SystemExit(1)
+
+    # Resolve destination: auto-route when inside an initialised project
+    if dest is None:
+        project_root = find_project_root()
+        if project_root is not None and entry.category:
+            dest = project_root / "data" / entry.category
+            print(f"Project detected: downloading to {dest}")
+        else:
+            dest = Path(".")
 
     # Check for AWS CLI
     if shutil.which("aws") is None:
@@ -338,6 +351,37 @@ def run_cmd(config: Path, *, registry: Path | None = None) -> None:
     except Exception as exc:
         logger.exception("Pipeline failed.")
         raise SystemExit(1) from exc
+
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="init")
+def init_cmd(
+    project_dir: Path = Path("."),
+    *,
+    force: bool = False,
+    registry: Path | None = None,
+) -> None:
+    """Scaffold a new hydro-param project directory.
+
+    Creates a standard directory structure with a template pipeline
+    configuration, data directories organised by dataset category,
+    and a .gitignore.
+
+    Parameters
+    ----------
+    project_dir
+        Directory to initialise.  Defaults to the current directory.
+    force
+        Re-initialise an existing project (creates missing directories,
+        refreshes marker, but preserves existing pipeline.yml).
+    registry
+        Path to a custom registry for category discovery.
+    """
+    init_project(project_dir, force=force, registry_path=registry)
 
 
 # ---------------------------------------------------------------------------
