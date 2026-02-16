@@ -51,6 +51,15 @@ class PywatershedFormatter:
         self._metadata_path = metadata_path or _PARAM_METADATA_PATH
         self._metadata_cache: dict | None = None
 
+    @property
+    def metadata_path(self) -> Path:
+        """Path to the parameter metadata YAML."""
+        return self._metadata_path
+
+    def has_metadata(self) -> bool:
+        """Return True if the parameter metadata file exists."""
+        return self._metadata_path.exists()
+
     def write(
         self,
         parameters: xr.Dataset,
@@ -86,7 +95,8 @@ class PywatershedFormatter:
         # 1. Parameter NetCDF
         param_path = output_path / config.get("parameter_file", "parameters.nc")
         self.write_parameters(parameters, param_path)
-        written.append(param_path)
+        if param_path.exists():
+            written.append(param_path)
 
         # 2. CBH files (only if climate data present)
         cbh_paths = self.write_cbh(parameters, output_path / config.get("cbh_dir", "cbh"))
@@ -215,9 +225,18 @@ class PywatershedFormatter:
         output_path
             Path for the control YAML file.
         """
+        start = config.get("start")
+        end = config.get("end")
+        if start is None or end is None:
+            msg = (
+                "Control configuration requires 'start' and 'end' values; "
+                f"received start={start!r}, end={end!r}."
+            )
+            raise ValueError(msg)
+
         control: dict = {
-            "start_time": config.get("start"),
-            "end_time": config.get("end"),
+            "start_time": start,
+            "end_time": end,
             "time_step": "24:00:00",
         }
 

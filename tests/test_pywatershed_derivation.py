@@ -239,6 +239,41 @@ class TestParameterOverrides:
         assert ds["custom_param"].item() == 42.0
 
 
+class TestHruCoordinates:
+    """Tests for HRU coordinate carryover."""
+
+    def test_nhru_coords_from_sir(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ds = derivation.derive(sir_topography)
+        assert "nhru" in ds.coords
+        np.testing.assert_array_equal(ds.coords["nhru"].values, [1, 2, 3])
+
+
+class TestLandCoverMajorityFallback:
+    """Tests for land_cover_majority variable name fallback."""
+
+    def test_land_cover_majority_accepted(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(
+            {"land_cover_majority": ("hru_id", np.array([42, 71]))},
+            coords={"hru_id": [1, 2]},
+        )
+        ds = derivation.derive(sir)
+        assert "cov_type" in ds
+        assert ds["cov_type"].values[0] == 4  # Evergreen → coniferous
+
+
+class TestOverrideDims:
+    """Tests for override dimension assignment."""
+
+    def test_new_1d_override_gets_nhru_dim(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        config = {"parameter_overrides": {"values": {"new_param": [1.0, 2.0, 3.0]}}}
+        ds = derivation.derive(sir_topography, config=config)
+        assert ds["new_param"].dims == ("nhru",)
+
+
 class TestFullDerivation:
     """Integration tests with all foundation SIR data."""
 

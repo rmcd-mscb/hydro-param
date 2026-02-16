@@ -33,12 +33,18 @@ class PwsDomainConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_extraction(self) -> PwsDomainConfig:
-        if self.extraction_method == "bbox" and self.bbox is None:
-            raise ValueError("bbox extraction requires 'bbox' field")
+        if self.extraction_method == "bbox":
+            if self.bbox is None:
+                raise ValueError("bbox extraction requires 'bbox' field")
+            if len(self.bbox) != 4:
+                raise ValueError("bbox must contain 4 coordinates [minx, miny, maxx, maxy]")
         if self.extraction_method == "huc" and self.huc_id is None:
             raise ValueError("huc extraction requires 'huc_id' field")
-        if self.extraction_method == "pour_point" and self.pour_point is None:
-            raise ValueError("pour_point extraction requires 'pour_point' field")
+        if self.extraction_method == "pour_point":
+            if self.pour_point is None:
+                raise ValueError("pour_point extraction requires 'pour_point' field")
+            if len(self.pour_point) != 2:
+                raise ValueError("pour_point must contain 2 coordinates [x, y]")
         if self.source == "custom" and self.fabric_path is None:
             raise ValueError("custom domain source requires 'fabric_path'")
         return self

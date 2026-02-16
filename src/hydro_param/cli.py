@@ -393,11 +393,11 @@ def init_cmd(
 
 @pws_app.command(name="run")
 def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
-    """Generate a complete pywatershed model setup from config.
+    """Validate and summarise a pywatershed run configuration.
 
-    Loads a pywatershed run configuration, executes the derivation
-    pipeline, and writes pywatershed-compatible output files (parameter
-    NetCDF, CBH, soltab, control).
+    Loads a pywatershed run configuration YAML, validates all fields,
+    and prints a summary.  Full pipeline orchestration (SIR generation,
+    derivation, and output writing) will be added in a future release.
 
     Parameters
     ----------
@@ -420,21 +420,14 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         logger.error("Failed to load pywatershed config: %s", exc)
         raise SystemExit(1) from exc
 
-    logger.info("pywatershed model setup: %s", config)
+    logger.info("pywatershed config validated: %s", config)
     logger.info("  Domain: %s %s", pws_config.domain.extraction_method, pws_config.domain.bbox)
     logger.info("  Time: %s to %s", pws_config.time.start, pws_config.time.end)
     logger.info("  Climate: %s", pws_config.climate.source)
     logger.info("  Output: %s", pws_config.output.path)
-
-    # TODO: Wire into full orchestration (SIR → derivation → format → write).
-    # For now, the pywatershed config is loaded, validated, and summarised.
-    # The full pipeline integration requires the generic SIR pipeline to run
-    # first, then pass results through PywatershedDerivation and
-    # PywatershedFormatter.  This orchestration will be added when the
-    # temporal processing pathway (Phase 2) is ready.
     logger.info(
-        "Config validated. Full pywatershed pipeline orchestration is "
-        "in progress (see docs/reference/pywatershed_parameterization_guide.md)."
+        "Full pipeline orchestration (SIR → derivation → format) "
+        "will be available in a future release."
     )
 
 
@@ -468,6 +461,14 @@ def pws_validate_cmd(
         raise SystemExit(1) from exc
 
     formatter = PywatershedFormatter(metadata_path=metadata) if metadata else PywatershedFormatter()
+
+    if not formatter.has_metadata():
+        print(
+            "Warning: parameter metadata not found at "
+            f"'{formatter.metadata_path}'. Validation will be incomplete.",
+            file=sys.stderr,
+        )
+
     warnings = formatter.validate(ds)
     ds.close()
 

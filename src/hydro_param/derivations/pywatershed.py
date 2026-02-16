@@ -92,8 +92,8 @@ class PywatershedDerivation:
             Standardized Internal Representation with physical properties
             (e.g., ``elevation``, ``slope``, ``aspect``, ``land_cover``).
         config
-            Optional derivation configuration.  Supports keys:
-            ``generate_seeds`` (bool), ``parameter_overrides`` (dict).
+            Optional derivation configuration.  Supports key:
+            ``parameter_overrides`` (dict).
 
         Returns
         -------
@@ -103,6 +103,10 @@ class PywatershedDerivation:
         config = config or {}
         nhru = sir.sizes.get("hru_id", 0)
         ds = xr.Dataset()
+
+        # Carry HRU coordinates so derived params retain stable indexing
+        if "hru_id" in sir.coords:
+            ds = ds.assign_coords(nhru=sir["hru_id"].values)
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(sir, ds)
@@ -194,10 +198,18 @@ class PywatershedDerivation:
         per HRU), and optionally ``tree_canopy`` (percent, 0-100) and
         ``impervious`` (percent, 0-100).
         """
-        if "land_cover" in sir:
+        # Accept both "land_cover" and "land_cover_majority" (pipeline
+        # appends a statistic suffix for non-mean aggregations)
+        lc_var = None
+        for candidate in ("land_cover", "land_cover_majority"):
+            if candidate in sir:
+                lc_var = candidate
+                break
+
+        if lc_var is not None:
             nlcd_table = self._load_lookup_table("nlcd_to_prms_cov_type")
             mapping = nlcd_table["mapping"]
-            nlcd_values = sir["land_cover"].values.astype(int)
+            nlcd_values = sir[lc_var].values.astype(int)
             cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values])
             ds["cov_type"] = xr.DataArray(
                 cov_type,
@@ -321,8 +333,10 @@ class PywatershedDerivation:
                 ds[param_name].values = arr
                 logger.info("Override: %s = %s", param_name, value)
             else:
+                dims = ("nhru",) if arr.ndim == 1 else ()
                 ds[param_name] = xr.DataArray(
                     arr,
+                    dims=dims if dims else None,
                     attrs={"long_name": f"{param_name} (user override)"},
                 )
                 logger.info("Override (new): %s = %s", param_name, value)

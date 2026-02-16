@@ -208,6 +208,13 @@ class TestWriteControl:
         assert data["end_time"] == "2020-09-30"
         assert data["time_step"] == "24:00:00"
 
+    def test_raises_on_missing_start_end(
+        self, formatter: PywatershedFormatter, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "control.yml"
+        with pytest.raises(ValueError, match="'start' and 'end'"):
+            formatter.write_control({}, out)
+
 
 class TestWrite:
     """Tests for the top-level write() method."""

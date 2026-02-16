@@ -67,6 +67,14 @@ class TestPwsDomainConfig:
         cfg = PwsDomainConfig(extraction_method="pour_point", pour_point=[-73.95, 42.45])
         assert cfg.pour_point == [-73.95, 42.45]
 
+    def test_bbox_wrong_length(self) -> None:
+        with pytest.raises(ValidationError, match="4 coordinates"):
+            PwsDomainConfig(extraction_method="bbox", bbox=[-76.5, 38.5])
+
+    def test_pour_point_wrong_length(self) -> None:
+        with pytest.raises(ValidationError, match="2 coordinates"):
+            PwsDomainConfig(extraction_method="pour_point", pour_point=[-73.95, 42.45, 100.0])
+
     def test_custom_requires_fabric_path(self) -> None:
         with pytest.raises(ValidationError, match="custom domain source requires"):
             PwsDomainConfig(source="custom", extraction_method="bbox", bbox=[0, 0, 1, 1])
