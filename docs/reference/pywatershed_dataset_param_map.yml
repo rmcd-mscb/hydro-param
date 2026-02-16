@@ -123,15 +123,18 @@ curated_datasets:
         - dayl    # seconds (day length, useful for PET)
         - vp      # Pa (vapor pressure)
       derives_parameters:
-        - prcp_cbh    # area-weighted daily precip per HRU (convert mm→inches)
-        - tmax_cbh    # area-weighted daily tmax per HRU (convert C→F if needed)
-        - tmin_cbh    # area-weighted daily tmin per HRU
+        - prcp        # area-weighted daily precip per HRU (convert mm→inches)
+        - tmax        # area-weighted daily tmax per HRU (convert C→F if needed)
+        - tmin        # area-weighted daily tmin per HRU
         - transp_beg  # from growing-season analysis of tmin normals
         - transp_end  # from killing-frost analysis
       notes: >
-        This is the primary CBH (Climate-By-HRU) data source used in most
-        NHM applications. The area-weighted averaging over HRU polygons is
-        done by gdptools (or pydaymet, or the old GDP web service).
+        Primary climate forcing source for NHM applications.  pywatershed
+        expects one-variable-per-NetCDF-file (prcp.nc, tmax.nc, tmin.nc)
+        with PRMS units (inches/day, °F).  PRMSAtmosphere accepts file
+        paths, numpy arrays, or Adapter objects for forcing inputs.
+        Area-weighted averaging over HRU polygons is done by gdptools (or
+        pydaymet, or the old GDP web service).
         Unit conversions needed: mm→inches, C→F (PRMS internal units).
 
     gridmet:
@@ -876,12 +879,15 @@ derivation_pipeline:
       method: "Spatial overlay of waterbody polygons with HRU polygons"
 
     - step: 7
-      name: "climate_cbh_generation"
-      description: "Generate Climate-By-HRU forcing time series"
+      name: "forcing_generation"
+      description: "Generate area-weighted forcing time series (one NetCDF per variable)"
       requires_datasets: [daymet_v4]  # or gridmet, conus404_ba
-      produces: [prcp_cbh, tmax_cbh, tmin_cbh]
+      produces: [prcp, tmax, tmin]  # written as prcp.nc, tmax.nc, tmin.nc
       method: "Area-weighted spatial average via gdptools or exactextract"
-      notes: "This is the most compute-intensive step for large domains."
+      notes: >
+        This is the most compute-intensive step for large domains.
+        Output is one-variable-per-NetCDF-file with PRMS units (inches, °F).
+        pywatershed PRMSAtmosphere accepts file paths directly.
 
     - step: 8
       name: "lookup_table_application"
@@ -951,8 +957,11 @@ derivation_pipeline:
 
     - step: 15
       name: "output_formatting"
-      description: "Write parameters in target model format"
+      description: "Write parameters and forcing in target model format"
       method: >
-        Plugin-based output formatter. For pywatershed: write to NetCDF
-        DatasetDict or PRMS parameter file format. This is where the
-        hydro-param output plugin system applies.
+        Plugin-based output formatter. For pywatershed: write parameter
+        NetCDF (loadable by pws.Parameters.from_netcdf()), forcing NetCDF
+        (one variable per file: prcp.nc, tmax.nc, tmin.nc), soltab NetCDF,
+        and control YAML.  Legacy PRMS text format is an optional
+        secondary output.  This is where the hydro-param output plugin
+        system applies.

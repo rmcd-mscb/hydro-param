@@ -104,7 +104,7 @@ class PwsOutputConfig(BaseModel):
     path: Path = Path("./output")
     format: Literal["netcdf", "prms_text"] = "netcdf"
     parameter_file: str = "parameters.nc"
-    cbh_dir: str = "cbh"
+    forcing_dir: str = "forcing"
     control_file: str = "control.yml"
     soltab_file: str = "soltab.nc"
 

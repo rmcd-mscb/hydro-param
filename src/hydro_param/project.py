@@ -214,7 +214,8 @@ time:
   timestep: daily
 
 # --- Climate Forcing ---
-# Source for Climate-By-HRU (CBH) time series.
+# Source for area-weighted forcing time series.
+# Output is one-variable-per-NetCDF-file (prcp.nc, tmax.nc, tmin.nc).
 climate:
   source: daymet_v4                     # daymet_v4, gridmet, or conus404_ba
   method: area_weighted_mean
@@ -255,7 +256,7 @@ output:
   path: "models/pywatershed"
   format: netcdf                        # netcdf or prms_text
   parameter_file: "parameters.nc"
-  cbh_dir: "cbh"
+  forcing_dir: "forcing"                  # one-variable-per-file NetCDF (prcp.nc, tmax.nc, tmin.nc)
   control_file: "control.yml"
   soltab_file: "soltab.nc"
 """

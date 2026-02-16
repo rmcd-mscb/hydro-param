@@ -6,7 +6,7 @@ derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
 Foundation implementation covers steps 1, 3, 4, 8, and 13.
 Future PRs will add steps 2 (topology), 5 (soils), 6 (waterbody
-overlay), 7 (CBH generation), 9 (soltab), 10 (PET), 11 (transp),
+overlay), 7 (forcing generation), 9 (soltab), 10 (PET), 11 (transp),
 12 (routing), and 14 (calibration seeds).
 """
 
@@ -349,7 +349,7 @@ class PywatershedDerivation:
     # TODO: Step 2 — topology extraction (tosegment, hru_segment)
     # TODO: Step 5 — soils (soil_type, soil_moist_max, soil_rechr_max_frac)
     # TODO: Step 6 — waterbody overlay (dprst_frac, dprst_area_max, hru_type)
-    # TODO: Step 7 — CBH generation (prcp, tmax, tmin time series)
+    # TODO: Step 7 — forcing generation (prcp, tmax, tmin time series)
     # TODO: Step 9 — soltab computation (Swift 1976 algorithm)
     # TODO: Step 10 — PET coefficients (jh_coef, jh_coef_hru)
     # TODO: Step 11 — climate-derived params (transp_beg, transp_end)
