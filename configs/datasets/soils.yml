@@ -61,6 +61,8 @@ datasets:
         - year: 0
           variable: bd_mean_0_5
           url: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bd_mean_0_5.vrt"
+    # All 13 POLARIS soil properties listed below. download.files contains
+    # only the subset needed for NHM-PRMS; see download.notes for URL pattern.
     variables:
       - name: sand
         band: 1
@@ -133,7 +135,6 @@ datasets:
     strategy: stac_cog
     catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
     collection: "gnatsgo-rasters"
-    asset_key: "mukey"
     gsd: 30
     crs: "EPSG:5070"
     x_coord: "x"
