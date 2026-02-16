@@ -268,7 +268,7 @@ def _load_registry_dir(directory: Path) -> DatasetRegistry:
     ValueError
         If a dataset name appears in more than one file.
     """
-    yaml_files = sorted(directory.glob("*.yml")) + sorted(directory.glob("*.yaml"))
+    yaml_files = sorted(list(directory.glob("*.yml")) + list(directory.glob("*.yaml")))
     if not yaml_files:
         raise FileNotFoundError(
             f"No YAML files (*.yml, *.yaml) found in registry directory: {directory}"
