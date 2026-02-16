@@ -527,9 +527,12 @@ def test_load_real_registry():
         pytest.skip("configs/datasets/ not found")
     registry = load_registry(registry_path)
     assert "dem_3dep_10m" in registry.datasets
-    assert "polaris_100m" in registry.datasets
+    assert "polaris_30m" in registry.datasets
+    assert "gnatsgo_rasters" in registry.datasets
     assert "nlcd_legacy" in registry.datasets
     assert "nlcd_annual" in registry.datasets
+    assert "gridmet" in registry.datasets
+    assert "snodas" in registry.datasets
 
 
 def test_real_registry_nlcd_legacy_has_download():
@@ -569,3 +572,147 @@ def test_real_registry_nlcd_annual_has_template():
     assert len(files) == 1
     assert "2020" in files[0].url
     assert "LndCov" in files[0].url
+
+
+def test_real_registry_gridmet():
+    """Verify gridMET entry in real registry uses climr_cat strategy."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+    gridmet = registry.get("gridmet")
+    assert gridmet.strategy == "climr_cat"
+    assert gridmet.catalog_id == "gridmet"
+    assert gridmet.temporal is True
+    assert gridmet.t_coord == "day"
+    var_names = [v.name for v in gridmet.variables]
+    assert "pr" in var_names
+    assert "tmmx" in var_names
+    assert "tmmn" in var_names
+
+
+def test_real_registry_snodas():
+    """Verify SNODAS entry in real registry uses nhgf_stac strategy."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+    snodas = registry.get("snodas")
+    assert snodas.strategy == "nhgf_stac"
+    assert snodas.collection == "snodas"
+    assert snodas.temporal is True
+    assert snodas.t_coord == "time"
+    var_names = [v.name for v in snodas.variables]
+    assert "SWE" in var_names
+    assert "SDP" in var_names
+
+
+def test_real_registry_gnatsgo():
+    """Verify gNATSGO entry with per-variable asset keys."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+    gnatsgo = registry.get("gnatsgo_rasters")
+    assert gnatsgo.strategy == "stac_cog"
+    assert gnatsgo.collection == "gnatsgo-rasters"
+    # Verify per-variable asset_key
+    aws_var = registry.resolve_variable("gnatsgo_rasters", "aws0_100")
+    assert isinstance(aws_var, VariableSpec)
+    assert aws_var.asset_key == "aws0_100"
+
+
+def test_real_registry_polaris_30m():
+    """Verify fixed POLARIS entry has correct metadata."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+    polaris = registry.get("polaris_30m")
+    assert polaris.strategy == "local_tiff"
+    assert polaris.crs == "EPSG:4326"
+    assert polaris.download is not None
+    assert len(polaris.download.files) > 0
+    var_names = [v.name for v in polaris.variables]
+    assert "sand" in var_names
+    assert "clay" in var_names
+    assert "ksat" in var_names
+    assert "theta_s" in var_names
+
+
+# ---------------------------------------------------------------------------
+# climr_cat and nhgf_stac strategy validation
+# ---------------------------------------------------------------------------
+
+
+def test_climr_cat_valid():
+    """climr_cat strategy with required fields validates."""
+    entry = DatasetEntry(
+        strategy="climr_cat",
+        catalog_id="gridmet",
+        temporal=True,
+        t_coord="day",
+    )
+    assert entry.strategy == "climr_cat"
+    assert entry.catalog_id == "gridmet"
+
+
+def test_climr_cat_requires_catalog_id():
+    """climr_cat without catalog_id is rejected."""
+    with pytest.raises(ValidationError, match="catalog_id"):
+        DatasetEntry(
+            strategy="climr_cat",
+            temporal=True,
+            t_coord="day",
+        )
+
+
+def test_climr_cat_requires_temporal():
+    """climr_cat with temporal=false is rejected."""
+    with pytest.raises(ValidationError, match="temporal"):
+        DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=False,
+        )
+
+
+def test_nhgf_stac_valid():
+    """nhgf_stac strategy with required fields validates."""
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    assert entry.strategy == "nhgf_stac"
+    assert entry.collection == "snodas"
+
+
+def test_nhgf_stac_requires_collection():
+    """nhgf_stac without collection is rejected."""
+    with pytest.raises(ValidationError, match="collection"):
+        DatasetEntry(
+            strategy="nhgf_stac",
+            temporal=True,
+            t_coord="time",
+        )
+
+
+def test_nhgf_stac_requires_temporal():
+    """nhgf_stac with temporal=false is rejected."""
+    with pytest.raises(ValidationError, match="temporal"):
+        DatasetEntry(
+            strategy="nhgf_stac",
+            collection="snodas",
+            temporal=False,
+        )
+
+
+def test_variable_spec_asset_key():
+    """VariableSpec accepts optional asset_key override."""
+    var = VariableSpec(name="aws0_100", band=1, asset_key="aws0_100")
+    assert var.asset_key == "aws0_100"
+
+    var_default = VariableSpec(name="elevation", band=1)
+    assert var_default.asset_key is None

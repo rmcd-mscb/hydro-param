@@ -51,7 +51,7 @@ def _access_status(entry: DatasetEntry) -> str:
         ):
             return "download required"
         return "not configured"
-    if entry.strategy in ("stac_cog", "native_zarr", "climr_cat"):
+    if entry.strategy in ("stac_cog", "native_zarr", "climr_cat", "nhgf_stac"):
         return "remote"
     if entry.strategy == "converted_zarr":
         return "not yet available"

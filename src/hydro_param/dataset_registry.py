@@ -22,6 +22,7 @@ class VariableSpec(BaseModel):
     units: str = ""
     long_name: str = ""
     categorical: bool = False
+    asset_key: str | None = None  # per-variable STAC asset override (e.g. gNATSGO)
 
 
 class DerivedVariableSpec(BaseModel):
@@ -117,7 +118,9 @@ class DatasetEntry(BaseModel):
     """A single dataset in the registry."""
 
     description: str = ""
-    strategy: Literal["stac_cog", "native_zarr", "converted_zarr", "local_tiff"]
+    strategy: Literal[
+        "stac_cog", "native_zarr", "converted_zarr", "local_tiff", "climr_cat", "nhgf_stac"
+    ]
     # STAC COG fields
     catalog_url: str | None = None
     collection: str | None = None
@@ -128,6 +131,8 @@ class DatasetEntry(BaseModel):
     source: str | None = None
     # Download provenance (local_tiff datasets that require user download)
     download: DownloadInfo | None = None
+    # ClimateR-Catalog identifier (climr_cat strategy)
+    catalog_id: str | None = None
     # Common fields
     crs: str = "EPSG:4326"
     x_coord: str = "x"
@@ -143,6 +148,16 @@ class DatasetEntry(BaseModel):
         if self.strategy == "stac_cog":
             if not self.catalog_url or not self.collection:
                 raise ValueError("stac_cog strategy requires 'catalog_url' and 'collection'")
+        if self.strategy == "climr_cat":
+            if not self.catalog_id:
+                raise ValueError("climr_cat strategy requires 'catalog_id'")
+            if not self.temporal:
+                raise ValueError("climr_cat strategy requires 'temporal: true'")
+        if self.strategy == "nhgf_stac":
+            if not self.collection:
+                raise ValueError("nhgf_stac strategy requires 'collection'")
+            if not self.temporal:
+                raise ValueError("nhgf_stac strategy requires 'temporal: true'")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
         return self

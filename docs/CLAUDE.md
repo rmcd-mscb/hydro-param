@@ -164,3 +164,44 @@ If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lo
 
 - Temporal processing: gridMET via ClimRCatData → WeightGen → AggGen — §11.11
 - Weight caching (critical for AggGen reuse across variables)
+
+## Data Catalogs
+
+- **USGS GDP STAC:** `https://api.water.usgs.gov/gdp/pygeoapi/stac` — USGS Water Mission Area
+  STAC catalog. Hosts gridMET, SNODAS, CONUS404-BA, NLCD Annual, PRISM, and more.
+  Accessed via gdptools `NHGFStacData` class.
+- **NHGF STAC:** `https://code.usgs.gov/wma/nhgf/stac/-/raw/main/catalog/catalog.json`
+- **Planetary Computer:** `https://planetarycomputer.microsoft.com/api/stac/v1` — 3DEP, gNATSGO
+- **ClimateR-Catalog:** `https://github.com/mikejohnson51/climateR-catalogs` — gridMET, Daymet,
+  1700+ datasets. Accessed via gdptools `ClimRCatData` class.
+
+Note: The gridMET copy on the USGS GDP STAC is not kept up to date. Use `climr_cat`
+strategy (ClimRCatData via OPeNDAP) for gridMET, not `nhgf_stac`.
+
+## pywatershed Parameterization Reference
+
+hydro-param's primary target model is pywatershed (USGS NHM-PRMS in Python).
+Complete documentation of the dataset→parameter mapping is in:
+
+- `docs/reference/pywatershed_dataset_param_map.yml` — Authoritative reference
+  for all ~100+ PRMS parameters, their source datasets, derivation methods,
+  lookup tables, default values, calibration seeds, and a 15-step derivation
+  pipeline DAG.
+
+- `docs/reference/pywatershed_parameterization_guide.md` — Implementation guide
+  covering data.yml catalog design, pywatershed config file structure, output
+  plugin API, unit conversions, and process class I/O signatures.
+
+When working on dataset catalogs, parameter derivation, or the pywatershed
+output plugin, read these files first with:
+  cat docs/reference/pywatershed_dataset_param_map.yml
+  cat docs/reference/pywatershed_parameterization_guide.md
+
+Key facts:
+- pywatershed needs 3 CBH time series (prcp, tmax, tmin) + ~100 static params
+- 7 core source datasets: 3DEP DEM, NLCD, STATSGO2, Daymet, GF, NHDPlus, soltab
+- Parameters fall into: GIS zonal stats, reclassify, lookup tables, formulas,
+  climate-derived, defaults, and calibration seeds
+- PRMS internal units: feet, inches, °F, acres
+- The derivation pipeline has a clear DAG (15 ordered steps)
+- HyRiver packages (pynhd, pygeohydro, pydaymet) are the primary data accessors
