@@ -59,7 +59,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/rmcd-mscb/hydro-param"
-Documentation = "https://github.com/rmcd-mscb/hydro-param/blob/main/docs/design.md"
+Documentation = "https://rmcd-mscb.github.io/hydro-param/"
 Repository = "https://github.com/rmcd-mscb/hydro-param"
 Issues = "https://github.com/rmcd-mscb/hydro-param/issues"
 
@@ -153,6 +153,17 @@ typecheck = "mypy src/"
 pre-commit = "pre-commit run --all-files"
 check = { depends-on = ["lint", "format-check", "typecheck", "test"] }
 
+[tool.pixi.feature.docs.dependencies]
+ruff = "*"
+
+[tool.pixi.feature.docs.pypi-dependencies]
+mkdocs-material = ">=9.5"
+mkdocstrings = { version = ">=0.27", extras = ["python"] }
+
+[tool.pixi.feature.docs.tasks]
+docs-serve = "mkdocs serve"
+docs-build = "mkdocs build --strict"
+
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
 
@@ -169,3 +180,4 @@ test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
 test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
 full = { features = ["dev", "gdp", "regrid", "parallel", "stac", "py311"], solve-group = "py311" }
 download = { features = ["download", "py311"], solve-group = "py311" }
+docs = { features = ["docs", "py311"], solve-group = "py311" }
