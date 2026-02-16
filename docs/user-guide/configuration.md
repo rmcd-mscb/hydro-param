@@ -29,8 +29,8 @@ datasets:
     variables: [elevation, slope, aspect]
     statistics: [mean]
   - name: nlcd_annual
-    source: "data/land_cover/nlcd_annual_2021_land_cover.tif"
-    variables: [land_cover]
+    source: "data/land_cover/Annual_NLCD_LndCov_2021_CU_C1V0.tif"
+    variables: [LndCov]
     statistics: [majority]
 
 output:

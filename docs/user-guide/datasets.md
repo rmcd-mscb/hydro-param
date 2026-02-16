@@ -35,7 +35,7 @@ hydro-param datasets info nlcd_annual
 Some datasets require local files. Use the download command:
 
 ```bash
-hydro-param datasets download nlcd_annual --years 2021 --variables land_cover
+hydro-param datasets download nlcd_annual --years 2021 --variables LndCov
 ```
 
 When inside an initialized project, files are automatically routed to the

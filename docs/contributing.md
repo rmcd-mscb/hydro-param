@@ -11,7 +11,7 @@ on GitHub for detailed instructions.
 git clone https://github.com/rmcd-mscb/hydro-param.git
 cd hydro-param
 pixi install
-pixi run -e dev pre-commit install
+pixi run -e dev pre-commit
 pixi run -e dev check
 ```
 
