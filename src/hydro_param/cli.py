@@ -68,7 +68,7 @@ def datasets_list(*, registry: Path | None = None) -> None:
     Parameters
     ----------
     registry
-        Path to a custom registry YAML file.
+        Path to a custom registry YAML file or directory.
     """
     reg = _load_registry(registry)
 
@@ -100,7 +100,7 @@ def datasets_info(name: str, *, registry: Path | None = None) -> None:
     name
         Dataset name as it appears in the registry.
     registry
-        Path to a custom registry YAML file.
+        Path to a custom registry YAML file or directory.
     """
     reg = _load_registry(registry)
     try:
@@ -213,7 +213,7 @@ def datasets_download(
     variables
         Comma-separated list of variables/products to download (multi-file datasets).
     registry
-        Path to a custom registry YAML file.
+        Path to a custom registry YAML file or directory.
     """
     reg = _load_registry(registry)
     try:
@@ -324,7 +324,7 @@ def run_cmd(config: Path, *, registry: Path | None = None) -> None:
     config
         Path to the pipeline YAML config.
     registry
-        Path to a custom dataset registry YAML file.
+        Path to a custom dataset registry YAML file or directory.
     """
     logging.basicConfig(
         level=logging.INFO,

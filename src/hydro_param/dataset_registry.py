@@ -211,17 +211,88 @@ class DatasetRegistry(BaseModel):
 
 
 def load_registry(path: str | Path) -> DatasetRegistry:
-    """Load a dataset registry from a YAML file.
+    """Load a dataset registry from a YAML file or directory of YAML files.
 
     Parameters
     ----------
     path : str or Path
-        Path to the registry YAML file.
+        Path to a single registry YAML file, or a directory containing
+        per-category YAML files.  Each file must have a top-level
+        ``datasets:`` key mapping dataset names to entries.
 
     Returns
     -------
     DatasetRegistry
+
+    Raises
+    ------
+    FileNotFoundError
+        If the path does not exist or contains no datasets.
+    ValueError
+        If dataset names collide across files.
     """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Registry path does not exist: {path}")
+    if path.is_file():
+        return _load_registry_file(path)
+    if path.is_dir():
+        return _load_registry_dir(path)
+    raise FileNotFoundError(f"Registry path is neither a file nor directory: {path}")
+
+
+def _load_registry_file(path: Path) -> DatasetRegistry:
+    """Load a single registry YAML file."""
     with open(path) as f:
         raw = yaml.safe_load(f)
     return DatasetRegistry(**raw)
+
+
+def _load_registry_dir(directory: Path) -> DatasetRegistry:
+    """Load and merge all YAML files in a registry directory.
+
+    Parameters
+    ----------
+    directory : Path
+        Directory containing ``*.yml`` and/or ``*.yaml`` files, each with
+        a ``datasets:`` root key.
+
+    Returns
+    -------
+    DatasetRegistry
+
+    Raises
+    ------
+    FileNotFoundError
+        If the directory contains no YAML files or no datasets.
+    ValueError
+        If a dataset name appears in more than one file.
+    """
+    yaml_files = sorted(list(directory.glob("*.yml")) + list(directory.glob("*.yaml")))
+    if not yaml_files:
+        raise FileNotFoundError(
+            f"No YAML files (*.yml, *.yaml) found in registry directory: {directory}"
+        )
+
+    merged: dict[str, DatasetEntry] = {}
+    source_files: dict[str, str] = {}
+    for yaml_file in yaml_files:
+        with open(yaml_file) as f:
+            raw = yaml.safe_load(f)
+        if raw is None or "datasets" not in raw:
+            continue
+        partial = DatasetRegistry(**raw)
+        for name, entry in partial.datasets.items():
+            if name in merged:
+                raise ValueError(
+                    f"Duplicate dataset name '{name}': found in "
+                    f"'{yaml_file.name}' and '{source_files[name]}'. "
+                    f"Dataset names must be unique across all registry files."
+                )
+            merged[name] = entry
+            source_files[name] = yaml_file.name
+
+    if not merged:
+        raise FileNotFoundError(f"No datasets found in any YAML file in: {directory}")
+
+    return DatasetRegistry(datasets=merged)
