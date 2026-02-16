@@ -1,0 +1,34 @@
+# Dataset registry: topography datasets.
+# See design.md sections 6.6, 6.10, and 11.3.
+
+datasets:
+  dem_3dep_10m:
+    description: "USGS 3DEP Seamless DEM, 1/3 arc-second (~10m)"
+    strategy: stac_cog
+    catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+    collection: "3dep-seamless"
+    asset_key: "data"
+    gsd: 10
+    crs: "EPSG:4326"
+    x_coord: "x"
+    y_coord: "y"
+    sign: planetary_computer
+    category: topography
+    temporal: false
+    variables:
+      - name: elevation
+        band: 1
+        units: "m"
+        long_name: "Surface elevation above NAVD88"
+        categorical: false
+    derived_variables:
+      - name: slope
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain slope"
+      - name: aspect
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain aspect (clockwise from north)"

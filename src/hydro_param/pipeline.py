@@ -42,7 +42,7 @@ from hydro_param.processing import get_processor
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REGISTRY = Path("configs/datasets.yml")
+DEFAULT_REGISTRY = Path("configs/datasets")
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,8 @@ def run_pipeline(
     config_path : str or Path
         Path to the pipeline YAML config.
     registry_path : str or Path or None
-        Path to the dataset registry YAML. Defaults to ``configs/datasets.yml``.
+        Path to a dataset registry YAML file or directory. Defaults to
+        ``configs/datasets/``.
 
     Returns
     -------

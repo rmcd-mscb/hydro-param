@@ -1,0 +1,31 @@
+# Dataset registry: soils datasets.
+# See design.md sections 6.6, 6.10, and 11.3.
+
+# Not yet implemented in code; registry entry validates schema generality.
+datasets:
+  polaris_100m:
+    description: "POLARIS soil properties, 100m resolution"
+    strategy: converted_zarr
+    source: "s3://hytest/polaris/polaris_100m_mean.zarr"
+    crs: "EPSG:4326"
+    x_coord: "lon"
+    y_coord: "lat"
+    category: soils
+    temporal: false
+    variables:
+      - name: sand_pct
+        units: "%"
+        long_name: "Sand content"
+        categorical: false
+      - name: clay_pct
+        units: "%"
+        long_name: "Clay content"
+        categorical: false
+      - name: ksat
+        units: "cm/hr"
+        long_name: "Saturated hydraulic conductivity"
+        categorical: false
+      - name: theta_s
+        units: "m3/m3"
+        long_name: "Saturated water content"
+        categorical: false

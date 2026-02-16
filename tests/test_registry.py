@@ -521,10 +521,10 @@ def test_load_registry_file_still_works(registry_yaml: Path):
 
 
 def test_load_real_registry():
-    """Test loading the actual configs/datasets.yml file."""
-    registry_path = Path("configs/datasets.yml")
+    """Test loading the actual configs/datasets/ directory."""
+    registry_path = Path("configs/datasets")
     if not registry_path.exists():
-        pytest.skip("configs/datasets.yml not found")
+        pytest.skip("configs/datasets/ not found")
     registry = load_registry(registry_path)
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_100m" in registry.datasets
@@ -534,9 +534,9 @@ def test_load_real_registry():
 
 def test_real_registry_nlcd_legacy_has_download():
     """Verify NLCD legacy entry in real registry has multi-file download block."""
-    registry_path = Path("configs/datasets.yml")
+    registry_path = Path("configs/datasets")
     if not registry_path.exists():
-        pytest.skip("configs/datasets.yml not found")
+        pytest.skip("configs/datasets/ not found")
     registry = load_registry(registry_path)
     nlcd = registry.get("nlcd_legacy")
     assert nlcd.strategy == "local_tiff"
@@ -553,9 +553,9 @@ def test_real_registry_nlcd_legacy_has_download():
 
 def test_real_registry_nlcd_annual_has_template():
     """Verify NLCD annual entry in real registry has template download."""
-    registry_path = Path("configs/datasets.yml")
+    registry_path = Path("configs/datasets")
     if not registry_path.exists():
-        pytest.skip("configs/datasets.yml not found")
+        pytest.skip("configs/datasets/ not found")
     registry = load_registry(registry_path)
     nlcd = registry.get("nlcd_annual")
     assert nlcd.strategy == "local_tiff"

@@ -1901,7 +1901,7 @@ This is the "chunk by space, not by time" principle (§5.4). The serial batch lo
 
 ### 11.3 Dataset Registry: Multi-Type Support
 
-The dataset registry (`configs/datasets.yml`) maps human-readable dataset names to access strategies. The schema supports three dataset categories with different characteristics:
+The dataset registry (`configs/datasets/`) maps human-readable dataset names to access strategies. Each category has its own YAML file (e.g., `topography.yml`, `land_cover.yml`). The schema supports three dataset categories with different characteristics:
 
 | Category | Example | Strategy | Variable Type | Key Difference | Status |
 | --- | --- | --- | --- | --- | --- |
