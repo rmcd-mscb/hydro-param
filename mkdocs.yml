@@ -1,0 +1,108 @@
+site_name: hydro-param
+site_url: https://rmcd-mscb.github.io/hydro-param/
+site_description: Configuration-driven hydrologic parameterization for any model, any fabric.
+site_author: Rich McDonald
+repo_url: https://github.com/rmcd-mscb/hydro-param
+repo_name: rmcd-mscb/hydro-param
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            docstring_style: numpy
+            docstring_section_style: spacy
+            members_order: source
+            merge_init_into_class: true
+            show_signature_annotations: true
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+  - tables
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home:
+      - index.md
+  - Getting Started:
+      - getting-started/index.md
+      - getting-started/installation.md
+      - getting-started/project-init.md
+      - getting-started/quickstart.md
+  - User Guide:
+      - user-guide/index.md
+      - user-guide/cli.md
+      - user-guide/configuration.md
+      - user-guide/datasets.md
+  - API Reference:
+      - api/index.md
+      - api/config.md
+      - api/registry.md
+      - api/pipeline.md
+      - api/data-access.md
+      - api/processing.md
+      - api/batching.md
+      - api/project.md
+  - Architecture:
+      - design.md
+  - Contributing:
+      - contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/rmcd-mscb/hydro-param
+
+copyright: Copyright &copy; 2024-2026 Rich McDonald &mdash; MIT License
