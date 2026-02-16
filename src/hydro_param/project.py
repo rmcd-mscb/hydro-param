@@ -165,6 +165,102 @@ processing:
 """
 
 
+def generate_pywatershed_template(project_name: str) -> str:
+    """Generate a well-commented pywatershed run config template.
+
+    Parameters
+    ----------
+    project_name
+        Project name used in the output path.
+
+    Returns
+    -------
+    str
+        YAML content for ``configs/pywatershed_run.yml``.
+    """
+    return f"""\
+# pywatershed run configuration for {project_name}
+#
+# This file specifies everything needed for hydro-param to generate
+# a complete pywatershed model setup.  Edit the sections below, then run:
+#   hydro-param pywatershed run configs/pywatershed_run.yml
+#
+# Reference:
+#   docs/reference/pywatershed_parameterization_guide.md
+#   docs/reference/pywatershed_dataset_param_map.yml
+
+target_model: pywatershed
+version: "2.0"
+
+# --- Domain ---
+# Spatial extent for the model.
+# Methods: bbox, huc, pour_point, bandit.
+domain:
+  source: geospatial_fabric
+  gf_version: "1.1"
+  extraction_method: bbox
+  bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] EPSG:4326
+  # extraction_method: huc
+  # huc_id: "01013500"                 # upstream of gage
+  # extraction_method: pour_point
+  # pour_point: [-73.95, 42.45]
+  id_field: "nhm_id"
+  segment_id_field: "nhm_seg"
+
+# --- Simulation Period ---
+time:
+  start: "1980-10-01"
+  end: "2020-09-30"
+  timestep: daily
+
+# --- Climate Forcing ---
+# Source for Climate-By-HRU (CBH) time series.
+climate:
+  source: daymet_v4                     # daymet_v4, gridmet, or conus404_ba
+  method: area_weighted_mean
+  variables: [prcp, tmax, tmin]
+
+# --- Dataset Sources ---
+# Which datasets to use for each category.
+# Names reference the dataset registry (hydro-param datasets list).
+datasets:
+  topography: dem_3dep_10m
+  landcover: nlcd_legacy
+  soils: polaris_30m
+  # hydrography: null                  # NHDPlus (optional, for routing)
+
+# --- Processing ---
+processing:
+  zonal_method: exactextract            # exactextract or serial
+  batch_size: 500
+  n_workers: 1
+
+# --- Parameter Overrides ---
+# Manually override any derived parameter value.
+parameter_overrides:
+  values: {{}}
+  # values:
+  #   tmax_allsnow: 32.0
+  #   den_max: 0.55
+  # from_file: null                     # path to a NetCDF with override values
+
+# --- Calibration ---
+calibration:
+  generate_seeds: true
+  seed_method: physically_based         # physically_based or all_defaults
+  preserve_from_existing: []
+
+# --- Output ---
+output:
+  path: "models/pywatershed"
+  format: netcdf                        # netcdf or prms_text
+  parameter_file: "parameters.nc"
+  cbh_dir: "cbh"
+  control_file: "control.yml"
+  soltab_file: "soltab.nc"
+"""
+
+
 def generate_gitignore() -> str:
     """Generate ``.gitignore`` content for a hydro-param project."""
     return """\
@@ -248,6 +344,7 @@ def init_project(
         project_dir / "data" / "fabrics",
         project_dir / "output",
         project_dir / "models",
+        project_dir / "models" / "pywatershed",
     ]
     for cat in categories:
         dirs_to_create.append(project_dir / "data" / cat)
@@ -266,6 +363,11 @@ def init_project(
     if not config_path.exists():
         config_path.write_text(generate_pipeline_template(project_name))
 
+    # Template pywatershed config (never overwrite existing)
+    pws_config_path = project_dir / "configs" / "pywatershed_run.yml"
+    if not pws_config_path.exists():
+        pws_config_path.write_text(generate_pywatershed_template(project_name))
+
     # .gitignore (overwrite is safe — declarative)
     (project_dir / ".gitignore").write_text(generate_gitignore())
 
@@ -274,11 +376,13 @@ def init_project(
     print("Created:")
     print(f"  {MARKER_FILE:<28s} Project marker")
     print(f"  {'configs/pipeline.yml':<28s} Pipeline configuration template")
+    print(f"  {'configs/pywatershed_run.yml':<28s} pywatershed run config template")
     print(f"  {'data/fabrics/':<28s} Target polygon files")
     for cat in categories:
         print(f"  data/{cat + '/':<22s} Dataset downloads")
     print(f"  {'output/':<28s} Pipeline results")
     print(f"  {'models/':<28s} Model exports")
+    print(f"  {'models/pywatershed/':<28s} pywatershed model files")
     print(f"  {'.gitignore':<28s} Git ignore rules")
     print()
     print("Next steps:")

@@ -6,6 +6,7 @@ Commands:
     hydro-param datasets info <name>     — show dataset details
     hydro-param datasets download <name> — download dataset files
     hydro-param run <config>             — execute the pipeline
+    hydro-param pywatershed run <config> — generate pywatershed model setup
 
 See design.md §11.9 for the full CLI specification.
 """
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 app = App(name="hydro-param", help="Configuration-driven hydrologic parameterization.")
 datasets_app = app.command(App(name="datasets", help="Discover and download datasets."))
+pws_app = app.command(App(name="pywatershed", help="pywatershed model setup."))
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +384,101 @@ def init_cmd(
         Path to a custom registry for category discovery.
     """
     init_project(project_dir, force=force, registry_path=registry)
+
+
+# ---------------------------------------------------------------------------
+# pywatershed run
+# ---------------------------------------------------------------------------
+
+
+@pws_app.command(name="run")
+def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
+    """Validate and summarise a pywatershed run configuration.
+
+    Loads a pywatershed run configuration YAML, validates all fields,
+    and prints a summary.  Full pipeline orchestration (SIR generation,
+    derivation, and output writing) will be added in a future release.
+
+    Parameters
+    ----------
+    config
+        Path to a pywatershed run config YAML.
+    registry
+        Path to a custom dataset registry YAML file or directory.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    from hydro_param.pywatershed_config import load_pywatershed_config
+
+    try:
+        pws_config = load_pywatershed_config(config)
+    except Exception as exc:
+        logger.error("Failed to load pywatershed config: %s", exc)
+        raise SystemExit(1) from exc
+
+    logger.info("pywatershed config validated: %s", config)
+    logger.info("  Domain: %s %s", pws_config.domain.extraction_method, pws_config.domain.bbox)
+    logger.info("  Time: %s to %s", pws_config.time.start, pws_config.time.end)
+    logger.info("  Climate: %s", pws_config.climate.source)
+    logger.info("  Output: %s", pws_config.output.path)
+    logger.info(
+        "Full pipeline orchestration (SIR → derivation → format) "
+        "will be available in a future release."
+    )
+
+
+@pws_app.command(name="validate")
+def pws_validate_cmd(
+    param_file: Path,
+    *,
+    metadata: Path | None = None,
+) -> None:
+    """Validate a pywatershed parameter file.
+
+    Checks that required parameters are present and values fall
+    within valid ranges.
+
+    Parameters
+    ----------
+    param_file
+        Path to a pywatershed parameter NetCDF file.
+    metadata
+        Path to parameter metadata YAML. Defaults to
+        ``configs/pywatershed/parameter_metadata.yml``.
+    """
+    import xarray as xr
+
+    from hydro_param.formatters.pywatershed import PywatershedFormatter
+
+    try:
+        ds = xr.open_dataset(param_file)
+    except Exception as exc:
+        print(f"Error: Could not open '{param_file}': {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    formatter = PywatershedFormatter(metadata_path=metadata) if metadata else PywatershedFormatter()
+
+    if not formatter.has_metadata():
+        print(
+            "Warning: parameter metadata not found at "
+            f"'{formatter.metadata_path}'. Validation will be incomplete.",
+            file=sys.stderr,
+        )
+
+    warnings = formatter.validate(ds)
+    ds.close()
+
+    if warnings:
+        print(f"Validation found {len(warnings)} issue(s):")
+        for w in warnings:
+            print(f"  - {w}")
+        raise SystemExit(1)
+    else:
+        print("Validation passed: all checks OK.")
 
 
 # ---------------------------------------------------------------------------
