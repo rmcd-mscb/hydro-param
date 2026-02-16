@@ -2061,6 +2061,8 @@ my_project/
 
 The `--force` flag re-initialises an existing project (refreshes the marker and creates missing directories, but never overwrites an existing `configs/pipeline.yml`). The `.hydro-param` marker file enables `datasets download` to auto-detect the project root and route files to `data/{category}/` when `--dest` is omitted. This is a **convenience feature** — the pipeline config remains the single source of truth and works without `init`.
 
+**The project directory as a modeling artifact.** Beyond convenience, the initialised project directory serves as a self-documenting record of the entire parameterization workflow. The directory captures *what* fabric was used (`data/fabrics/`), *which* datasets were downloaded (`data/{category}/`), *how* the pipeline was configured (`configs/pipeline.yml`), and *what* results were produced (`output/`, `models/`). A collaborator — or the same researcher returning months later — can inspect the directory and understand the full provenance without reconstructing steps from shell history or notes. For reproducibility, the project directory (minus the large rasters excluded by `.gitignore`) can be shared or archived: recipients re-download the source data via `datasets download` and rerun the pipeline to reproduce identical results. This aligns with USGS data release and reproducibility requirements, where documenting the chain from source data to derived parameters is essential.
+
 **`datasets list`** reads the registry and displays datasets grouped by the eight canonical categories (§1.3). For each dataset, it shows the name, description, strategy, and a flag indicating whether download is required:
 
 ```
@@ -2213,7 +2215,7 @@ processing:
 hydro-param run configs/pipeline.yml
 ```
 
-**Key design principle:** The YAML files themselves are the documentation for MVP. Well-commented registry entries and a template pipeline config teach the user the workflow. CLI tooling provides discoverability. The `init` command reduces the "blank page" problem for new users. Formal quickstart guides and tutorials come in Phase 2.
+**Key design principle:** The initialised project directory is both a workspace and a reproducible artifact. The configs, data layout, and outputs together document the complete parameterization provenance — from source datasets to model-ready parameters. Well-commented registry entries and the template pipeline config teach the user the workflow. CLI tooling provides discoverability (`datasets list/info`) and automated organisation (`datasets download` auto-routing). Formal quickstart guides and tutorials come in Phase 2.
 
 ### 11.11 Processing Pathway Bifurcation: Static vs Temporal
 
