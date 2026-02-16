@@ -507,6 +507,144 @@ def test_datasets_download_no_sign_request_for_public(
 
 
 # ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+
+def test_init_creates_project(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    project = tmp_path / "test_project"
+    _run("init", str(project))
+    assert (project / ".hydro-param").is_file()
+    assert (project / "configs" / "pipeline.yml").is_file()
+    assert (project / "data" / "fabrics").is_dir()
+    assert (project / "data" / "topography").is_dir()
+    assert (project / "output").is_dir()
+    assert (project / "models").is_dir()
+    out = capsys.readouterr().out
+    assert "Initialized" in out
+
+
+def test_init_refuses_existing(tmp_path: Path):
+    project = tmp_path / "existing"
+    _run("init", str(project))
+    with pytest.raises(SystemExit):
+        _run("init", str(project))
+
+
+def test_init_force_reinitialises(tmp_path: Path):
+    project = tmp_path / "existing"
+    _run("init", str(project))
+    _run("init", str(project), "--force")
+    assert (project / ".hydro-param").is_file()
+
+
+def test_init_default_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    _run("init")
+    assert (tmp_path / ".hydro-param").is_file()
+
+
+def test_init_template_config_is_valid(tmp_path: Path):
+    project = tmp_path / "valid_config"
+    _run("init", str(project))
+    content = (project / "configs" / "pipeline.yml").read_text()
+    parsed = yaml.safe_load(content)
+    assert parsed["target_fabric"]["path"] == "data/fabrics/catchments.gpkg"
+
+
+# ---------------------------------------------------------------------------
+# datasets download — auto-routing
+# ---------------------------------------------------------------------------
+
+
+@patch("hydro_param.cli.find_project_root")
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_download_auto_routes_in_project(
+    mock_which,
+    mock_run,
+    mock_find_root,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """When inside a project and no --dest, routes to data/<category>/."""
+    mock_run.return_value.returncode = 0
+    project = tmp_path / "my_project"
+    project.mkdir()
+    mock_find_root.return_value = project
+
+    _run(
+        "datasets",
+        "download",
+        "nlcd_single",
+        "--registry",
+        str(registry_yaml),
+    )
+
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    dest_arg = cmd[-1]
+    assert str(project / "data" / "land_cover") in dest_arg
+
+
+@patch("hydro_param.cli.find_project_root")
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_download_explicit_dest_overrides_project(
+    mock_which,
+    mock_run,
+    mock_find_root,
+    registry_yaml: Path,
+    tmp_path: Path,
+):
+    """When --dest is given, use it even inside a project."""
+    mock_run.return_value.returncode = 0
+    mock_find_root.return_value = tmp_path  # project detected
+    custom_dest = tmp_path / "custom"
+
+    _run(
+        "datasets",
+        "download",
+        "nlcd_single",
+        "--dest",
+        str(custom_dest),
+        "--registry",
+        str(registry_yaml),
+    )
+
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    dest_arg = cmd[-1]
+    assert str(custom_dest) in dest_arg
+
+
+@patch("hydro_param.cli.find_project_root", return_value=None)
+@patch("hydro_param.cli.subprocess.run")
+@patch("shutil.which", return_value="/usr/bin/aws")
+def test_download_no_project_falls_back_to_cwd(
+    mock_which,
+    mock_run,
+    mock_find_root,
+    registry_yaml: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When not inside a project and no --dest, downloads to cwd."""
+    mock_run.return_value.returncode = 0
+    monkeypatch.chdir(tmp_path)
+
+    _run(
+        "datasets",
+        "download",
+        "nlcd_single",
+        "--registry",
+        str(registry_yaml),
+    )
+
+    mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
 
