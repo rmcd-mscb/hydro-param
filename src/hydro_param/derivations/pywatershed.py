@@ -4,9 +4,9 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 3, 4, 8, and 13.
-Future PRs will add steps 2 (topology), 5 (soils), 6 (waterbody
-overlay), 7 (forcing generation), 9 (soltab), 10 (PET), 11 (transp),
+Foundation implementation covers steps 1, 2, 3, 4, 8, and 13.
+Future PRs will add steps 5 (soils), 6 (waterbody overlay),
+7 (forcing generation), 9 (soltab), 10 (PET), 11 (transp),
 12 (routing), and 14 (calibration seeds).
 """
 
@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
+import pyproj
 import xarray as xr
 import yaml
 
@@ -63,8 +65,8 @@ class PywatershedDerivation:
     """Derive pywatershed/PRMS parameters from SIR physical properties.
 
     Implements the derivation pipeline from
-    ``docs/reference/pywatershed_dataset_param_map.yml``.  The foundation
-    covers pipeline steps 1 (geometry), 3 (topography), 4 (land cover),
+    ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
+    steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
     8 (lookup tables), and 13 (defaults).
 
     Parameters
@@ -83,6 +85,10 @@ class PywatershedDerivation:
         sir: xr.Dataset,
         *,
         config: dict | None = None,
+        fabric: gpd.GeoDataFrame | None = None,
+        segments: gpd.GeoDataFrame | None = None,
+        id_field: str = "nhm_id",
+        segment_id_field: str = "nhm_seg",
     ) -> xr.Dataset:
         """Derive all pywatershed parameters from the SIR.
 
@@ -94,6 +100,17 @@ class PywatershedDerivation:
         config
             Optional derivation configuration.  Supports key:
             ``parameter_overrides`` (dict).
+        fabric
+            HRU polygon GeoDataFrame with topology attributes.
+            Required for step 2 (topology extraction).
+        segments
+            Stream segment GeoDataFrame with line geometries.
+            Required for step 2 (topology extraction).
+        id_field
+            Column name for HRU identifiers in the fabric.
+        segment_id_field
+            Column name for segment identifiers in the segments
+            GeoDataFrame.
 
         Returns
         -------
@@ -110,6 +127,16 @@ class PywatershedDerivation:
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(sir, ds)
+
+        # Step 2: Topology (tosegment, hru_segment, seg_length)
+        if fabric is not None and segments is not None:
+            ds = self._derive_topology(
+                ds,
+                fabric=fabric,
+                segments=segments,
+                id_field=id_field,
+                segment_id_field=segment_id_field,
+            )
 
         # Step 3: Topographic parameters (hru_elev, hru_slope, hru_aspect)
         ds = self._derive_topography(sir, ds)
@@ -155,6 +182,179 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
             )
         return ds
+
+    # ------------------------------------------------------------------
+    # Step 2: Topology extraction
+    # ------------------------------------------------------------------
+
+    def _derive_topology(
+        self,
+        ds: xr.Dataset,
+        *,
+        fabric: gpd.GeoDataFrame,
+        segments: gpd.GeoDataFrame,
+        id_field: str,
+        segment_id_field: str,
+    ) -> xr.Dataset:
+        """Step 2: Extract routing topology from GeoDataFrames.
+
+        Extracts ``tosegment``, ``hru_segment``, and ``seg_length``
+        directly from GeoDataFrame columns.  The input fabric should
+        carry these as attributes (e.g., from the Geospatial Fabric).
+
+        Parameters
+        ----------
+        ds
+            Output dataset being constructed.
+        fabric
+            HRU polygon GeoDataFrame.  Required columns: ``hru_segment``
+            and the column named by ``id_field``.
+        segments
+            Stream segment line GeoDataFrame.  Required column:
+            ``tosegment``.  Optional: ``seg_length``.
+        id_field
+            Column name for HRU identifiers in the fabric.  Used to
+            align fabric rows to ``ds.coords['nhru']``.
+        segment_id_field
+            Column name for segment identifiers.
+
+        Raises
+        ------
+        ValueError
+            If required columns (``tosegment``, ``hru_segment``) are
+            missing from the GeoDataFrames.
+        """
+        nseg = len(segments)
+
+        # Add nsegment coordinate from segment IDs
+        if segment_id_field in segments.columns:
+            seg_ids = segments[segment_id_field].values
+        else:
+            seg_ids = np.arange(1, nseg + 1)
+        ds = ds.assign_coords(nsegment=seg_ids)
+
+        # --- tosegment ---
+        if "tosegment" not in segments.columns:
+            raise ValueError("segments GeoDataFrame missing required 'tosegment' column")
+        tosegment = segments["tosegment"].values.astype(np.int64)
+        self._validate_tosegment(tosegment, nseg)
+        ds["tosegment"] = xr.DataArray(
+            tosegment,
+            dims="nsegment",
+            attrs={
+                "units": "none",
+                "long_name": "Index of downstream segment (0=outlet)",
+            },
+        )
+
+        # --- hru_segment ---
+        if "hru_segment" not in fabric.columns:
+            raise ValueError("fabric GeoDataFrame missing required 'hru_segment' column")
+
+        # Align fabric rows to ds.coords['nhru'] via id_field
+        if "nhru" in ds.coords and id_field in fabric.columns:
+            hru_ids = ds.coords["nhru"].values
+            fabric_indexed = fabric.set_index(id_field)
+            if fabric_indexed.index.has_duplicates:
+                raise ValueError(f"Duplicate HRU IDs in fabric column '{id_field}'")
+            missing = np.setdiff1d(hru_ids, np.asarray(fabric_indexed.index))
+            if missing.size > 0:
+                raise ValueError(
+                    f"HRU IDs in dataset missing from fabric '{id_field}': {missing.tolist()}"
+                )
+            hru_segment = fabric_indexed.loc[hru_ids, "hru_segment"].values.astype(np.int64)
+        else:
+            hru_segment = fabric["hru_segment"].values.astype(np.int64)
+
+        self._validate_hru_segment(hru_segment, nseg)
+        ds["hru_segment"] = xr.DataArray(
+            hru_segment,
+            dims="nhru",
+            attrs={
+                "units": "none",
+                "long_name": "Index of segment to which HRU contributes flow",
+            },
+        )
+
+        # --- seg_length ---
+        seg_length = self._compute_seg_length(segments)
+        ds["seg_length"] = xr.DataArray(
+            seg_length,
+            dims="nsegment",
+            attrs={
+                "units": "meters",
+                "long_name": "Length of stream segment",
+            },
+        )
+
+        return ds
+
+    @staticmethod
+    def _compute_seg_length(segments: gpd.GeoDataFrame) -> np.ndarray:
+        """Compute segment length from column or geodesic calculation.
+
+        Uses ``seg_length`` column if present, otherwise computes
+        geodesic length from segment line geometries using
+        ``pyproj.Geod.geometry_length``.  Handles LineString,
+        MultiLineString, and projected CRS (auto-reprojects to WGS84).
+        """
+        if "seg_length" in segments.columns:
+            return segments["seg_length"].values.astype(np.float64)
+
+        # Reproject to geographic CRS if needed for geodesic calculation
+        if segments.crs is not None and not segments.crs.is_geographic:
+            segments_geo = segments.to_crs(epsg=4326)
+        else:
+            segments_geo = segments
+
+        geod = pyproj.Geod(ellps="WGS84")
+        lengths = np.empty(len(segments_geo), dtype=np.float64)
+        for i, geom in enumerate(segments_geo.geometry):
+            if geom is None or geom.is_empty:
+                lengths[i] = 0.0
+            else:
+                lengths[i] = geod.geometry_length(geom)
+        return lengths
+
+    @staticmethod
+    def _validate_tosegment(tosegment: np.ndarray, nseg: int) -> None:
+        """Validate tosegment array.
+
+        Raises
+        ------
+        ValueError
+            If self-loops exist, values out of range, or no outlets found.
+        """
+        indices = np.arange(1, nseg + 1)
+
+        # Check for self-loops
+        self_loops = np.where(tosegment == indices)[0]
+        if len(self_loops) > 0:
+            raise ValueError(
+                f"tosegment contains self-loops at 1-based indices: {indices[self_loops].tolist()}"
+            )
+
+        # Check value range: 0..nseg
+        if np.any(tosegment < 0) or np.any(tosegment > nseg):
+            bad = tosegment[(tosegment < 0) | (tosegment > nseg)]
+            raise ValueError(f"tosegment values out of range [0, {nseg}]: {bad.tolist()}")
+
+        # At least one outlet
+        if not np.any(tosegment == 0):
+            raise ValueError("No outlets found (tosegment == 0)")
+
+    @staticmethod
+    def _validate_hru_segment(hru_segment: np.ndarray, nseg: int) -> None:
+        """Validate hru_segment array.
+
+        Raises
+        ------
+        ValueError
+            If values are out of range [0, nseg].
+        """
+        if np.any(hru_segment < 0) or np.any(hru_segment > nseg):
+            bad = hru_segment[(hru_segment < 0) | (hru_segment > nseg)]
+            raise ValueError(f"hru_segment values out of range [0, {nseg}]: {bad.tolist()}")
 
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters
@@ -346,7 +546,6 @@ class PywatershedDerivation:
     # Future steps (stubs)
     # ------------------------------------------------------------------
 
-    # TODO: Step 2 — topology extraction (tosegment, hru_segment)
     # TODO: Step 5 — soils (soil_type, soil_moist_max, soil_rechr_max_frac)
     # TODO: Step 6 — waterbody overlay (dprst_frac, dprst_area_max, hru_type)
     # TODO: Step 7 — forcing generation (prcp, tmax, tmin time series)

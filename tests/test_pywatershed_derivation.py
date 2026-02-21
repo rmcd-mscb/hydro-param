@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
+from shapely.geometry import LineString, Polygon
 
 from hydro_param.derivations.pywatershed import PywatershedDerivation
 
@@ -306,3 +308,371 @@ class TestFullDerivation:
         assert "tmax_allsnow" in ds
         assert "den_init" in ds
         assert "gwstor_init" in ds
+
+
+# ------------------------------------------------------------------
+# Topology fixtures (synthetic 3-segment network)
+# ------------------------------------------------------------------
+
+# Network topology:
+#   seg1 → seg2 → seg3 → outlet
+#   hru1 → seg1, hru2 → seg2, hru3 → seg2
+
+
+@pytest.fixture()
+def synthetic_fabric() -> gpd.GeoDataFrame:
+    """3-HRU fabric with hru_segment attribute."""
+    return gpd.GeoDataFrame(
+        {
+            "nhm_id": [101, 102, 103],
+            "hru_segment": [1, 2, 2],
+        },
+        geometry=[
+            Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
+        ],
+        crs="EPSG:4326",
+    )
+
+
+@pytest.fixture()
+def synthetic_segments() -> gpd.GeoDataFrame:
+    """3-segment network with tosegment attribute."""
+    return gpd.GeoDataFrame(
+        {
+            "nhm_seg": [201, 202, 203],
+            "tosegment": [2, 3, 0],  # seg1→seg2, seg2→seg3, seg3→outlet
+        },
+        geometry=[
+            LineString([(0.5, 0.5), (1.0, 0.5)]),
+            LineString([(1.0, 0.5), (2.0, 0.5)]),
+            LineString([(2.0, 0.5), (3.0, 0.5)]),
+        ],
+        crs="EPSG:4326",
+    )
+
+
+@pytest.fixture()
+def sir_minimal() -> xr.Dataset:
+    """Minimal SIR for topology tests (3 HRUs, no physical data)."""
+    return xr.Dataset(coords={"hru_id": [101, 102, 103]})
+
+
+class TestDeriveTopology:
+    """Tests for step 2: topology extraction."""
+
+    def test_tosegment_extraction(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: xr.Dataset,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        assert "tosegment" in ds
+        np.testing.assert_array_equal(ds["tosegment"].values, [2, 3, 0])
+        assert ds["tosegment"].dims == ("nsegment",)
+
+    def test_hru_segment_extraction(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: xr.Dataset,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        assert "hru_segment" in ds
+        np.testing.assert_array_equal(ds["hru_segment"].values, [1, 2, 2])
+        assert ds["hru_segment"].dims == ("nhru",)
+
+    def test_seg_length_computed(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: xr.Dataset,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        assert "seg_length" in ds
+        assert ds["seg_length"].dims == ("nsegment",)
+        # All segments span ~0.5 to ~1.0 degrees longitude at ~0.5° lat
+        # Geodesic lengths should be positive and reasonable
+        assert np.all(ds["seg_length"].values > 0)
+        assert ds["seg_length"].attrs["units"] == "meters"
+
+    def test_nsegment_coordinate(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: xr.Dataset,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        assert "nsegment" in ds.coords
+        np.testing.assert_array_equal(ds.coords["nsegment"].values, [201, 202, 203])
+
+    def test_backward_compatible_without_topology(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """derive() without fabric/segments still works (no topology)."""
+        ds = derivation.derive(sir_topography)
+        assert "tosegment" not in ds
+        assert "hru_segment" not in ds
+        assert "seg_length" not in ds
+        # But topographic params still present
+        assert "hru_elev" in ds
+
+    def test_seg_length_longer_for_longer_segment(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Segments spanning more distance should have longer seg_length."""
+        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1, 2], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.5, 0.5), (0.6, 0.5)]),  # short
+                LineString([(0.6, 0.5), (2.0, 0.5)]),  # long
+            ],
+            crs="EPSG:4326",
+        )
+        ds = derivation.derive(sir, fabric=fabric, segments=segments)
+        assert ds["seg_length"].values[1] > ds["seg_length"].values[0]
+
+
+class TestTopologyValidation:
+    """Tests for topology validation rules."""
+
+    def test_self_loop_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [1]},  # self-loop!
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="self-loops"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+    def test_no_outlet_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1, 2], "tosegment": [2, 1]},  # cycle, no outlet
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="No outlets"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+    def test_hru_segment_out_of_range_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [5]},  # out of range
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="hru_segment values out of range"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+    def test_hru_segment_zero_is_valid(self, derivation: PywatershedDerivation) -> None:
+        """hru_segment=0 means HRU doesn't drain to any segment."""
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [0]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        ds = derivation.derive(sir, fabric=fabric, segments=segments)
+        assert ds["hru_segment"].values[0] == 0
+
+    def test_missing_tosegment_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1]},  # no tosegment column
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="missing required 'tosegment'"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+    def test_missing_hru_segment_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1]},  # no hru_segment column
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="missing required 'hru_segment'"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+
+# ------------------------------------------------------------------
+# Integration tests with real pywatershed GIS data
+# ------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_GIS_DATA_DIR = _PROJECT_ROOT / "data" / "pywatershed_gis"
+_DRB_DIR = _GIS_DATA_DIR / "drb_2yr"
+
+
+def _is_real_file(path: Path) -> bool:
+    """Check that a file exists and is not a Git LFS pointer."""
+    if not path.exists():
+        return False
+    # LFS pointers are small text files starting with "version https://git-lfs"
+    if path.stat().st_size < 200:
+        try:
+            text = path.read_text(encoding="utf-8", errors="strict")
+            if text.startswith("version https://git-lfs"):
+                return False
+        except (UnicodeDecodeError, ValueError):
+            pass  # Binary file = real data
+    return True
+
+
+_HAS_DRB_DATA = (
+    _is_real_file(_DRB_DIR / "nhru.gpkg")
+    and _is_real_file(_DRB_DIR / "nsegment.gpkg")
+    and _is_real_file(_DRB_DIR / "parameters_dis_both.nc")
+    and _is_real_file(_DRB_DIR / "parameters_PRMSChannel.nc")
+)
+
+
+@pytest.mark.skipif(not _HAS_DRB_DATA, reason="pywatershed DRB GIS data not available")
+class TestTopologyIntegrationDRB:
+    """Integration tests with real DRB pywatershed GIS data."""
+
+    @pytest.fixture()
+    def drb_fabric(self) -> gpd.GeoDataFrame:
+        return gpd.read_file(_DRB_DIR / "nhru.gpkg")
+
+    @pytest.fixture()
+    def drb_segments(self) -> gpd.GeoDataFrame:
+        return gpd.read_file(_DRB_DIR / "nsegment.gpkg")
+
+    @pytest.fixture()
+    def drb_params_dis_both(self) -> xr.Dataset:  # type: ignore[misc]
+        ds = xr.open_dataset(_DRB_DIR / "parameters_dis_both.nc")
+        try:
+            yield ds
+        finally:
+            ds.close()
+
+    @pytest.fixture()
+    def drb_params_channel(self) -> xr.Dataset:  # type: ignore[misc]
+        ds = xr.open_dataset(_DRB_DIR / "parameters_PRMSChannel.nc")
+        try:
+            yield ds
+        finally:
+            ds.close()
+
+    def test_drb_domain_sizes(
+        self,
+        drb_fabric: gpd.GeoDataFrame,
+        drb_segments: gpd.GeoDataFrame,
+    ) -> None:
+        assert len(drb_fabric) == 765
+        assert len(drb_segments) == 456
+
+    def test_topology_from_fabric_columns(
+        self,
+        derivation: PywatershedDerivation,
+        drb_fabric: gpd.GeoDataFrame,
+        drb_segments: gpd.GeoDataFrame,
+        drb_params_dis_both: xr.Dataset,
+        drb_params_channel: xr.Dataset,
+    ) -> None:
+        """Topology extracted from GeoPackage columns matches reference params."""
+        sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
+        seg_id_field = "nhm_seg" if "nhm_seg" in drb_segments.columns else "nsegment_v"
+
+        ds = derivation.derive(
+            sir,
+            fabric=drb_fabric,
+            segments=drb_segments,
+            segment_id_field=seg_id_field,
+        )
+
+        # tosegment from GeoPackage should match reference param NetCDF
+        ref_tosegment = drb_params_dis_both["tosegment"].values
+        np.testing.assert_array_equal(ds["tosegment"].values, ref_tosegment)
+
+        # hru_segment from GeoPackage should match reference param NetCDF
+        ref_hru_segment = drb_params_channel["hru_segment"].values
+        np.testing.assert_array_equal(ds["hru_segment"].values, ref_hru_segment)
+
+        # seg_length from GeoPackage column should match reference
+        ref_seg_length = drb_params_dis_both["seg_length"].values
+        np.testing.assert_allclose(ds["seg_length"].values, ref_seg_length)
+
+    def test_geodesic_seg_length_fallback(
+        self,
+        derivation: PywatershedDerivation,
+        drb_fabric: gpd.GeoDataFrame,
+        drb_segments: gpd.GeoDataFrame,
+        drb_params_dis_both: xr.Dataset,
+    ) -> None:
+        """Geodesic seg_length (no column) correlates with reference."""
+        # Drop seg_length column to force geodesic computation
+        segs_no_length = drb_segments.drop(columns=["seg_length"])
+        sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
+        seg_id_field = "nhm_seg" if "nhm_seg" in segs_no_length.columns else "nsegment_v"
+
+        ds = derivation.derive(
+            sir,
+            fabric=drb_fabric,
+            segments=segs_no_length,
+            segment_id_field=seg_id_field,
+        )
+
+        ref_seg_length = drb_params_dis_both["seg_length"].values
+        computed = ds["seg_length"].values
+        assert np.all(computed > 0), "All segment lengths should be positive"
+        correlation = np.corrcoef(computed, ref_seg_length)[0, 1]
+        assert correlation > 0.9, f"Correlation too low: {correlation}"
