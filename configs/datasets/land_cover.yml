@@ -12,9 +12,10 @@ datasets:
     temporal: false
     download:
       format: "COG"
+      requester_pays: true
       notes: >
-        Download via AWS CLI (no credentials required):
-        aws s3 cp --no-sign-request <url> .
+        Requester-pays S3 bucket (us-west-2). Requires AWS credentials:
+        aws s3 cp --request-payer requester <url> .
       files:
         # --- Land Cover ---
         - year: 2021
