@@ -529,11 +529,28 @@ class TestTopologyValidation:
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _GIS_DATA_DIR = _PROJECT_ROOT / "data" / "pywatershed_gis"
 _DRB_DIR = _GIS_DATA_DIR / "drb_2yr"
+
+
+def _is_real_file(path: Path) -> bool:
+    """Check that a file exists and is not a Git LFS pointer."""
+    if not path.exists():
+        return False
+    # LFS pointers are small text files starting with "version https://git-lfs"
+    if path.stat().st_size < 200:
+        try:
+            text = path.read_text(encoding="utf-8", errors="strict")
+            if text.startswith("version https://git-lfs"):
+                return False
+        except (UnicodeDecodeError, ValueError):
+            pass  # Binary file = real data
+    return True
+
+
 _HAS_DRB_DATA = (
-    (_DRB_DIR / "nhru.gpkg").exists()
-    and (_DRB_DIR / "nsegment.gpkg").exists()
-    and (_DRB_DIR / "parameters_dis_both.nc").exists()
-    and (_DRB_DIR / "parameters_PRMSChannel.nc").exists()
+    _is_real_file(_DRB_DIR / "nhru.gpkg")
+    and _is_real_file(_DRB_DIR / "nsegment.gpkg")
+    and _is_real_file(_DRB_DIR / "parameters_dis_both.nc")
+    and _is_real_file(_DRB_DIR / "parameters_PRMSChannel.nc")
 )
 
 
