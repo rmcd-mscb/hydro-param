@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import geopandas as gpd
 import pandas as pd
@@ -150,6 +150,94 @@ class ZonalProcessor:
             selected = [s for s in statistics if s in available]
             if selected:
                 result_df = result_df[selected]
+
+        return result_df
+
+    def process_nhgf_stac(
+        self,
+        fabric: gpd.GeoDataFrame,
+        collection_id: str,
+        variable_name: str,
+        id_field: str,
+        *,
+        year: int | None = None,
+        engine: ZonalEngine = "exactextract",
+        categorical: bool = False,
+        band: int = 1,
+    ) -> pd.DataFrame:
+        """Compute zonal statistics from an NHGF STAC collection.
+
+        Uses gdptools ``NHGFStacTiffData`` to read COGs directly from
+        the NHGF STAC catalog (e.g. NLCD on OSN), bypassing any
+        intermediate GeoTIFF download.
+
+        Parameters
+        ----------
+        fabric : gpd.GeoDataFrame
+            Target polygons.
+        collection_id : str
+            NHGF STAC collection identifier (e.g. ``"nlcd-LndCov"``).
+        variable_name : str
+            Variable / layer name within the collection.
+        id_field : str
+            Column name for feature IDs in the fabric.
+        year : int or None
+            Select a specific STAC item by year. If None, uses the
+            first available item.
+        engine : ZonalEngine
+            gdptools zonal engine.
+        categorical : bool
+            If True, compute class fractions instead of continuous stats.
+        band : int
+            Raster band to read (default 1).
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame of zonal statistics indexed by feature ID.
+        """
+        from gdptools import NHGFStacTiffData, ZonalGen
+        from gdptools.helpers import get_stac_collection
+
+        source_time_period = cast(
+            "list[Any] | None",
+            [f"{year}-01-01", f"{year}-12-31"] if year is not None else None,
+        )
+
+        logger.info(
+            "NHGF STAC zonal: '%s' collection='%s' year=%s engine=%s categorical=%s",
+            variable_name,
+            collection_id,
+            year,
+            engine,
+            categorical,
+        )
+
+        collection = get_stac_collection(collection_id)
+
+        nhgf_data = NHGFStacTiffData(
+            source_collection=collection,
+            source_var=variable_name,
+            target_gdf=fabric[[id_field, "geometry"]].copy(),
+            target_id=id_field,
+            source_time_period=source_time_period,
+            band=band,
+        )
+
+        zonal = ZonalGen(
+            user_data=nhgf_data,
+            zonal_engine=engine,
+            zonal_writer="csv",
+            out_path=".",
+        )
+        result_df = zonal.calculate_zonal(categorical=categorical)
+
+        logger.info(
+            "  %s: %d features, columns=%s",
+            variable_name,
+            len(result_df),
+            list(result_df.columns),
+        )
 
         return result_df
 

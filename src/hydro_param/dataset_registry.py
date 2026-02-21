@@ -156,8 +156,6 @@ class DatasetEntry(BaseModel):
         if self.strategy == "nhgf_stac":
             if not self.collection:
                 raise ValueError("nhgf_stac strategy requires 'collection'")
-            if not self.temporal:
-                raise ValueError("nhgf_stac strategy requires 'temporal: true'")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
         return self

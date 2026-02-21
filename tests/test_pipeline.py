@@ -446,3 +446,163 @@ def test_get_processor_rejects_empty_fabric():
     empty = gpd.GeoDataFrame({"hru_id": []}, geometry=[], crs="EPSG:4326")
     with pytest.raises(ValueError, match="empty"):
         get_processor(empty)
+
+
+# ---------------------------------------------------------------------------
+# NHGF STAC dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_process_nhgf_stac_method_exists():
+    """ZonalProcessor has the process_nhgf_stac method."""
+    proc = ZonalProcessor()
+    assert hasattr(proc, "process_nhgf_stac")
+    assert callable(proc.process_nhgf_stac)
+
+
+def test_process_batch_nhgf_stac_dispatch(tmp_path: Path):
+    """_process_batch dispatches to process_nhgf_stac for nhgf_stac static datasets."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        crs="EPSG:5070",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["majority"],
+        year=2021,
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"majority": [11, 21]}, index=["a", "b"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+        mock_method.assert_called_once()
+        call_kwargs = mock_method.call_args
+        assert call_kwargs.kwargs["collection_id"] == "nlcd-LndCov"
+        assert call_kwargs.kwargs["year"] == 2021
+        assert call_kwargs.kwargs["categorical"] is True
+
+    assert "LndCov" in results
+    assert len(results["LndCov"]) == 2
+
+
+def test_process_batch_nhgf_stac_rejects_derived(tmp_path: Path):
+    """Derived variables raise NotImplementedError for nhgf_stac strategy."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, DerivedVariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    derived = DerivedVariableSpec(name="slope", source="elevation", method="horn")
+    ds_req = DatasetRequest(name="test", variables=["slope"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(NotImplementedError, match="Derived variables not supported"):
+        _process_batch(fabric, entry, ds_req, [derived], config, tmp_path)
+
+
+def test_process_batch_nhgf_stac_passes_year(tmp_path: Path):
+    """Year from DatasetRequest is propagated to process_nhgf_stac."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(name="test", variables=["LndCov"], year=2019)
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"majority": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+        assert mock_method.call_args.kwargs["year"] == 2019
+
+
+def test_process_batch_nhgf_stac_year_none(tmp_path: Path):
+    """When year is None, process_nhgf_stac receives year=None."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(name="test", variables=["LndCov"])  # year=None
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"majority": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+        assert mock_method.call_args.kwargs["year"] is None

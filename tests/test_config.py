@@ -162,3 +162,13 @@ def test_processing_rejects_zero_batch_size():
 def test_processing_rejects_negative_batch_size():
     with pytest.raises(ValidationError):
         ProcessingConfig(batch_size=-1)
+
+
+def test_dataset_request_year_field():
+    ds = DatasetRequest(name="nlcd_osn_lndcov", variables=["LndCov"], year=2021)
+    assert ds.year == 2021
+
+
+def test_dataset_request_year_default_none():
+    ds = DatasetRequest(name="nlcd_osn_lndcov")
+    assert ds.year is None

@@ -699,14 +699,55 @@ def test_nhgf_stac_requires_collection():
         )
 
 
-def test_nhgf_stac_requires_temporal():
-    """nhgf_stac with temporal=false is rejected."""
-    with pytest.raises(ValidationError, match="temporal"):
-        DatasetEntry(
-            strategy="nhgf_stac",
-            collection="snodas",
-            temporal=False,
-        )
+def test_nhgf_stac_static_valid():
+    """nhgf_stac with temporal=false (static dataset like NLCD) validates OK."""
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    assert entry.strategy == "nhgf_stac"
+    assert entry.collection == "nlcd-LndCov"
+    assert entry.temporal is False
+
+
+def test_nhgf_stac_temporal_still_valid():
+    """Temporal nhgf_stac (e.g. SNODAS) still validates as before."""
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    assert entry.temporal is True
+    assert entry.t_coord == "time"
+
+
+def test_real_registry_nlcd_osn_entries():
+    """Verify all 6 NLCD OSN entries in the real registry."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+
+    expected = {
+        "nlcd_osn_lndcov": ("nlcd-LndCov", "LndCov", True),
+        "nlcd_osn_fctimp": ("nlcd-FctImp", "FctImp", False),
+        "nlcd_osn_impdsc": ("nlcd-ImpDsc", "ImpDsc", True),
+        "nlcd_osn_lndchg": ("nlcd-LndChg", "LndChg", True),
+        "nlcd_osn_lndcnf": ("nlcd-LndCnf", "LndCnf", False),
+        "nlcd_osn_spcchg": ("nlcd-SpcChg", "SpcChg", False),
+    }
+    for name, (collection, var_name, categorical) in expected.items():
+        entry = registry.get(name)
+        assert entry.strategy == "nhgf_stac"
+        assert entry.collection == collection
+        assert entry.temporal is False
+        assert entry.crs == "EPSG:5070"
+        assert entry.category == "land_cover"
+        assert len(entry.variables) == 1
+        assert entry.variables[0].name == var_name
+        assert entry.variables[0].categorical is categorical
 
 
 def test_variable_spec_asset_key():
