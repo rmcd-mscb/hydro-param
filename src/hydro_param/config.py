@@ -44,6 +44,7 @@ class DatasetRequest(BaseModel):
     source: Path | None = None
     variables: list[str] = []
     statistics: list[str] = Field(default_factory=lambda: ["mean"])
+    year: int | None = Field(default=None, ge=1900, le=2100)
 
 
 class OutputConfig(BaseModel):

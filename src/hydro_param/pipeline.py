@@ -18,6 +18,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import geopandas as gpd
 import pandas as pd
@@ -38,7 +39,7 @@ from hydro_param.dataset_registry import (
     VariableSpec,
     load_registry,
 )
-from hydro_param.processing import get_processor
+from hydro_param.processing import ZonalProcessor, get_processor
 
 logger = logging.getLogger(__name__)
 
@@ -192,9 +193,30 @@ def _process_batch(
         Variable name → DataFrame of zonal statistics.
     """
     processor = get_processor(batch_fabric)
+    results: dict[str, pd.DataFrame] = {}
+
+    # --- NHGF STAC direct pathway (no intermediate GeoTIFF) ---
+    if entry.strategy == "nhgf_stac" and not entry.temporal:
+        zonal_proc = cast(ZonalProcessor, processor)
+        for var_spec in var_specs:
+            if isinstance(var_spec, DerivedVariableSpec):
+                raise NotImplementedError("Derived variables not supported for nhgf_stac strategy")
+            df = zonal_proc.process_nhgf_stac(
+                fabric=batch_fabric,
+                collection_id=cast(str, entry.collection),
+                variable_name=var_spec.name,
+                id_field=config.target_fabric.id_field,
+                year=ds_req.year,
+                engine=config.processing.engine,
+                statistics=ds_req.statistics,
+                categorical=var_spec.categorical,
+                band=var_spec.band,
+            )
+            results[var_spec.name] = df
+        return results
+
     # TODO: Reproject batch bounds into entry.crs when fabric CRS != dataset CRS
     bbox = list(batch_fabric.total_bounds)
-    results: dict[str, pd.DataFrame] = {}
 
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
@@ -205,6 +227,11 @@ def _process_batch(
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
             return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
+        if dataset_entry.strategy == "nhgf_stac":
+            raise NotImplementedError(
+                "Temporal nhgf_stac datasets are not yet supported in the pipeline. "
+                "Only static nhgf_stac (temporal: false) is implemented."
+            )
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for var_spec in var_specs:

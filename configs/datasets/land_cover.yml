@@ -138,3 +138,96 @@ datasets:
         band: 1
         long_name: "Spectral change day of year"
         categorical: false
+
+  # --- NLCD Annual via NHGF STAC OSN (free, anonymous access) ---
+  # One entry per STAC collection. Uses NHGFStacTiffData + ZonalGen directly.
+
+  nlcd_osn_lndcov:
+    description: "Annual NLCD Land Cover via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-LndCov
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: LndCov
+        band: 1
+        long_name: "Land cover class"
+        categorical: true
+
+  nlcd_osn_fctimp:
+    description: "Annual NLCD Fractional Impervious via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-FctImp
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: FctImp
+        band: 1
+        long_name: "Fractional impervious surface"
+        categorical: false
+
+  nlcd_osn_impdsc:
+    description: "Annual NLCD Impervious Descriptor via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-ImpDsc
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: ImpDsc
+        band: 1
+        long_name: "Impervious descriptor"
+        categorical: true
+
+  nlcd_osn_lndchg:
+    description: "Annual NLCD Land Cover Change via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-LndChg
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: LndChg
+        band: 1
+        long_name: "Land cover change"
+        categorical: true
+
+  nlcd_osn_lndcnf:
+    description: "Annual NLCD Land Cover Confidence via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-LndCnf
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: LndCnf
+        band: 1
+        long_name: "Land cover confidence"
+        categorical: false
+
+  nlcd_osn_spcchg:
+    description: "Annual NLCD Spectral Change via NHGF STAC OSN, 30m (1985-2024)"
+    strategy: nhgf_stac
+    collection: nlcd-SpcChg
+    crs: "EPSG:5070"
+    x_coord: "x"
+    y_coord: "y"
+    category: land_cover
+    temporal: false
+    variables:
+      - name: SpcChg
+        band: 1
+        long_name: "Spectral change day of year"
+        categorical: false
