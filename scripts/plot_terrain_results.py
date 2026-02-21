@@ -9,7 +9,7 @@ Usage:
     python scripts/plot_terrain_results.py <output.nc> <catchments.gpkg>
 
 Example:
-    pixi run -e dev python scripts/plot_terrain_results.py \
+    pixi run -e full python scripts/plot_terrain_results.py \
         output/delaware_terrain.nc data/delaware/catchments.gpkg
 """
 

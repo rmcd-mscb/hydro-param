@@ -4,7 +4,7 @@
 #   python -m hydro_param.pipeline configs/delaware_terrain.yml
 #
 # Requires: gdptools, exactextract, pystac-client, planetary-computer, rioxarray
-# Environment: pixi run -e dev python -m hydro_param.pipeline configs/delaware_terrain.yml
+# Environment: pixi run -e full python -m hydro_param.pipeline configs/delaware_terrain.yml
 
 target_fabric:
   path: "data/delaware/catchments.gpkg"

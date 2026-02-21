@@ -36,13 +36,18 @@ dependencies = [
     "pyyaml",
     "pydantic>=2.0",
     "cyclopts",
-    "gdptools>=0.3.8",
 ]
 
 [project.scripts]
 hydro-param = "hydro_param.cli:main"
 
 [project.optional-dependencies]
+gdp = ["gdptools", "exactextract"]
+stac = ["pystac-client", "planetary-computer", "rioxarray"]
+regrid = ["xesmf", "rioxarray"]
+parallel = ["joblib"]
+cloud = ["coiled", "dask-geopandas"]
+download = ["pynhd"]
 dev = [
     "pytest",
     "pytest-cov",
@@ -107,12 +112,30 @@ hydro-param = { path = ".", editable = true }
 geopandas = ">=1.0"
 xarray = ">=2024.1"
 numpy = ">=1.26"
-exactextract = ">=0.2"
-pyarrow = ">=14.0"
-urllib3 = ">=2.6"
-distributed = ">=2024.1"
 
 # --- Features ---------------------------------------------------------------
+# Each [project.optional-dependencies] group is auto-detected as a feature.
+# Below we add conda overrides and Python-version pins as additional features.
+
+[tool.pixi.feature.gdp.dependencies]
+exactextract = ">=0.2"
+pyarrow = ">=14.0"
+distributed = ">=2024.1"
+
+[tool.pixi.feature.stac.dependencies]
+pystac-client = ">=0.8"
+planetary-computer = "*"
+rioxarray = ">=0.15"
+
+[tool.pixi.feature.regrid.dependencies]
+xesmf = ">=0.8"
+rioxarray = ">=0.15"
+
+[tool.pixi.feature.download.dependencies]
+pynhd = ">=0.17"
+
+[tool.pixi.feature.download.tasks]
+download-delaware = "python scripts/download_delaware_nhd.py"
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"
@@ -144,8 +167,17 @@ docs-build = "mkdocs build --strict"
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
 
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
 # --- Environments ------------------------------------------------------------
+# Pin default/dev/full to Python 3.11 for stability. Separate solve-groups
+# for different Python versions to avoid conflicts.
 [tool.pixi.environments]
-default = { features = ["py311"], solve-group = "default" }
-dev = { features = ["dev", "py311"], solve-group = "default" }
-docs = { features = ["docs", "py311"], solve-group = "default" }
+default = { features = ["py311"], solve-group = "py311" }
+dev = { features = ["dev", "py311"], solve-group = "py311" }
+test-py311 = { features = ["dev", "py311"], solve-group = "py311" }
+test-py312 = { features = ["dev", "py312"], solve-group = "py312" }
+full = { features = ["dev", "gdp", "regrid", "parallel", "stac", "py311"], solve-group = "py311" }
+download = { features = ["download", "py311"], solve-group = "py311" }
+docs = { features = ["docs", "py311"], solve-group = "py311" }

@@ -82,9 +82,10 @@ configs/
 Package management: **pixi** (configured in `pyproject.toml` under `[tool.pixi.*]`). Use `pixi install` to create/sync environments.
 
 **Pixi environments:**
-- `default` — core dependencies only (gdptools, geopandas, xarray, etc.)
-- `dev` — daily development (default + pytest, ruff, mypy, pre-commit)
-- `docs` — documentation building (mkdocs-material, mkdocstrings)
+- `dev` — daily development (pytest, ruff, mypy, pre-commit). Does NOT include rioxarray/gdptools.
+- `full` — all optional deps including gdptools, rioxarray, exactextract. Use for integration tests.
+- `test-py311` / `test-py312` — CI matrix environments.
+- `download` — includes pynhd for fabric download scripts.
 
 ## Coding Conventions
 
@@ -104,7 +105,7 @@ Package management: **pixi** (configured in `pyproject.toml` under `[tool.pixi.*
 - **All checks:** `pixi run -e dev check`
 - **Pre-commit:** `pixi run -e dev pre-commit`
 - **Install/sync environment:** `pixi install`
-- **Build docs:** `pixi run -e docs docs-build`
+- **Run integration tests (with gdptools):** `pixi run -e full pytest tests/`
 
 ## Development Workflow
 

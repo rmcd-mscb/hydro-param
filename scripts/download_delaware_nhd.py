@@ -6,7 +6,7 @@ via USGS web services using pynhd. Saves to GeoPackage files for offline
 use as the project's test fabric.
 
 Usage:
-    pixi run -e dev python scripts/download_delaware_nhd.py
+    pixi run -e download download-delaware
 """
 
 from __future__ import annotations

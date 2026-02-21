@@ -104,8 +104,8 @@ class ZonalProcessor:
         # Use registry CRS if provided, otherwise read from GeoTIFF
         if source_crs is None:
             ds = rioxarray.open_rasterio(tiff_path)
-            source_crs = str(ds.rio.crs)  # type: ignore[union-attr]
-            ds.close()  # type: ignore[union-attr]
+            source_crs = str(ds.rio.crs)
+            ds.close()
 
         user_data = UserTiffData(
             source_ds=str(tiff_path),
@@ -119,7 +119,7 @@ class ZonalProcessor:
 
         zonal = ZonalGen(
             user_data=user_data,
-            zonal_engine=engine,  # type: ignore[arg-type]
+            zonal_engine=engine,
             zonal_writer="csv",
             out_path=str(tiff_path.parent),
         )

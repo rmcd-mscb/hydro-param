@@ -227,7 +227,7 @@ def fetch_stac_cog(
     for item in items:
         asset = item.assets[entry.asset_key]
         da = rioxarray.open_rasterio(asset.href, masked=True)
-        da = da.squeeze("band", drop=True)  # type: ignore[union-attr]
+        da = da.squeeze("band", drop=True)
         try:
             da = da.rio.clip_box(minx=bbox[0], miny=bbox[1], maxx=bbox[2], maxy=bbox[3])
         except (rioxarray.exceptions.NoDataInBounds, ValueError):
@@ -337,7 +337,7 @@ def fetch_local_tiff(
     logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
 
     da = rioxarray.open_rasterio(source_path, masked=True)
-    da = da.squeeze("band", drop=True)  # type: ignore[union-attr]
+    da = da.squeeze("band", drop=True)
 
     try:
         da = da.rio.clip_box(

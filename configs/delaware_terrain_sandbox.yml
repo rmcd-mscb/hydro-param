@@ -6,7 +6,7 @@
 # Run with:
 #   python -m hydro_param configs/delaware_terrain_sandbox.yml
 #
-# Environment: pixi run -e dev python -m hydro_param configs/delaware_terrain_sandbox.yml
+# Environment: pixi run -e full python -m hydro_param configs/delaware_terrain_sandbox.yml
 
 target_fabric:
   path: "data/delaware/catchments.gpkg"
