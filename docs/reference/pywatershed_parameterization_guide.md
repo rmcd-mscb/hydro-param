@@ -263,8 +263,10 @@ class PywatershedOutputPlugin:
         - tmax.nc (nhru × ntime, units: °F)
         - tmin.nc (nhru × ntime, units: °F)
 
-        pywatershed's PRMSAtmosphere accepts file paths for these
-        inputs via ``pws.Parameters.from_netcdf()`` or Adapter objects.
+        These NetCDF files are passed directly to ``pws.PRMSAtmosphere``
+        (for example via its ``*_file`` keyword arguments) or wrapped in
+        Adapter objects. ``pws.Parameters.from_netcdf()`` is used only to
+        load the parameter NetCDF written by ``write_parameters()``.
 
         For legacy PRMS text CBH format, use write_cbh_text() instead.
         """

@@ -10,6 +10,7 @@ proposed structure.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -107,6 +108,23 @@ class PwsOutputConfig(BaseModel):
     forcing_dir: str = "forcing"
     control_file: str = "control.yml"
     soltab_file: str = "soltab.nc"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_cbh_dir(cls, values: dict) -> dict:
+        """Accept legacy ``cbh_dir`` key with a deprecation warning."""
+        if isinstance(values, dict) and "cbh_dir" in values:
+            if "forcing_dir" not in values:
+                warnings.warn(
+                    "Config key 'cbh_dir' is deprecated, use 'forcing_dir' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                values["forcing_dir"] = values.pop("cbh_dir")
+            else:
+                # Both specified — drop legacy key silently
+                values.pop("cbh_dir")
+        return values
 
 
 class PywatershedRunConfig(BaseModel):
