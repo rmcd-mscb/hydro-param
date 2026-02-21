@@ -172,3 +172,10 @@ def test_dataset_request_year_field():
 def test_dataset_request_year_default_none():
     ds = DatasetRequest(name="nlcd_osn_lndcov")
     assert ds.year is None
+
+
+def test_dataset_request_year_rejects_invalid():
+    with pytest.raises(ValidationError):
+        DatasetRequest(name="test", year=1800)
+    with pytest.raises(ValidationError):
+        DatasetRequest(name="test", year=2200)

@@ -162,6 +162,7 @@ class ZonalProcessor:
         *,
         year: int | None = None,
         engine: ZonalEngine = "exactextract",
+        statistics: list[str] | None = None,
         categorical: bool = False,
         band: int = 1,
     ) -> pd.DataFrame:
@@ -186,6 +187,8 @@ class ZonalProcessor:
             first available item.
         engine : ZonalEngine
             gdptools zonal engine.
+        statistics : list[str] or None
+            Which statistics to return. Default is ``["mean"]``.
         categorical : bool
             If True, compute class fractions instead of continuous stats.
         band : int
@@ -199,6 +202,11 @@ class ZonalProcessor:
         from gdptools import NHGFStacTiffData, ZonalGen
         from gdptools.helpers import get_stac_collection
 
+        if statistics is None:
+            statistics = ["mean"]
+
+        # gdptools expects list[str | Timestamp | datetime | None] | None;
+        # list is invariant so list[str] doesn't satisfy — cast to Any.
         source_time_period = cast(
             "list[Any] | None",
             [f"{year}-01-01", f"{year}-12-31"] if year is not None else None,
@@ -238,6 +246,21 @@ class ZonalProcessor:
             len(result_df),
             list(result_df.columns),
         )
+
+        # For continuous variables, validate and select requested statistics
+        if not categorical:
+            available = set(result_df.columns)
+            missing = [s for s in statistics if s not in available]
+            if missing:
+                logger.warning(
+                    "Requested statistics %s not available for '%s'. Available: %s",
+                    missing,
+                    variable_name,
+                    sorted(available),
+                )
+            selected = [s for s in statistics if s in available]
+            if selected:
+                result_df = result_df[selected]
 
         return result_df
 

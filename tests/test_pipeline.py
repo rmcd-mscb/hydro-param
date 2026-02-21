@@ -606,3 +606,120 @@ def test_process_batch_nhgf_stac_year_none(tmp_path: Path):
     with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
         _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
         assert mock_method.call_args.kwargs["year"] is None
+
+
+def test_process_batch_nhgf_stac_passes_statistics(tmp_path: Path):
+    """Statistics from DatasetRequest are propagated to process_nhgf_stac."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-FctImp",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="FctImp", band=1, categorical=False)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_fctimp",
+        variables=["FctImp"],
+        statistics=["mean", "median"],
+        year=2021,
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"mean": [0.5], "median": [0.4]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+        assert mock_method.call_args.kwargs["statistics"] == ["mean", "median"]
+
+
+def test_process_batch_temporal_nhgf_stac_raises(tmp_path: Path):
+    """Temporal nhgf_stac datasets raise NotImplementedError in _fetch()."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    var_spec = VariableSpec(name="SWE", band=1)
+    ds_req = DatasetRequest(name="snodas", variables=["SWE"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(NotImplementedError, match="Temporal nhgf_stac"):
+        _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+
+
+def test_process_nhgf_stac_integration(tmp_path: Path):
+    """Integration test: verify process_nhgf_stac wires gdptools classes correctly."""
+    from unittest.mock import MagicMock, patch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    mock_collection = MagicMock(name="pystac.Collection")
+    mock_nhgf_data = MagicMock(name="NHGFStacTiffData")
+    mock_zonal = MagicMock(name="ZonalGen")
+    mock_zonal.calculate_zonal.return_value = pd.DataFrame({"majority": [11, 21]}, index=["a", "b"])
+
+    with (
+        patch("gdptools.helpers.get_stac_collection", return_value=mock_collection) as p_coll,
+        patch("gdptools.NHGFStacTiffData", return_value=mock_nhgf_data) as p_nhgf,
+        patch("gdptools.ZonalGen", return_value=mock_zonal) as p_zonal,
+    ):
+        proc = ZonalProcessor()
+        result = proc.process_nhgf_stac(
+            fabric=fabric,
+            collection_id="nlcd-LndCov",
+            variable_name="LndCov",
+            id_field="hru_id",
+            year=2021,
+            categorical=True,
+        )
+
+        p_coll.assert_called_once_with("nlcd-LndCov")
+        p_nhgf.assert_called_once()
+        nhgf_kwargs = p_nhgf.call_args.kwargs
+        assert nhgf_kwargs["source_collection"] is mock_collection
+        assert nhgf_kwargs["source_var"] == "LndCov"
+        assert nhgf_kwargs["target_id"] == "hru_id"
+        assert nhgf_kwargs["source_time_period"] == ["2021-01-01", "2021-12-31"]
+        assert nhgf_kwargs["band"] == 1
+
+        p_zonal.assert_called_once()
+        mock_zonal.calculate_zonal.assert_called_once_with(categorical=True)
+
+    assert list(result.columns) == ["majority"]
+    assert len(result) == 2

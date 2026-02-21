@@ -208,6 +208,7 @@ def _process_batch(
                 id_field=config.target_fabric.id_field,
                 year=ds_req.year,
                 engine=config.processing.engine,
+                statistics=ds_req.statistics,
                 categorical=var_spec.categorical,
                 band=var_spec.band,
             )
@@ -226,6 +227,11 @@ def _process_batch(
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
             return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
+        if dataset_entry.strategy == "nhgf_stac":
+            raise NotImplementedError(
+                "Temporal nhgf_stac datasets are not yet supported in the pipeline. "
+                "Only static nhgf_stac (temporal: false) is implemented."
+            )
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for var_spec in var_specs:
