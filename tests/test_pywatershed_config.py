@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from hydro_param.pywatershed_config import (
     PwsDomainConfig,
+    PwsOutputConfig,
     PwsTimeConfig,
     PywatershedRunConfig,
     load_pywatershed_config,
@@ -101,6 +102,27 @@ class TestPwsTimeConfig:
     def test_missing_start(self) -> None:
         with pytest.raises(ValidationError):
             PwsTimeConfig(end="2020-09-30")  # type: ignore[call-arg]
+
+
+class TestPwsOutputConfig:
+    """Tests for output configuration, including cbh_dir migration."""
+
+    def test_defaults(self) -> None:
+        cfg = PwsOutputConfig()
+        assert cfg.forcing_dir == "forcing"
+
+    def test_forcing_dir(self) -> None:
+        cfg = PwsOutputConfig(forcing_dir="my_forcing")
+        assert cfg.forcing_dir == "my_forcing"
+
+    def test_legacy_cbh_dir_migrated(self) -> None:
+        with pytest.warns(DeprecationWarning, match="cbh_dir"):
+            cfg = PwsOutputConfig(**{"cbh_dir": "cbh"})
+        assert cfg.forcing_dir == "cbh"
+
+    def test_forcing_dir_takes_precedence_over_cbh_dir(self) -> None:
+        cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
+        assert cfg.forcing_dir == "forcing"
 
 
 class TestPywatershedRunConfig:

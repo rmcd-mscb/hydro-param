@@ -4,7 +4,9 @@ Converts derived pywatershed parameters into the file format(s)
 expected by pywatershed v2.0:
 
 1. Parameter NetCDF — loadable by ``pws.Parameters.from_netcdf()``
-2. CBH NetCDF files — prcp.nc, tmax.nc, tmin.nc with PRMS units
+2. Forcing NetCDF files — one variable per file (prcp.nc, tmax.nc,
+   tmin.nc) with PRMS units.  pywatershed's ``PRMSAtmosphere``
+   accepts ``Union[str, Path, ndarray, Adapter]`` for forcing inputs.
 3. Soltab NetCDF — potential solar radiation tables (nhru × 366)
 4. Control YAML — simulation configuration
 
@@ -24,8 +26,8 @@ from hydro_param.units import convert
 
 logger = logging.getLogger(__name__)
 
-# CBH variables and their required unit conversions
-_CBH_VARS: dict[str, tuple[str, str]] = {
+# Forcing variables and their required unit conversions
+_FORCING_VARS: dict[str, tuple[str, str]] = {
     "prcp": ("mm", "in"),
     "tmax": ("C", "F"),
     "tmin": ("C", "F"),
@@ -41,8 +43,8 @@ _PARAM_METADATA_PATH = Path("configs/pywatershed/parameter_metadata.yml")
 class PywatershedFormatter:
     """Format derived parameters for pywatershed consumption.
 
-    Produces parameter NetCDF, CBH NetCDF files, soltab arrays,
-    and control configuration compatible with pywatershed v2.0.
+    Produces parameter NetCDF, forcing NetCDF files (one variable per file),
+    soltab arrays, and control configuration compatible with pywatershed v2.0.
     """
 
     name: str = "pywatershed"
@@ -76,7 +78,7 @@ class PywatershedFormatter:
             Output directory.
         config
             Formatter configuration with keys: ``parameter_file``,
-            ``cbh_dir``, ``soltab_file``, ``control_file``,
+            ``forcing_dir``, ``soltab_file``, ``control_file``,
             ``start``, ``end``.
 
         Returns
@@ -98,9 +100,10 @@ class PywatershedFormatter:
         if param_path.exists():
             written.append(param_path)
 
-        # 2. CBH files (only if climate data present)
-        cbh_paths = self.write_cbh(parameters, output_path / config.get("cbh_dir", "cbh"))
-        written.extend(cbh_paths)
+        # 2. Forcing NetCDF files (only if climate data present)
+        forcing_dir = config.get("forcing_dir") or config.get("cbh_dir") or "forcing"
+        forcing_paths = self.write_forcing_netcdf(parameters, output_path / forcing_dir)
+        written.extend(forcing_paths)
 
         # 3. Soltab (only if soltab arrays present)
         has_soltab = any(v in parameters for v in _SOLTAB_VARS)
@@ -120,7 +123,7 @@ class PywatershedFormatter:
     def write_parameters(self, parameters: xr.Dataset, output_path: Path) -> None:
         """Write parameter NetCDF for ``pws.Parameters.from_netcdf()``.
 
-        Excludes CBH time-series and soltab variables (written separately).
+        Excludes forcing time-series and soltab variables (written separately).
         Sets CF-1.8 attributes and pywatershed-compatible dimensions.
 
         Parameters
@@ -130,8 +133,8 @@ class PywatershedFormatter:
         output_path
             Path for the output NetCDF file.
         """
-        # Exclude CBH and soltab variables
-        exclude = set(_CBH_VARS.keys()) | _SOLTAB_VARS
+        # Exclude forcing and soltab variables
+        exclude = set(_FORCING_VARS.keys()) | _SOLTAB_VARS
         static_vars = [v for v in parameters.data_vars if v not in exclude]
 
         if not static_vars:
@@ -151,33 +154,36 @@ class PywatershedFormatter:
         param_ds.to_netcdf(output_path)
         logger.info("Wrote parameter NetCDF: %s (%d variables)", output_path, len(static_vars))
 
-    def write_cbh(self, parameters: xr.Dataset, output_dir: Path) -> list[Path]:
-        """Write Climate-By-HRU NetCDF files with PRMS unit conversions.
+    def write_forcing_netcdf(self, parameters: xr.Dataset, output_dir: Path) -> list[Path]:
+        """Write forcing NetCDF files (one variable per file) with PRMS units.
 
         Produces ``prcp.nc`` (inches/day), ``tmax.nc`` (°F),
         ``tmin.nc`` (°F).  Skips variables not present in the dataset.
+
+        pywatershed's ``PRMSAtmosphere`` accepts file paths directly for
+        these inputs.
 
         Parameters
         ----------
         parameters
             Dataset potentially containing ``prcp``, ``tmax``, ``tmin``.
         output_dir
-            Directory for CBH output files.
+            Directory for forcing output files.
 
         Returns
         -------
         list[Path]
-            Paths to CBH files written.
+            Paths to forcing files written.
         """
         written: list[Path] = []
-        has_cbh = any(v in parameters for v in _CBH_VARS)
-        if not has_cbh:
-            logger.info("No CBH variables present; skipping CBH output.")
+        has_forcing = any(v in parameters for v in _FORCING_VARS)
+        if not has_forcing:
+            logger.info("No forcing variables present; skipping forcing output.")
             return written
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        for var, (from_unit, to_unit) in _CBH_VARS.items():
+        for var, (from_unit, to_unit) in _FORCING_VARS.items():
             if var not in parameters:
                 continue
             da = parameters[var].copy(deep=True)
@@ -187,7 +193,7 @@ class PywatershedFormatter:
             out_path = output_dir / f"{var}.nc"
             da.to_dataset(name=var).to_netcdf(out_path)
             written.append(out_path)
-            logger.info("Wrote CBH: %s (%s → %s)", out_path, from_unit, to_unit)
+            logger.info("Wrote forcing: %s (%s → %s)", out_path, from_unit, to_unit)
 
         return written
 
