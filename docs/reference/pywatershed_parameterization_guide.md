@@ -69,7 +69,7 @@ dataset_name:
    the soil zone parameters.
    Accessor: `pygeohydro.ssurgo_bygeom`
 
-5. **daymet_v4** (or gridmet) — Climate forcing for CBH time series.
+5. **daymet_v4** (or gridmet) — Climate forcing time series.
    This is the most compute-intensive data retrieval.
    Accessor: `pydaymet.get_bygeom` or `gdptools`
 
@@ -159,6 +159,10 @@ time:
   timestep: daily
 
 # Climate forcing source
+# pywatershed accepts one-variable-per-NetCDF-file for forcing inputs
+# (prcp.nc, tmax.nc, tmin.nc).  PRMSAtmosphere accepts file paths,
+# numpy arrays, or Adapter objects for prcp, tmax, tmin, soltab_potsw,
+# and soltab_horad_potsw.
 climate:
   source: daymet_v4   # or gridmet, conus404_ba
   method: area_weighted_mean  # via gdptools or exactextract
@@ -201,7 +205,7 @@ calibration:
 output:
   format: netcdf              # or prms_text
   parameter_file: "params.nc"
-  cbh_dir: "./cbh/"
+  forcing_dir: "./forcing/"   # one-variable-per-file NetCDF (prcp.nc, tmax.nc, tmin.nc)
   control_file: "control.yml"
   soltab_file: "soltab.nc"
 ```
@@ -218,9 +222,14 @@ class PywatershedOutputPlugin:
 
     Produces:
     1. Parameter file (NetCDF) — all static/slow-varying parameters
-    2. CBH files (NetCDF) — daily climate forcing time series
+    2. Forcing NetCDF files — one variable per file (prcp.nc, tmax.nc, tmin.nc)
     3. Soltab arrays — potential solar radiation lookup tables
     4. Control file — simulation configuration
+
+    pywatershed's PRMSAtmosphere constructor accepts Union[str, Path,
+    ndarray, Adapter] for prcp, tmax, tmin, soltab_potsw, and
+    soltab_horad_potsw — so forcing inputs can be NetCDF file paths,
+    numpy arrays, or Adapter objects (not limited to legacy CBH text).
     """
 
     name = "pywatershed"
@@ -245,16 +254,21 @@ class PywatershedOutputPlugin:
         """
         pass
 
-    def write_cbh(self, climate_data: dict, output_dir: Path):
+    def write_forcing_netcdf(self, climate_data: dict, output_dir: Path):
         """
-        Write Climate-By-HRU NetCDF files.
+        Write forcing NetCDF files (one variable per file).
 
-        Produces separate files:
+        Produces separate files that pywatershed can load directly:
         - prcp.nc (nhru × ntime, units: inches/day)
         - tmax.nc (nhru × ntime, units: °F)
         - tmin.nc (nhru × ntime, units: °F)
 
-        pywatershed loads these via Adapter classes.
+        These NetCDF files are passed directly to ``pws.PRMSAtmosphere``
+        (for example via its ``*_file`` keyword arguments) or wrapped in
+        Adapter objects. ``pws.Parameters.from_netcdf()`` is used only to
+        load the parameter NetCDF written by ``write_parameters()``.
+
+        For legacy PRMS text CBH format, use write_cbh_text() instead.
         """
         pass
 
@@ -299,6 +313,13 @@ class PywatershedOutputPlugin:
 
 ### 2D: Key Implementation Considerations
 
+**Forcing Input Format**: pywatershed's ``PRMSAtmosphere`` constructor accepts
+``Union[str, Path, ndarray, Adapter]`` for ``prcp``, ``tmax``, ``tmin``,
+``soltab_potsw``, and ``soltab_horad_potsw``. The preferred modern approach is
+one-variable-per-NetCDF-file (e.g. ``prcp.nc``, ``tmax.nc``, ``tmin.nc``).
+Parameters are loaded via ``pws.Parameters.from_netcdf()``. Legacy PRMS CBH
+text format is supported only as an optional secondary output.
+
 **Unit Conversions**: PRMS internally uses feet, inches, Fahrenheit, and acres.
 Most source data comes in metric (meters, mm, °C). The output plugin must
 handle all conversions. This is a common source of bugs — keep a conversion
@@ -337,7 +358,10 @@ For quick reference, here are the 8 pywatershed process classes and their
 key I/O signatures:
 
 ### PRMSAtmosphere(control, discretization, parameters, prcp, tmax, tmin, soltab_potsw, soltab_horad_potsw)
-- **External inputs**: prcp, tmax, tmin (CBH), soltab tables
+
+- **External inputs**: prcp, tmax, tmin (forcing NetCDF or Adapter), soltab tables
+  - Each forcing input accepts ``Union[str, Path, ndarray, Adapter]``
+  - Preferred modern format: one-variable-per-NetCDF-file (prcp.nc, tmax.nc, tmin.nc)
 - **Key parameters**: *_cbh_adj, tmax_allsnow, tmax_allrain_offset, jh_coef, jh_coef_hru, dday_slope, dday_intcp, transp_beg, transp_end
 - **Outputs → downstream**: tmaxf, tminf, prmx, hru_ppt, hru_rain, hru_snow, swrad, potet, transp_on
 

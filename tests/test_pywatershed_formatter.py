@@ -47,8 +47,8 @@ def param_dataset() -> xr.Dataset:
 
 
 @pytest.fixture()
-def cbh_dataset() -> xr.Dataset:
-    """Synthetic CBH time series (metric source units)."""
+def forcing_dataset() -> xr.Dataset:
+    """Synthetic forcing time series (metric source units)."""
     nhru = 3
     ntime = 5
     return xr.Dataset(
@@ -85,8 +85,8 @@ class TestWriteParameters:
         assert "tmax_allsnow" in ds
         ds.close()
 
-    def test_excludes_cbh_vars(self, formatter: PywatershedFormatter, tmp_path: Path) -> None:
-        """CBH variables (prcp, tmax, tmin) are excluded from params file."""
+    def test_excludes_forcing_vars(self, formatter: PywatershedFormatter, tmp_path: Path) -> None:
+        """Forcing variables (prcp, tmax, tmin) are excluded from params file."""
         ds = xr.Dataset(
             {
                 "hru_elev": ("nhru", np.array([100.0])),
@@ -113,20 +113,20 @@ class TestWriteParameters:
         ds.close()
 
 
-class TestWriteCBH:
-    """Tests for write_cbh()."""
+class TestWriteForcingNetcdf:
+    """Tests for write_forcing_netcdf()."""
 
     def test_creates_files(
-        self, formatter: PywatershedFormatter, cbh_dataset: xr.Dataset, tmp_path: Path
+        self, formatter: PywatershedFormatter, forcing_dataset: xr.Dataset, tmp_path: Path
     ) -> None:
-        paths = formatter.write_cbh(cbh_dataset, tmp_path / "cbh")
+        paths = formatter.write_forcing_netcdf(forcing_dataset, tmp_path / "forcing")
         assert len(paths) == 3
         assert all(p.exists() for p in paths)
 
     def test_prcp_mm_to_inches(
-        self, formatter: PywatershedFormatter, cbh_dataset: xr.Dataset, tmp_path: Path
+        self, formatter: PywatershedFormatter, forcing_dataset: xr.Dataset, tmp_path: Path
     ) -> None:
-        paths = formatter.write_cbh(cbh_dataset, tmp_path / "cbh")
+        paths = formatter.write_forcing_netcdf(forcing_dataset, tmp_path / "forcing")
         prcp_path = [p for p in paths if p.name == "prcp.nc"][0]
         ds = xr.open_dataset(prcp_path)
         # 25.4 mm → 1.0 inch
@@ -135,9 +135,9 @@ class TestWriteCBH:
         ds.close()
 
     def test_tmax_c_to_f(
-        self, formatter: PywatershedFormatter, cbh_dataset: xr.Dataset, tmp_path: Path
+        self, formatter: PywatershedFormatter, forcing_dataset: xr.Dataset, tmp_path: Path
     ) -> None:
-        paths = formatter.write_cbh(cbh_dataset, tmp_path / "cbh")
+        paths = formatter.write_forcing_netcdf(forcing_dataset, tmp_path / "forcing")
         tmax_path = [p for p in paths if p.name == "tmax.nc"][0]
         ds = xr.open_dataset(tmax_path)
         # 0°C → 32°F
@@ -146,20 +146,20 @@ class TestWriteCBH:
         ds.close()
 
     def test_tmin_c_to_f(
-        self, formatter: PywatershedFormatter, cbh_dataset: xr.Dataset, tmp_path: Path
+        self, formatter: PywatershedFormatter, forcing_dataset: xr.Dataset, tmp_path: Path
     ) -> None:
-        paths = formatter.write_cbh(cbh_dataset, tmp_path / "cbh")
+        paths = formatter.write_forcing_netcdf(forcing_dataset, tmp_path / "forcing")
         tmin_path = [p for p in paths if p.name == "tmin.nc"][0]
         ds = xr.open_dataset(tmin_path)
         # -10°C → 14°F
         np.testing.assert_allclose(ds["tmin"].values, 14.0)
         ds.close()
 
-    def test_skips_when_no_cbh(
+    def test_skips_when_no_forcing(
         self, formatter: PywatershedFormatter, param_dataset: xr.Dataset, tmp_path: Path
     ) -> None:
-        """No CBH vars → no CBH files, no error."""
-        paths = formatter.write_cbh(param_dataset, tmp_path / "cbh")
+        """No forcing vars → no forcing files, no error."""
+        paths = formatter.write_forcing_netcdf(param_dataset, tmp_path / "forcing")
         assert paths == []
 
 
@@ -224,13 +224,13 @@ class TestWrite:
     ) -> None:
         config = {
             "parameter_file": "parameters.nc",
-            "cbh_dir": "cbh",
+            "forcing_dir": "forcing",
             "control_file": "control.yml",
             "start": "1980-10-01",
             "end": "2020-09-30",
         }
         paths = formatter.write(param_dataset, tmp_path, config)
-        # Should have at least params + control (no CBH/soltab in this dataset)
+        # Should have at least params + control (no forcing/soltab in this dataset)
         assert len(paths) >= 2
         names = [p.name for p in paths]
         assert "parameters.nc" in names
