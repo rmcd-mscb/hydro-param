@@ -161,11 +161,9 @@ pixi run -e dev check
 
 | Environment | Purpose |
 |---|---|
-| `dev` | Day-to-day development |
-| `test-py311` | CI: test on Python 3.11 |
-| `test-py312` | CI: test on Python 3.12 |
-| `full` | All optional dependencies (gdp, regrid, parallel) |
-| `download` | Data download scripts (pynhd) |
+| `default` | Core dependencies only |
+| `dev` | Day-to-day development (default + testing/linting tools) |
+| `docs` | Documentation building (mkdocs-material, mkdocstrings) |
 
 ## Architecture Guidelines
 
