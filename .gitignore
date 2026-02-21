@@ -23,9 +23,9 @@ venv/
 Thumbs.db
 
 # Data & outputs (large files)
-data/
+data/*
+!data/pywatershed_gis/
 *.zarr/
-*.nc
 *.tif
 *.tiff
 weights/
