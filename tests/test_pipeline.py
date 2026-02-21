@@ -17,12 +17,14 @@ from shapely.geometry import Point, box
 from hydro_param.config import PipelineConfig, load_config
 from hydro_param.dataset_registry import load_registry
 from hydro_param.pipeline import (
+    Stage4Results,
+    _process_temporal,
     resolve_bbox,
     stage1_resolve_fabric,
     stage2_resolve_datasets,
     stage5_format_output,
 )
-from hydro_param.processing import ZonalProcessor, get_processor
+from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -723,3 +725,280 @@ def test_process_nhgf_stac_integration(tmp_path: Path):
 
     assert list(result.columns) == ["majority"]
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# Temporal processing
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_processor_has_nhgf_stac_method():
+    proc = TemporalProcessor()
+    assert hasattr(proc, "process_nhgf_stac")
+    assert callable(proc.process_nhgf_stac)
+
+
+def test_temporal_processor_has_climr_cat_method():
+    proc = TemporalProcessor()
+    assert hasattr(proc, "process_climr_cat")
+    assert callable(proc.process_climr_cat)
+
+
+def test_stage4_results_dataclass():
+    r = Stage4Results()
+    assert r.static == {}
+    assert r.temporal == {}
+
+    r2 = Stage4Results(
+        static={"elev": pd.DataFrame({"mean": [1.0]})},
+        temporal={"snodas": xr.Dataset({"SWE": (["time", "hru_id"], [[1.0]])})},
+    )
+    assert "elev" in r2.static
+    assert "snodas" in r2.temporal
+
+
+def test_stage5_handles_stage4_results(config_yaml: Path, fabric_gpkg: Path):
+    """stage5 accepts Stage4Results and writes temporal files separately."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+
+    static = {
+        "elevation": pd.DataFrame(
+            {"mean": [100.0, 200.0, 300.0, 400.0]},
+            index=pd.Index([1, 2, 3, 4], name="featureid"),
+        ),
+    }
+    temporal = {
+        "snodas": xr.Dataset(
+            {"SWE": (["time", "hru_id"], [[1.0, 2.0, 3.0, 4.0]])},
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "hru_id": [1, 2, 3, 4],
+            },
+        ),
+    }
+
+    results = Stage4Results(static=static, temporal=temporal)
+    sir = stage5_format_output(results, config, fabric)
+
+    assert isinstance(sir, xr.Dataset)
+    assert "elevation" in sir.data_vars
+
+    # Check temporal file was written
+    output_dir = config.output.path
+    temporal_path = output_dir / f"{config.output.sir_name}_snodas_temporal.nc"
+    assert temporal_path.exists()
+
+    loaded = xr.open_dataset(temporal_path)
+    assert "SWE" in loaded.data_vars
+    loaded.close()
+
+
+def test_stage5_backward_compat_dict(config_yaml: Path, fabric_gpkg: Path):
+    """stage5 still accepts a plain dict for backward compatibility."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+
+    results = {
+        "elevation": pd.DataFrame(
+            {"mean": [100.0, 200.0, 300.0, 400.0]},
+            index=pd.Index([1, 2, 3, 4], name="featureid"),
+        ),
+    }
+
+    sir = stage5_format_output(results, config, fabric)
+    assert isinstance(sir, xr.Dataset)
+    assert "elevation" in sir.data_vars
+
+
+def test_temporal_requires_time_period(tmp_path: Path):
+    """stage2 raises if temporal dataset has no time_period."""
+    reg_raw = {
+        "datasets": {
+            "snodas": {
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "temporal": True,
+                "t_coord": "time",
+                "variables": [{"name": "SWE", "band": 1}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "snodas", "variables": ["SWE"]},  # no time_period
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="temporal but no 'time_period'"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_process_temporal_nhgf_stac_dispatch(tmp_path: Path):
+    """_process_temporal dispatches to TemporalProcessor.process_nhgf_stac."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    var_spec = VariableSpec(name="SWE", band=1)
+    ds_req = DatasetRequest(
+        name="snodas",
+        variables=["SWE"],
+        statistics=["mean"],
+        time_period=["2020-01-01", "2020-01-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0]])})
+
+    with patch.object(TemporalProcessor, "process_nhgf_stac", return_value=mock_ds) as mock_method:
+        result = _process_temporal(fabric, entry, ds_req, [var_spec], config)
+        mock_method.assert_called_once()
+        call_kwargs = mock_method.call_args.kwargs
+        assert call_kwargs["collection_id"] == "snodas"
+        assert call_kwargs["time_period"] == ["2020-01-01", "2020-01-31"]
+        assert call_kwargs["stat_method"] == "mean"
+
+    assert isinstance(result, xr.Dataset)
+
+
+def test_process_temporal_climr_cat_dispatch(tmp_path: Path):
+    """_process_temporal dispatches to TemporalProcessor.process_climr_cat."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="climr_cat",
+        catalog_id="gridmet",
+        temporal=True,
+        t_coord="day",
+    )
+    var_spec = VariableSpec(name="pr", band=1)
+    ds_req = DatasetRequest(
+        name="gridmet",
+        variables=["pr"],
+        statistics=["mean"],
+        time_period=["2020-01-01", "2020-01-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_ds = xr.Dataset({"pr": (["time", "hru_id"], [[1.0, 2.0]])})
+
+    with patch.object(TemporalProcessor, "process_climr_cat", return_value=mock_ds) as mock_method:
+        result = _process_temporal(fabric, entry, ds_req, [var_spec], config)
+        mock_method.assert_called_once()
+        call_kwargs = mock_method.call_args.kwargs
+        assert call_kwargs["catalog_id"] == "gridmet"
+        assert call_kwargs["time_period"] == ["2020-01-01", "2020-01-31"]
+
+    assert isinstance(result, xr.Dataset)
+
+
+def test_process_temporal_rejects_derived():
+    """_process_temporal raises for DerivedVariableSpec."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, DerivedVariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    derived = DerivedVariableSpec(name="slope", source="elevation", method="horn")
+    ds_req = DatasetRequest(
+        name="snodas",
+        variables=["slope"],
+        time_period=["2020-01-01", "2020-12-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(NotImplementedError, match="Derived variables not supported"):
+        _process_temporal(fabric, entry, ds_req, [derived], config)
+
+
+def test_process_temporal_unsupported_strategy():
+    """_process_temporal raises for unsupported strategy."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com/stac",
+        collection="test",
+        temporal=True,
+        t_coord="time",
+    )
+    var_spec = VariableSpec(name="test_var", band=1)
+    ds_req = DatasetRequest(
+        name="test",
+        variables=["test_var"],
+        time_period=["2020-01-01", "2020-12-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(NotImplementedError, match="Temporal processing not supported"):
+        _process_temporal(fabric, entry, ds_req, [var_spec], config)

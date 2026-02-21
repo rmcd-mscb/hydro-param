@@ -179,3 +179,59 @@ def test_dataset_request_year_rejects_invalid():
         DatasetRequest(name="test", year=1800)
     with pytest.raises(ValidationError):
         DatasetRequest(name="test", year=2200)
+
+
+# ---------------------------------------------------------------------------
+# time_period field
+# ---------------------------------------------------------------------------
+
+
+def test_dataset_request_time_period():
+    ds = DatasetRequest(
+        name="snodas",
+        variables=["SWE"],
+        time_period=["2020-01-01", "2020-12-31"],
+    )
+    assert ds.time_period == ["2020-01-01", "2020-12-31"]
+
+
+def test_dataset_request_time_period_default_none():
+    ds = DatasetRequest(name="dem")
+    assert ds.time_period is None
+
+
+def test_dataset_request_time_period_requires_two_elements():
+    with pytest.raises(ValidationError):
+        DatasetRequest(name="test", time_period=["2020-01-01"])
+    with pytest.raises(ValidationError):
+        DatasetRequest(name="test", time_period=["2020-01-01", "2020-06-01", "2020-12-31"])
+
+
+def test_dataset_request_time_period_validates_date_format():
+    with pytest.raises(ValidationError, match="valid ISO format"):
+        DatasetRequest(name="test", time_period=["not-a-date", "2020-12-31"])
+
+
+def test_dataset_request_time_period_validates_date_order():
+    with pytest.raises(ValidationError, match="start.*must be <= end"):
+        DatasetRequest(name="test", time_period=["2021-01-01", "2020-12-31"])
+
+
+def test_dataset_request_time_period_from_yaml(tmp_path: Path):
+    raw = {
+        "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {
+                "name": "snodas",
+                "variables": ["SWE"],
+                "statistics": ["mean"],
+                "time_period": ["2020-01-01", "2020-12-31"],
+            },
+        ],
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert config.datasets[0].time_period == ["2020-01-01", "2020-12-31"]

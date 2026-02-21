@@ -265,6 +265,170 @@ class ZonalProcessor:
         return result_df
 
 
+class TemporalProcessor:
+    """Temporal aggregation using gdptools WeightGen + AggGen.
+
+    Handles time-varying datasets (e.g. SNODAS, gridMET) that produce
+    ``xr.Dataset`` output with ``(time, features)`` dimensions.
+    """
+
+    def process_nhgf_stac(
+        self,
+        fabric: gpd.GeoDataFrame,
+        collection_id: str,
+        variable_names: list[str],
+        id_field: str,
+        time_period: list[str],
+        *,
+        stat_method: str = "mean",
+        weight_gen_crs: int = 6931,
+    ) -> xr.Dataset:
+        """Compute temporal aggregation from an NHGF STAC Zarr collection.
+
+        Parameters
+        ----------
+        fabric : gpd.GeoDataFrame
+            Target polygons.
+        collection_id : str
+            NHGF STAC collection identifier.
+        variable_names : list[str]
+            Variables to process.
+        id_field : str
+            Column name for feature IDs in the fabric.
+        time_period : list[str]
+            ``[start, end]`` ISO date strings.
+        stat_method : str
+            Aggregation statistic (e.g. ``"mean"``, ``"median"``).
+        weight_gen_crs : int
+            CRS for weight generation (default: 6931 = LAEA).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``(time, features)`` dimensions.
+        """
+        from gdptools import AggGen, NHGFStacData, WeightGen
+        from gdptools.helpers import get_stac_collection
+
+        logger.info(
+            "NHGF STAC temporal: collection='%s' vars=%s period=%s stat=%s",
+            collection_id,
+            variable_names,
+            time_period,
+            stat_method,
+        )
+
+        collection = get_stac_collection(collection_id)
+        nhgf_data = NHGFStacData(
+            source_collection=collection,
+            source_var=variable_names,
+            target_gdf=fabric[[id_field, "geometry"]].copy(),
+            target_id=id_field,
+            source_time_period=cast("list[Any]", time_period),
+        )
+        wg = WeightGen(
+            user_data=cast("Any", nhgf_data),
+            method="serial",
+            weight_gen_crs=weight_gen_crs,
+        )
+        weights = wg.calculate_weights()
+        ag = AggGen(
+            user_data=cast("Any", nhgf_data),
+            stat_method=cast("Any", stat_method),
+            agg_engine="serial",
+            agg_writer="csv",
+            weights=weights,
+        )
+        _gdf, ds = ag.calculate_agg()
+
+        logger.info(
+            "  Temporal result: %d vars, %d time steps, %d features",
+            len(ds.data_vars),
+            ds.sizes.get("time", 0),
+            ds.sizes.get(id_field, len(fabric)),
+        )
+        return ds
+
+    def process_climr_cat(
+        self,
+        fabric: gpd.GeoDataFrame,
+        catalog_id: str,
+        variable_names: list[str],
+        id_field: str,
+        time_period: list[str],
+        *,
+        stat_method: str = "mean",
+        weight_gen_crs: int = 6931,
+    ) -> xr.Dataset:
+        """Compute temporal aggregation from a ClimateR-Catalog dataset.
+
+        Parameters
+        ----------
+        fabric : gpd.GeoDataFrame
+            Target polygons.
+        catalog_id : str
+            ClimateR catalog identifier (e.g. ``"gridmet"``).
+        variable_names : list[str]
+            Variables to process.
+        id_field : str
+            Column name for feature IDs in the fabric.
+        time_period : list[str]
+            ``[start, end]`` ISO date strings.
+        stat_method : str
+            Aggregation statistic (e.g. ``"mean"``, ``"median"``).
+        weight_gen_crs : int
+            CRS for weight generation (default: 6931 = LAEA).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``(time, features)`` dimensions.
+        """
+        from gdptools import AggGen, ClimRCatData, WeightGen
+
+        from hydro_param.data_access import build_climr_cat_dict, load_climr_catalog
+
+        logger.info(
+            "ClimR-Cat temporal: catalog_id='%s' vars=%s period=%s stat=%s",
+            catalog_id,
+            variable_names,
+            time_period,
+            stat_method,
+        )
+
+        catalog = load_climr_catalog()
+        source_cat_dict = build_climr_cat_dict(catalog, catalog_id, variable_names)
+
+        climr_data = ClimRCatData(
+            source_cat_dict=source_cat_dict,
+            target_gdf=fabric[[id_field, "geometry"]].copy(),
+            target_id=id_field,
+            source_time_period=cast("list[Any]", time_period),
+        )
+        wg = WeightGen(
+            user_data=cast("Any", climr_data),
+            method="serial",
+            weight_gen_crs=weight_gen_crs,
+        )
+        weights = wg.calculate_weights()
+        ag = AggGen(
+            user_data=cast("Any", climr_data),
+            stat_method=cast("Any", stat_method),
+            agg_engine="serial",
+            agg_writer="csv",
+            weights=weights,
+        )
+        _gdf, ds = ag.calculate_agg()
+
+        logger.info(
+            "  Temporal result: %d vars, %d time steps, %d features",
+            len(ds.data_vars),
+            ds.sizes.get("time", 0),
+            ds.sizes.get(id_field, len(fabric)),
+        )
+        return ds
+
+
 def get_processor(fabric: gpd.GeoDataFrame) -> Processor:
     """Select the appropriate processor for a fabric geometry type.
 
