@@ -208,7 +208,7 @@ def test_fetch_local_tiff_no_source_suggests_config():
         fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0])
     msg = str(exc_info.value)
     assert "pipeline config" in msg
-    assert "your_dataset_name" in msg
+    assert "unknown" in msg
 
 
 def test_fetch_local_tiff_no_source_includes_template_info():
