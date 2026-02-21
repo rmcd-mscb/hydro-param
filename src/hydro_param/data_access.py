@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+import xarray as xr
 
 if TYPE_CHECKING:
-    import xarray as xr
-
     from hydro_param.dataset_registry import DatasetEntry
 
 logger = logging.getLogger(__name__)
@@ -189,6 +188,11 @@ def fetch_stac_cog(
     import pystac_client
     import rioxarray  # noqa: F401
 
+    if entry.catalog_url is None:
+        raise ValueError("stac_cog strategy requires 'catalog_url' on the dataset entry")
+    if entry.collection is None:
+        raise ValueError("stac_cog strategy requires 'collection' on the dataset entry")
+
     logger.info(
         "Querying STAC: catalog=%s collection=%s bbox=%s",
         entry.catalog_url,
@@ -226,7 +230,7 @@ def fetch_stac_cog(
     arrays = []
     for item in items:
         asset = item.assets[entry.asset_key]
-        da = rioxarray.open_rasterio(asset.href, masked=True)
+        da = cast(xr.DataArray, rioxarray.open_rasterio(asset.href, masked=True))
         da = da.squeeze("band", drop=True)
         try:
             da = da.rio.clip_box(minx=bbox[0], miny=bbox[1], maxx=bbox[2], maxy=bbox[3])
@@ -336,7 +340,7 @@ def fetch_local_tiff(
 
     logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
 
-    da = rioxarray.open_rasterio(source_path, masked=True)
+    da = cast(xr.DataArray, rioxarray.open_rasterio(source_path, masked=True))
     da = da.squeeze("band", drop=True)
 
     try:
