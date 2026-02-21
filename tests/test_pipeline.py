@@ -5,6 +5,7 @@ Tests focus on the pipeline stages that don't require gdptools
 Processing tests are integration-level and require gdptools.
 """
 
+import logging
 from pathlib import Path
 
 import geopandas as gpd
@@ -1002,3 +1003,116 @@ def test_process_temporal_unsupported_strategy():
 
     with pytest.raises(NotImplementedError, match="Temporal processing not supported"):
         _process_temporal(fabric, entry, ds_req, [var_spec], config)
+
+
+def test_process_temporal_empty_statistics_raises():
+    """_process_temporal raises if statistics list is empty."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    var_spec = VariableSpec(name="SWE", band=1)
+    ds_req = DatasetRequest(
+        name="snodas",
+        variables=["SWE"],
+        statistics=[],
+        time_period=["2020-01-01", "2020-12-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(ValueError, match="no statistics specified"):
+        _process_temporal(fabric, entry, ds_req, [var_spec], config)
+
+
+def test_process_temporal_multi_statistics_warns(caplog: pytest.LogCaptureFixture):
+    """_process_temporal warns when multiple statistics are provided."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+    )
+    var_spec = VariableSpec(name="SWE", band=1)
+    ds_req = DatasetRequest(
+        name="snodas",
+        variables=["SWE"],
+        statistics=["mean", "median"],
+        time_period=["2020-01-01", "2020-01-31"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0]])})
+
+    with (
+        patch.object(TemporalProcessor, "process_nhgf_stac", return_value=mock_ds),
+        caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"),
+    ):
+        _process_temporal(fabric, entry, ds_req, [var_spec], config)
+
+    assert "only 'mean' will be used" in caplog.text
+
+
+def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, caplog):
+    """stage5 skips writing static SIR when there are no static results."""
+    import logging
+
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+
+    temporal = {
+        "snodas": xr.Dataset(
+            {"SWE": (["time", "hru_id"], [[1.0, 2.0, 3.0, 4.0]])},
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "hru_id": [1, 2, 3, 4],
+            },
+        ),
+    }
+
+    results = Stage4Results(static={}, temporal=temporal)
+
+    with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
+        sir = stage5_format_output(results, config, fabric)
+
+    assert len(sir.data_vars) == 0
+    assert "No static results" in caplog.text
+
+    # Static SIR file should NOT exist
+    static_path = config.output.path / f"{config.output.sir_name}.nc"
+    assert not static_path.exists()
+
+    # Temporal file SHOULD exist
+    temporal_path = config.output.path / f"{config.output.sir_name}_snodas_temporal.nc"
+    assert temporal_path.exists()

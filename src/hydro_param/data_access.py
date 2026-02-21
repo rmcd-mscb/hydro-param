@@ -441,11 +441,17 @@ def build_climr_cat_dict(
     ValueError
         If a variable is not found in the catalog for the given id.
     """
+    if catalog_id not in catalog["id"].values:
+        available_ids = sorted(catalog["id"].unique())
+        raise ValueError(
+            f"Catalog ID '{catalog_id}' not found in ClimateR catalog. Available: {available_ids}"
+        )
+
     source_cat_dict: dict[str, dict[str, Any]] = {}
     for var_name in variable_names:
-        matches = catalog.query(f"id == '{catalog_id}' and variable == '{var_name}'")
+        matches = catalog[(catalog["id"] == catalog_id) & (catalog["variable"] == var_name)]
         if matches.empty:
-            available = sorted(catalog.query(f"id == '{catalog_id}'")["variable"].unique())
+            available = sorted(catalog.loc[catalog["id"] == catalog_id, "variable"].unique())
             raise ValueError(
                 f"Variable '{var_name}' not found in ClimateR catalog for '{catalog_id}'. "
                 f"Available: {available}"

@@ -332,6 +332,22 @@ def _process_temporal(
         raise NotImplementedError("Derived variables not supported for temporal datasets")
 
     time_period = cast(list[str], ds_req.time_period)
+
+    if not ds_req.statistics:
+        raise ValueError(
+            f"Dataset '{ds_req.name}' is temporal but has no statistics specified. "
+            "Temporal datasets require at least one statistic (e.g., 'mean')."
+        )
+
+    if len(ds_req.statistics) > 1:
+        logger.warning(
+            "Temporal processing for '%s' supports a single statistic. "
+            "Multiple statistics provided (%s); only '%s' will be used.",
+            ds_req.name,
+            ds_req.statistics,
+            ds_req.statistics[0],
+        )
+
     stat_method = ds_req.statistics[0]
 
     if entry.strategy == "nhgf_stac":
@@ -483,14 +499,17 @@ def stage5_format_output(
     output_dir = config.output.path
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if config.output.format == "netcdf":
-        out_path = output_dir / f"{config.output.sir_name}.nc"
-        sir.to_netcdf(out_path)
-        logger.info("Wrote SIR → %s", out_path)
-    elif config.output.format == "parquet":
-        out_path = output_dir / f"{config.output.sir_name}.parquet"
-        sir.to_dataframe().to_parquet(out_path)
-        logger.info("Wrote SIR → %s", out_path)
+    if data_vars:
+        if config.output.format == "netcdf":
+            out_path = output_dir / f"{config.output.sir_name}.nc"
+            sir.to_netcdf(out_path)
+            logger.info("Wrote SIR → %s", out_path)
+        elif config.output.format == "parquet":
+            out_path = output_dir / f"{config.output.sir_name}.parquet"
+            sir.to_dataframe().to_parquet(out_path)
+            logger.info("Wrote SIR → %s", out_path)
+    else:
+        logger.warning("No static results to write; skipping static SIR file.")
 
     # Write temporal results as separate files
     for ds_name, ds in temporal_results.items():
