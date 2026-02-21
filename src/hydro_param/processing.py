@@ -319,6 +319,7 @@ class TemporalProcessor:
         )
 
         collection = get_stac_collection(collection_id)
+
         nhgf_data = NHGFStacData(
             source_collection=collection,
             source_var=variable_names,
@@ -336,7 +337,7 @@ class TemporalProcessor:
             user_data=cast("Any", nhgf_data),
             stat_method=cast("Any", stat_method),
             agg_engine="serial",
-            agg_writer="csv",
+            agg_writer="none",
             weights=weights,
         )
         _gdf, ds = ag.calculate_agg()
@@ -415,7 +416,7 @@ class TemporalProcessor:
             user_data=cast("Any", climr_data),
             stat_method=cast("Any", stat_method),
             agg_engine="serial",
-            agg_writer="csv",
+            agg_writer="none",
             weights=weights,
         )
         _gdf, ds = ag.calculate_agg()
