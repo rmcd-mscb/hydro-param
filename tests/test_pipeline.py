@@ -1086,8 +1086,6 @@ def test_process_temporal_multi_statistics_warns(caplog: pytest.LogCaptureFixtur
 
 def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, caplog):
     """stage5 skips writing static SIR when there are no static results."""
-    import logging
-
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
 
