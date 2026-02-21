@@ -521,6 +521,36 @@ class TestTopologyValidation:
         ds = derivation.derive(sir, fabric=fabric, segments=segments)
         assert ds["hru_segment"].values[0] == 0
 
+    def test_missing_tosegment_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1]},  # no tosegment column
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="missing required 'tosegment'"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
+    def test_missing_hru_segment_raises(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"hru_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1]},  # no hru_segment column
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="missing required 'hru_segment'"):
+            derivation.derive(sir, fabric=fabric, segments=segments)
+
 
 # ------------------------------------------------------------------
 # Integration tests with real pywatershed GIS data
@@ -567,12 +597,20 @@ class TestTopologyIntegrationDRB:
         return gpd.read_file(_DRB_DIR / "nsegment.gpkg")
 
     @pytest.fixture()
-    def drb_params_dis_both(self) -> xr.Dataset:
-        return xr.open_dataset(_DRB_DIR / "parameters_dis_both.nc")
+    def drb_params_dis_both(self) -> xr.Dataset:  # type: ignore[misc]
+        ds = xr.open_dataset(_DRB_DIR / "parameters_dis_both.nc")
+        try:
+            yield ds
+        finally:
+            ds.close()
 
     @pytest.fixture()
-    def drb_params_channel(self) -> xr.Dataset:
-        return xr.open_dataset(_DRB_DIR / "parameters_PRMSChannel.nc")
+    def drb_params_channel(self) -> xr.Dataset:  # type: ignore[misc]
+        ds = xr.open_dataset(_DRB_DIR / "parameters_PRMSChannel.nc")
+        try:
+            yield ds
+        finally:
+            ds.close()
 
     def test_drb_domain_sizes(
         self,

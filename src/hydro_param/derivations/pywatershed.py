@@ -207,14 +207,22 @@ class PywatershedDerivation:
         ds
             Output dataset being constructed.
         fabric
-            HRU polygon GeoDataFrame.  Expected column: ``hru_segment``.
+            HRU polygon GeoDataFrame.  Required columns: ``hru_segment``
+            and the column named by ``id_field``.
         segments
-            Stream segment line GeoDataFrame.  Expected columns:
-            ``tosegment`` and optionally ``seg_length``.
+            Stream segment line GeoDataFrame.  Required column:
+            ``tosegment``.  Optional: ``seg_length``.
         id_field
-            Column name for HRU identifiers.
+            Column name for HRU identifiers in the fabric.  Used to
+            align fabric rows to ``ds.coords['nhru']``.
         segment_id_field
             Column name for segment identifiers.
+
+        Raises
+        ------
+        ValueError
+            If required columns (``tosegment``, ``hru_segment``) are
+            missing from the GeoDataFrames.
         """
         nseg = len(segments)
 
@@ -226,34 +234,47 @@ class PywatershedDerivation:
         ds = ds.assign_coords(nsegment=seg_ids)
 
         # --- tosegment ---
-        if "tosegment" in segments.columns:
-            tosegment = segments["tosegment"].values.astype(np.int64)
-            self._validate_tosegment(tosegment, nseg)
-            ds["tosegment"] = xr.DataArray(
-                tosegment,
-                dims="nsegment",
-                attrs={
-                    "units": "none",
-                    "long_name": "Index of downstream segment (0=outlet)",
-                },
-            )
-        else:
-            logger.warning("No 'tosegment' column in segments GeoDataFrame")
+        if "tosegment" not in segments.columns:
+            raise ValueError("segments GeoDataFrame missing required 'tosegment' column")
+        tosegment = segments["tosegment"].values.astype(np.int64)
+        self._validate_tosegment(tosegment, nseg)
+        ds["tosegment"] = xr.DataArray(
+            tosegment,
+            dims="nsegment",
+            attrs={
+                "units": "none",
+                "long_name": "Index of downstream segment (0=outlet)",
+            },
+        )
 
         # --- hru_segment ---
-        if "hru_segment" in fabric.columns:
-            hru_segment = fabric["hru_segment"].values.astype(np.int64)
-            self._validate_hru_segment(hru_segment, nseg)
-            ds["hru_segment"] = xr.DataArray(
-                hru_segment,
-                dims="nhru",
-                attrs={
-                    "units": "none",
-                    "long_name": "Index of segment to which HRU contributes flow",
-                },
-            )
+        if "hru_segment" not in fabric.columns:
+            raise ValueError("fabric GeoDataFrame missing required 'hru_segment' column")
+
+        # Align fabric rows to ds.coords['nhru'] via id_field
+        if "nhru" in ds.coords and id_field in fabric.columns:
+            hru_ids = ds.coords["nhru"].values
+            fabric_indexed = fabric.set_index(id_field)
+            if fabric_indexed.index.has_duplicates:
+                raise ValueError(f"Duplicate HRU IDs in fabric column '{id_field}'")
+            missing = np.setdiff1d(hru_ids, np.asarray(fabric_indexed.index))
+            if missing.size > 0:
+                raise ValueError(
+                    f"HRU IDs in dataset missing from fabric '{id_field}': {missing.tolist()}"
+                )
+            hru_segment = fabric_indexed.loc[hru_ids, "hru_segment"].values.astype(np.int64)
         else:
-            logger.warning("No 'hru_segment' column in fabric GeoDataFrame")
+            hru_segment = fabric["hru_segment"].values.astype(np.int64)
+
+        self._validate_hru_segment(hru_segment, nseg)
+        ds["hru_segment"] = xr.DataArray(
+            hru_segment,
+            dims="nhru",
+            attrs={
+                "units": "none",
+                "long_name": "Index of segment to which HRU contributes flow",
+            },
+        )
 
         # --- seg_length ---
         seg_length = self._compute_seg_length(segments)
@@ -273,9 +294,9 @@ class PywatershedDerivation:
         """Compute segment length from column or geodesic calculation.
 
         Uses ``seg_length`` column if present, otherwise computes
-        geodesic length from segment line geometries.  Handles both
-        geographic (EPSG:4326) and projected CRS by reprojecting to
-        geographic coordinates before geodesic calculation.
+        geodesic length from segment line geometries using
+        ``pyproj.Geod.geometry_length``.  Handles LineString,
+        MultiLineString, and projected CRS (auto-reprojects to WGS84).
         """
         if "seg_length" in segments.columns:
             return segments["seg_length"].values.astype(np.float64)
@@ -292,18 +313,7 @@ class PywatershedDerivation:
             if geom is None or geom.is_empty:
                 lengths[i] = 0.0
             else:
-                # Extract 2D coords (drop Z if present)
-                coords = [(c[0], c[1]) for c in geom.coords]
-                if len(coords) < 2:
-                    lengths[i] = 0.0
-                else:
-                    lons = [c[0] for c in coords]
-                    lats = [c[1] for c in coords]
-                    total = 0.0
-                    for j in range(len(lons) - 1):
-                        _, _, dist = geod.inv(lons[j], lats[j], lons[j + 1], lats[j + 1])
-                        total += dist
-                    lengths[i] = total
+                lengths[i] = geod.geometry_length(geom)
         return lengths
 
     @staticmethod
