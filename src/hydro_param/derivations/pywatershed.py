@@ -136,7 +136,6 @@ class PywatershedDerivation:
                 segments=segments,
                 id_field=id_field,
                 segment_id_field=segment_id_field,
-                config=config,
             )
 
         # Step 3: Topographic parameters (hru_elev, hru_slope, hru_aspect)
@@ -196,31 +195,26 @@ class PywatershedDerivation:
         segments: gpd.GeoDataFrame,
         id_field: str,
         segment_id_field: str,
-        config: dict,
     ) -> xr.Dataset:
         """Step 2: Extract routing topology from GeoDataFrames.
 
-        Extracts ``tosegment``, ``hru_segment``, and ``seg_length`` from
-        the fabric and segment GeoDataFrames.  Topology attributes
-        (``tosegment``, ``hru_segment``) are read from a companion
-        parameter dataset specified in ``config["topology_source"]``,
-        or directly from GeoDataFrame columns if present.
+        Extracts ``tosegment``, ``hru_segment``, and ``seg_length``
+        directly from GeoDataFrame columns.  The input fabric should
+        carry these as attributes (e.g., from the Geospatial Fabric).
 
         Parameters
         ----------
         ds
             Output dataset being constructed.
         fabric
-            HRU polygon GeoDataFrame.
+            HRU polygon GeoDataFrame.  Expected column: ``hru_segment``.
         segments
-            Stream segment line GeoDataFrame.
+            Stream segment line GeoDataFrame.  Expected columns:
+            ``tosegment`` and optionally ``seg_length``.
         id_field
             Column name for HRU identifiers.
         segment_id_field
             Column name for segment identifiers.
-        config
-            Derivation config; may contain ``topology_source`` (path to
-            a parameter NetCDF with ``tosegment`` and ``hru_segment``).
         """
         nseg = len(segments)
 
@@ -231,16 +225,9 @@ class PywatershedDerivation:
             seg_ids = np.arange(1, nseg + 1)
         ds = ds.assign_coords(nsegment=seg_ids)
 
-        # Load topology source (parameter NetCDF) if provided
-        topo_src: xr.Dataset | None = None
-        topo_path = config.get("topology_source")
-        if topo_path is not None:
-            topo_src = xr.open_dataset(topo_path)
-            logger.info("Loaded topology source: %s", topo_path)
-
         # --- tosegment ---
-        tosegment = self._extract_tosegment(segments, topo_src)
-        if tosegment is not None:
+        if "tosegment" in segments.columns:
+            tosegment = segments["tosegment"].values.astype(np.int64)
             self._validate_tosegment(tosegment, nseg)
             ds["tosegment"] = xr.DataArray(
                 tosegment,
@@ -250,10 +237,12 @@ class PywatershedDerivation:
                     "long_name": "Index of downstream segment (0=outlet)",
                 },
             )
+        else:
+            logger.warning("No 'tosegment' column in segments GeoDataFrame")
 
         # --- hru_segment ---
-        hru_segment = self._extract_hru_segment(fabric, topo_src)
-        if hru_segment is not None:
+        if "hru_segment" in fabric.columns:
+            hru_segment = fabric["hru_segment"].values.astype(np.int64)
             self._validate_hru_segment(hru_segment, nseg)
             ds["hru_segment"] = xr.DataArray(
                 hru_segment,
@@ -263,9 +252,11 @@ class PywatershedDerivation:
                     "long_name": "Index of segment to which HRU contributes flow",
                 },
             )
+        else:
+            logger.warning("No 'hru_segment' column in fabric GeoDataFrame")
 
         # --- seg_length ---
-        seg_length = self._compute_seg_length(segments, topo_src)
+        seg_length = self._compute_seg_length(segments)
         ds["seg_length"] = xr.DataArray(
             seg_length,
             dims="nsegment",
@@ -275,52 +266,17 @@ class PywatershedDerivation:
             },
         )
 
-        if topo_src is not None:
-            topo_src.close()
-
         return ds
 
     @staticmethod
-    def _extract_tosegment(
-        segments: gpd.GeoDataFrame,
-        topo_src: xr.Dataset | None,
-    ) -> np.ndarray | None:
-        """Extract tosegment from parameter dataset or GeoDataFrame."""
-        if topo_src is not None and "tosegment" in topo_src:
-            return topo_src["tosegment"].values.astype(np.int64)
-        if "tosegment" in segments.columns:
-            return segments["tosegment"].values.astype(np.int64)
-        logger.warning("No tosegment source found")
-        return None
+    def _compute_seg_length(segments: gpd.GeoDataFrame) -> np.ndarray:
+        """Compute segment length from column or geodesic calculation.
 
-    @staticmethod
-    def _extract_hru_segment(
-        fabric: gpd.GeoDataFrame,
-        topo_src: xr.Dataset | None,
-    ) -> np.ndarray | None:
-        """Extract hru_segment from parameter dataset or GeoDataFrame."""
-        if topo_src is not None and "hru_segment" in topo_src:
-            return topo_src["hru_segment"].values.astype(np.int64)
-        if "hru_segment" in fabric.columns:
-            return fabric["hru_segment"].values.astype(np.int64)
-        logger.warning("No hru_segment source found")
-        return None
-
-    @staticmethod
-    def _compute_seg_length(
-        segments: gpd.GeoDataFrame,
-        topo_src: xr.Dataset | None,
-    ) -> np.ndarray:
-        """Compute segment length from parameter data or geodesic calculation.
-
-        If a parameter dataset contains ``seg_length``, use it directly.
-        Otherwise compute geodesic length from segment line geometries.
-        Handles both geographic (EPSG:4326) and projected CRS by
-        reprojecting to geographic coordinates before geodesic calculation.
+        Uses ``seg_length`` column if present, otherwise computes
+        geodesic length from segment line geometries.  Handles both
+        geographic (EPSG:4326) and projected CRS by reprojecting to
+        geographic coordinates before geodesic calculation.
         """
-        if topo_src is not None and "seg_length" in topo_src:
-            return topo_src["seg_length"].values.astype(np.float64)
-
         if "seg_length" in segments.columns:
             return segments["seg_length"].values.astype(np.float64)
 

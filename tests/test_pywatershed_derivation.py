@@ -565,7 +565,7 @@ class TestTopologyIntegrationDRB:
         assert len(drb_fabric) == 765
         assert len(drb_segments) == 456
 
-    def test_topology_from_parameter_netcdf(
+    def test_topology_from_fabric_columns(
         self,
         derivation: PywatershedDerivation,
         drb_fabric: gpd.GeoDataFrame,
@@ -573,79 +573,51 @@ class TestTopologyIntegrationDRB:
         drb_params_dis_both: xr.Dataset,
         drb_params_channel: xr.Dataset,
     ) -> None:
-        """Topology extracted via topology_source matches reference params."""
+        """Topology extracted from GeoPackage columns matches reference params."""
         sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
-        config = {"topology_source": str(_DRB_DIR / "parameters_dis_both.nc")}
-
-        # Use nsegment_v as the segment ID field for DRB shapefiles
-        seg_id_field = "nsegment_v" if "nsegment_v" in drb_segments.columns else "nhm_seg"
+        seg_id_field = "nhm_seg" if "nhm_seg" in drb_segments.columns else "nsegment_v"
 
         ds = derivation.derive(
             sir,
             fabric=drb_fabric,
             segments=drb_segments,
             segment_id_field=seg_id_field,
-            config=config,
         )
 
-        # tosegment should match reference exactly
+        # tosegment from GeoPackage should match reference param NetCDF
         ref_tosegment = drb_params_dis_both["tosegment"].values
         np.testing.assert_array_equal(ds["tosegment"].values, ref_tosegment)
 
-        # seg_length should match reference exactly (loaded from same NetCDF)
-        ref_seg_length = drb_params_dis_both["seg_length"].values
-        np.testing.assert_allclose(ds["seg_length"].values, ref_seg_length)
-
-    def test_hru_segment_from_channel_params(
-        self,
-        derivation: PywatershedDerivation,
-        drb_fabric: gpd.GeoDataFrame,
-        drb_segments: gpd.GeoDataFrame,
-        drb_params_channel: xr.Dataset,
-    ) -> None:
-        """hru_segment extracted from PRMSChannel params matches reference."""
-        sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
-        config = {"topology_source": str(_DRB_DIR / "parameters_PRMSChannel.nc")}
-
-        seg_id_field = "nsegment_v" if "nsegment_v" in drb_segments.columns else "nhm_seg"
-
-        ds = derivation.derive(
-            sir,
-            fabric=drb_fabric,
-            segments=drb_segments,
-            segment_id_field=seg_id_field,
-            config=config,
-        )
-
+        # hru_segment from GeoPackage should match reference param NetCDF
         ref_hru_segment = drb_params_channel["hru_segment"].values
         np.testing.assert_array_equal(ds["hru_segment"].values, ref_hru_segment)
 
-    def test_geodesic_seg_length(
+        # seg_length from GeoPackage column should match reference
+        ref_seg_length = drb_params_dis_both["seg_length"].values
+        np.testing.assert_allclose(ds["seg_length"].values, ref_seg_length)
+
+    def test_geodesic_seg_length_fallback(
         self,
         derivation: PywatershedDerivation,
         drb_fabric: gpd.GeoDataFrame,
         drb_segments: gpd.GeoDataFrame,
         drb_params_dis_both: xr.Dataset,
     ) -> None:
-        """Geodesic seg_length (no topology_source) is close to reference."""
-        # Sort segments by model_idx to match parameter NetCDF ordering
-        segs_sorted = drb_segments.sort_values("model_idx").reset_index(drop=True)
+        """Geodesic seg_length (no column) correlates with reference."""
+        # Drop seg_length column to force geodesic computation
+        segs_no_length = drb_segments.drop(columns=["seg_length"])
         sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
-
-        seg_id_field = "nsegment_v" if "nsegment_v" in segs_sorted.columns else "nhm_seg"
+        seg_id_field = "nhm_seg" if "nhm_seg" in segs_no_length.columns else "nsegment_v"
 
         ds = derivation.derive(
             sir,
             fabric=drb_fabric,
-            segments=segs_sorted,
+            segments=segs_no_length,
             segment_id_field=seg_id_field,
         )
 
         ref_seg_length = drb_params_dis_both["seg_length"].values
-        assert "seg_length" in ds
         computed = ds["seg_length"].values
-        # All lengths should be positive
         assert np.all(computed > 0), "All segment lengths should be positive"
-        # Geodesic computation should correlate well with reference
         correlation = np.corrcoef(computed, ref_seg_length)[0, 1]
         assert correlation > 0.9, f"Correlation too low: {correlation}"
