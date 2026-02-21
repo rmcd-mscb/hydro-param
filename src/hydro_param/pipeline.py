@@ -16,6 +16,7 @@ import logging
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -39,11 +40,19 @@ from hydro_param.dataset_registry import (
     VariableSpec,
     load_registry,
 )
-from hydro_param.processing import ZonalProcessor, get_processor
+from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_REGISTRY = Path("configs/datasets")
+
+
+@dataclass
+class Stage4Results:
+    """Results from stage 4 processing, separating static and temporal outputs."""
+
+    static: dict[str, pd.DataFrame] = field(default_factory=dict)
+    temporal: dict[str, xr.Dataset] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +170,13 @@ def stage2_resolve_datasets(
                 f"      source: /path/to/downloaded/file.tif"
             )
             raise ValueError(msg)
+
+        # Validate: temporal datasets require time_period
+        if entry.temporal and ds_req.time_period is None:
+            raise ValueError(
+                f"Dataset '{ds_req.name}' is temporal but no 'time_period' specified. "
+                f"Add time_period: ['YYYY-MM-DD', 'YYYY-MM-DD'] to your pipeline config."
+            )
 
         var_specs = [registry.resolve_variable(ds_req.name, v) for v in ds_req.variables]
         resolved.append((entry, ds_req, var_specs))
@@ -282,12 +298,92 @@ def _process_batch(
     return results
 
 
+def _process_temporal(
+    fabric: gpd.GeoDataFrame,
+    entry: DatasetEntry,
+    ds_req: DatasetRequest,
+    var_specs: list[VariableSpec | DerivedVariableSpec],
+    config: PipelineConfig,
+) -> xr.Dataset:
+    """Process a temporal dataset using WeightGen + AggGen.
+
+    Parameters
+    ----------
+    fabric : gpd.GeoDataFrame
+        Target fabric (full, not batched).
+    entry : DatasetEntry
+        Registry entry for the dataset.
+    ds_req : DatasetRequest
+        Pipeline config request.
+    var_specs : list
+        Resolved variable specifications.
+    config : PipelineConfig
+        Pipeline configuration.
+
+    Returns
+    -------
+    xr.Dataset
+        Temporal dataset with ``(time, features)`` dimensions.
+    """
+    processor = TemporalProcessor()
+    var_names = [v.name for v in var_specs]
+
+    if any(isinstance(v, DerivedVariableSpec) for v in var_specs):
+        raise NotImplementedError("Derived variables not supported for temporal datasets")
+
+    time_period = cast(list[str], ds_req.time_period)
+
+    if not ds_req.statistics:
+        raise ValueError(
+            f"Dataset '{ds_req.name}' is temporal but has no statistics specified. "
+            "Temporal datasets require at least one statistic (e.g., 'mean')."
+        )
+
+    if len(ds_req.statistics) > 1:
+        logger.warning(
+            "Temporal processing for '%s' supports a single statistic. "
+            "Multiple statistics provided (%s); only '%s' will be used.",
+            ds_req.name,
+            ds_req.statistics,
+            ds_req.statistics[0],
+        )
+
+    stat_method = ds_req.statistics[0]
+
+    if entry.strategy == "nhgf_stac":
+        return processor.process_nhgf_stac(
+            fabric=fabric,
+            collection_id=cast(str, entry.collection),
+            variable_names=var_names,
+            id_field=config.target_fabric.id_field,
+            time_period=time_period,
+            stat_method=stat_method,
+        )
+    elif entry.strategy == "climr_cat":
+        return processor.process_climr_cat(
+            fabric=fabric,
+            catalog_id=cast(str, entry.catalog_id),
+            variable_names=var_names,
+            id_field=config.target_fabric.id_field,
+            time_period=time_period,
+            stat_method=stat_method,
+        )
+    else:
+        raise NotImplementedError(
+            f"Temporal processing not supported for strategy '{entry.strategy}'"
+        )
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
     config: PipelineConfig,
-) -> dict[str, pd.DataFrame]:
+) -> Stage4Results:
     """Stage 4: Process all datasets with spatial batching.
+
+    Temporal datasets skip batching and are processed full-fabric via
+    ``WeightGen`` + ``AggGen``. Static datasets use the existing batch
+    loop with ``ZonalGen``.
 
     Parameters
     ----------
@@ -300,16 +396,22 @@ def stage4_process(
 
     Returns
     -------
-    dict[str, pd.DataFrame]
-        Variable name → merged DataFrame of zonal statistics.
+    Stage4Results
+        Static and temporal results.
     """
     batch_ids = sorted(fabric["batch_id"].unique())
     logger.info("Stage 4: Processing %d datasets across %d batches", len(resolved), len(batch_ids))
 
     all_results: dict[str, list[pd.DataFrame]] = {}
+    temporal_results: dict[str, xr.Dataset] = {}
 
     for entry, ds_req, var_specs in resolved:
         logger.info("Processing dataset: %s", ds_req.name)
+
+        if entry.temporal:
+            ds = _process_temporal(fabric, entry, ds_req, var_specs, config)
+            temporal_results[ds_req.name] = ds
+            continue
 
         for batch_id in batch_ids:
             batch = fabric[fabric["batch_id"] == batch_id]
@@ -328,11 +430,11 @@ def stage4_process(
         merged[var_name] = pd.concat(dfs)
         logger.info("  %s: %d total features", var_name, len(merged[var_name]))
 
-    return merged
+    return Stage4Results(static=merged, temporal=temporal_results)
 
 
 def stage5_format_output(
-    results: dict[str, pd.DataFrame],
+    results: dict[str, pd.DataFrame] | Stage4Results,
     config: PipelineConfig,
     fabric: gpd.GeoDataFrame,
 ) -> xr.Dataset:
@@ -340,8 +442,9 @@ def stage5_format_output(
 
     Parameters
     ----------
-    results : dict[str, pd.DataFrame]
-        Variable name → zonal statistics DataFrame.
+    results : dict[str, pd.DataFrame] or Stage4Results
+        Static zonal statistics (legacy dict) or full Stage4Results
+        containing both static and temporal outputs.
     config : PipelineConfig
         Pipeline configuration.
     fabric : gpd.GeoDataFrame
@@ -351,13 +454,22 @@ def stage5_format_output(
     -------
     xr.Dataset
         The Standardized Internal Representation (CF-1.8 compliant).
+        Temporal results are written as separate files.
     """
     logger.info("Stage 5: Assembling SIR output")
     id_field = config.target_fabric.id_field
     feature_ids = fabric[id_field].values
 
+    # Support both legacy dict and Stage4Results
+    if isinstance(results, Stage4Results):
+        static_results = results.static
+        temporal_results = results.temporal
+    else:
+        static_results = results
+        temporal_results = {}
+
     data_vars: dict[str, tuple] = {}
-    for var_name, df in results.items():
+    for var_name, df in static_results.items():
         for col in df.columns:
             sir_name = f"{var_name}_{col}" if col != "mean" else var_name
             # Reindex to ensure alignment with full fabric
@@ -387,14 +499,28 @@ def stage5_format_output(
     output_dir = config.output.path
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if config.output.format == "netcdf":
-        out_path = output_dir / f"{config.output.sir_name}.nc"
-        sir.to_netcdf(out_path)
-        logger.info("Wrote SIR → %s", out_path)
-    elif config.output.format == "parquet":
-        out_path = output_dir / f"{config.output.sir_name}.parquet"
-        sir.to_dataframe().to_parquet(out_path)
-        logger.info("Wrote SIR → %s", out_path)
+    if data_vars:
+        if config.output.format == "netcdf":
+            out_path = output_dir / f"{config.output.sir_name}.nc"
+            sir.to_netcdf(out_path)
+            logger.info("Wrote SIR → %s", out_path)
+        elif config.output.format == "parquet":
+            out_path = output_dir / f"{config.output.sir_name}.parquet"
+            sir.to_dataframe().to_parquet(out_path)
+            logger.info("Wrote SIR → %s", out_path)
+    else:
+        logger.warning("No static results to write; skipping static SIR file.")
+
+    # Write temporal results as separate files
+    for ds_name, ds in temporal_results.items():
+        if config.output.format == "netcdf":
+            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.nc"
+            ds.to_netcdf(temporal_path)
+            logger.info("Wrote temporal → %s", temporal_path)
+        elif config.output.format == "parquet":
+            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.parquet"
+            ds.to_dataframe().to_parquet(temporal_path)
+            logger.info("Wrote temporal → %s", temporal_path)
 
     return sir
 
@@ -455,8 +581,9 @@ def run_pipeline(
     elapsed = time.perf_counter() - t0
     logger.info("=" * 60)
     logger.info(
-        "Pipeline complete: %d variables, %d features, %.1f seconds",
-        len(results),
+        "Pipeline complete: %d static + %d temporal datasets, %d features, %.1f seconds",
+        len(results.static),
+        len(results.temporal),
         len(fabric),
         elapsed,
     )

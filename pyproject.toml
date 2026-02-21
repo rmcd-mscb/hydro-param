@@ -41,7 +41,7 @@ dependencies = [
     "pyyaml",
     "pydantic>=2.0",
     "cyclopts",
-    "gdptools>=0.3.8",
+    "gdptools>=0.3.10",
 ]
 
 [project.scripts]

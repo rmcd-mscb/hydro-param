@@ -6,6 +6,7 @@ Configs say *what* to compute, not *how*.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -45,6 +46,27 @@ class DatasetRequest(BaseModel):
     variables: list[str] = []
     statistics: list[str] = Field(default_factory=lambda: ["mean"])
     year: int | None = Field(default=None, ge=1900, le=2100)
+    time_period: list[str] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=2,
+        description="[start, end] ISO date strings for temporal datasets",
+    )
+
+    @model_validator(mode="after")
+    def _validate_time_period(self) -> DatasetRequest:
+        if self.time_period is not None:
+            start_str, end_str = self.time_period
+            try:
+                start = date.fromisoformat(start_str)
+                end = date.fromisoformat(end_str)
+            except ValueError as exc:
+                raise ValueError(
+                    f"time_period dates must be valid ISO format (YYYY-MM-DD): {exc}"
+                ) from exc
+            if start > end:
+                raise ValueError(f"time_period start ({start_str}) must be <= end ({end_str})")
+        return self
 
 
 class OutputConfig(BaseModel):

@@ -9,15 +9,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 if TYPE_CHECKING:
     from hydro_param.dataset_registry import DatasetEntry
 
 logger = logging.getLogger(__name__)
+
+CLIMR_CATALOG_URL = (
+    "https://github.com/mikejohnson51/climateR-catalogs/releases/download/June-2024/catalog.parquet"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -384,3 +389,72 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
     clean.rio.to_raster(path)
     logger.info("Saved GeoTIFF: %s (%s)", path, da.shape)
     return path
+
+
+# ---------------------------------------------------------------------------
+# ClimateR-Catalog helpers
+# ---------------------------------------------------------------------------
+
+
+def load_climr_catalog(
+    catalog_url: str = CLIMR_CATALOG_URL,
+) -> pd.DataFrame:
+    """Load the ClimateR-Catalog parquet file.
+
+    Parameters
+    ----------
+    catalog_url : str
+        URL to the catalog parquet file.
+
+    Returns
+    -------
+    pd.DataFrame
+        The full ClimateR catalog.
+    """
+    logger.info("Loading ClimateR catalog from %s", catalog_url)
+    return pd.read_parquet(catalog_url)
+
+
+def build_climr_cat_dict(
+    catalog: pd.DataFrame,
+    catalog_id: str,
+    variable_names: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Build ``source_cat_dict`` for ``ClimRCatData`` from the catalog.
+
+    Parameters
+    ----------
+    catalog : pd.DataFrame
+        Full ClimateR catalog (from :func:`load_climr_catalog`).
+    catalog_id : str
+        Dataset identifier in the catalog (e.g. ``"gridmet"``).
+    variable_names : list[str]
+        Variables to extract (e.g. ``["pr", "tmmx"]``).
+
+    Returns
+    -------
+    dict[str, dict[str, Any]]
+        Mapping of variable name → catalog row dict.
+
+    Raises
+    ------
+    ValueError
+        If a variable is not found in the catalog for the given id.
+    """
+    if catalog_id not in catalog["id"].values:
+        available_ids = sorted(catalog["id"].unique())
+        raise ValueError(
+            f"Catalog ID '{catalog_id}' not found in ClimateR catalog. Available: {available_ids}"
+        )
+
+    source_cat_dict: dict[str, dict[str, Any]] = {}
+    for var_name in variable_names:
+        matches = catalog[(catalog["id"] == catalog_id) & (catalog["variable"] == var_name)]
+        if matches.empty:
+            available = sorted(catalog.loc[catalog["id"] == catalog_id, "variable"].unique())
+            raise ValueError(
+                f"Variable '{var_name}' not found in ClimateR catalog for '{catalog_id}'. "
+                f"Available: {available}"
+            )
+        source_cat_dict[var_name] = matches.iloc[0].to_dict()
+    return source_cat_dict
