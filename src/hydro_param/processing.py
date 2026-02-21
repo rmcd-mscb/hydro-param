@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol, cast
 
 import geopandas as gpd
 import pandas as pd
+import xarray as xr
 
 logger = logging.getLogger(__name__)
+
+ZonalEngine = Literal["serial", "parallel", "dask", "exactextract"]
 
 
 class Processor(Protocol):
@@ -26,7 +29,7 @@ class Processor(Protocol):
         variable_name: str,
         id_field: str,
         *,
-        engine: str = "exactextract",
+        engine: ZonalEngine = "exactextract",
         statistics: list[str] | None = None,
         categorical: bool = False,
         source_crs: str | None = None,
@@ -49,7 +52,7 @@ class ZonalProcessor:
         variable_name: str,
         id_field: str,
         *,
-        engine: str = "exactextract",
+        engine: ZonalEngine = "exactextract",
         statistics: list[str] | None = None,
         categorical: bool = False,
         source_crs: str | None = None,
@@ -68,8 +71,9 @@ class ZonalProcessor:
             Name of the variable being processed.
         id_field : str
             Column name for feature IDs in the fabric.
-        engine : str
-            gdptools zonal engine (``"exactextract"``, ``"serial"``).
+        engine : ZonalEngine
+            gdptools zonal engine (``"exactextract"``, ``"serial"``,
+            ``"parallel"``, ``"dask"``).
         statistics : list[str] or None
             Which statistics to return. Default is ``["mean"]``.
         categorical : bool
@@ -103,9 +107,9 @@ class ZonalProcessor:
 
         # Use registry CRS if provided, otherwise read from GeoTIFF
         if source_crs is None:
-            ds = rioxarray.open_rasterio(tiff_path)
-            source_crs = str(ds.rio.crs)  # type: ignore[union-attr]
-            ds.close()  # type: ignore[union-attr]
+            ds = cast(xr.DataArray, rioxarray.open_rasterio(tiff_path))
+            source_crs = str(ds.rio.crs)
+            ds.close()
 
         user_data = UserTiffData(
             source_ds=str(tiff_path),
@@ -119,7 +123,7 @@ class ZonalProcessor:
 
         zonal = ZonalGen(
             user_data=user_data,
-            zonal_engine=engine,  # type: ignore[arg-type]
+            zonal_engine=engine,
             zonal_writer="csv",
             out_path=str(tiff_path.parent),
         )
