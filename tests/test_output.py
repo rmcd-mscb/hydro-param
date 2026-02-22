@@ -31,8 +31,8 @@ def _has_parquet_engine() -> bool:
 def sample_dataset() -> xr.Dataset:
     """Minimal xr.Dataset for testing output formatters."""
     return xr.Dataset(
-        {"elevation": ("hru_id", np.array([100.0, 200.0, 300.0]))},
-        coords={"hru_id": [1, 2, 3]},
+        {"elevation": ("nhm_id", np.array([100.0, 200.0, 300.0]))},
+        coords={"nhm_id": [1, 2, 3]},
         attrs={"title": "test"},
     )
 

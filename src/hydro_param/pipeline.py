@@ -647,11 +647,11 @@ def stage5_format_output(
                 values = df[col].reindex(feature_ids).values
             else:
                 values = df[col].values
-            data_vars[sir_name] = ("hru_id", values)
+            data_vars[sir_name] = (id_field, values)
 
     sir = xr.Dataset(
         data_vars,
-        coords={"hru_id": feature_ids},
+        coords={id_field: feature_ids},
         attrs=sir_attrs,
     )
 
@@ -686,11 +686,11 @@ def stage5_format_output(
                 values = df[col].reindex(feature_ids).values
             else:
                 values = df[col].values
-            var_data_vars[col_name] = ("hru_id", values)
+            var_data_vars[col_name] = (id_field, values)
 
         var_ds = xr.Dataset(
             var_data_vars,
-            coords={"hru_id": feature_ids},
+            coords={id_field: feature_ids},
             attrs=sir_attrs,
         )
 
@@ -800,7 +800,7 @@ def run_pipeline_from_config(
     logger.info(
         "Stage 5 complete: SIR has %d variables, %d features (%.1fs)",
         len(sir.data_vars),
-        sir.sizes.get("hru_id", 0),
+        sir.sizes.get(config.target_fabric.id_field, 0),
         time.perf_counter() - t5,
     )
 

@@ -26,11 +26,11 @@ def sir_topography() -> xr.Dataset:
     """Synthetic SIR with topographic data (metric units)."""
     return xr.Dataset(
         {
-            "elevation": ("hru_id", np.array([100.0, 500.0, 1500.0])),
-            "slope": ("hru_id", np.array([5.0, 15.0, 30.0])),  # degrees
-            "aspect": ("hru_id", np.array([0.0, 90.0, 270.0])),  # degrees
+            "elevation": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+            "slope": ("nhm_id", np.array([5.0, 15.0, 30.0])),  # degrees
+            "aspect": ("nhm_id", np.array([0.0, 90.0, 270.0])),  # degrees
         },
-        coords={"hru_id": [1, 2, 3]},
+        coords={"nhm_id": [1, 2, 3]},
     )
 
 
@@ -39,11 +39,11 @@ def sir_landcover() -> xr.Dataset:
     """Synthetic SIR with land cover data."""
     return xr.Dataset(
         {
-            "land_cover": ("hru_id", np.array([42, 71, 52])),  # Evergreen, Grass, Shrub
-            "impervious": ("hru_id", np.array([5.0, 20.0, 0.0])),  # percent
-            "tree_canopy": ("hru_id", np.array([80.0, 10.0, 30.0])),  # percent
+            "land_cover": ("nhm_id", np.array([42, 71, 52])),  # Evergreen, Grass, Shrub
+            "impervious": ("nhm_id", np.array([5.0, 20.0, 0.0])),  # percent
+            "tree_canopy": ("nhm_id", np.array([80.0, 10.0, 30.0])),  # percent
         },
-        coords={"hru_id": [1, 2, 3]},
+        coords={"nhm_id": [1, 2, 3]},
     )
 
 
@@ -52,10 +52,10 @@ def sir_geometry() -> xr.Dataset:
     """Synthetic SIR with geometry data."""
     return xr.Dataset(
         {
-            "hru_area_m2": ("hru_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-            "hru_lat": ("hru_id", np.array([42.0, 41.5, 43.0])),
+            "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+            "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
         },
-        coords={"hru_id": [1, 2, 3]},
+        coords={"nhm_id": [1, 2, 3]},
     )
 
 
@@ -151,8 +151,8 @@ class TestDeriveLandcover:
     def test_covden_fallback_without_canopy(self, derivation: PywatershedDerivation) -> None:
         """When tree_canopy is absent, covden_sum uses lookup fallback."""
         sir = xr.Dataset(
-            {"land_cover": ("hru_id", np.array([42, 71]))},
-            coords={"hru_id": [1, 2]},
+            {"land_cover": ("nhm_id", np.array([42, 71]))},
+            coords={"nhm_id": [1, 2]},
         )
         ds = derivation.derive(sir)
         assert "covden_sum" in ds
@@ -208,8 +208,8 @@ class TestApplyDefaults:
     def test_defaults_not_overwritten(self, derivation: PywatershedDerivation) -> None:
         """If a default param is already derived from data, it's preserved."""
         sir = xr.Dataset(
-            {"elevation": ("hru_id", np.array([100.0]))},
-            coords={"hru_id": [1]},
+            {"elevation": ("nhm_id", np.array([100.0]))},
+            coords={"nhm_id": [1]},
         )
         ds = derivation.derive(sir)
         # hru_elev was derived from data, not from defaults
@@ -257,8 +257,8 @@ class TestLandCoverMajorityFallback:
 
     def test_land_cover_majority_accepted(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
-            {"land_cover_majority": ("hru_id", np.array([42, 71]))},
-            coords={"hru_id": [1, 2]},
+            {"land_cover_majority": ("nhm_id", np.array([42, 71]))},
+            coords={"nhm_id": [1, 2]},
         )
         ds = derivation.derive(sir)
         assert "cov_type" in ds
@@ -356,7 +356,7 @@ def synthetic_segments() -> gpd.GeoDataFrame:
 @pytest.fixture()
 def sir_minimal() -> xr.Dataset:
     """Minimal SIR for topology tests (3 HRUs, no physical data)."""
-    return xr.Dataset(coords={"hru_id": [101, 102, 103]})
+    return xr.Dataset(coords={"nhm_id": [101, 102, 103]})
 
 
 class TestDeriveTopology:
@@ -430,7 +430,7 @@ class TestDeriveTopology:
         derivation: PywatershedDerivation,
     ) -> None:
         """Segments spanning more distance should have longer seg_length."""
-        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2], "hru_segment": [1, 2]},
             geometry=[
@@ -455,7 +455,7 @@ class TestTopologyValidation:
     """Tests for topology validation rules."""
 
     def test_self_loop_raises(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1], "hru_segment": [1]},
             geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
@@ -470,7 +470,7 @@ class TestTopologyValidation:
             derivation.derive(sir, fabric=fabric, segments=segments)
 
     def test_no_outlet_raises(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2], "hru_segment": [1, 2]},
             geometry=[
@@ -491,7 +491,7 @@ class TestTopologyValidation:
             derivation.derive(sir, fabric=fabric, segments=segments)
 
     def test_hru_segment_out_of_range_raises(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1], "hru_segment": [5]},  # out of range
             geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
@@ -507,7 +507,7 @@ class TestTopologyValidation:
 
     def test_hru_segment_zero_is_valid(self, derivation: PywatershedDerivation) -> None:
         """hru_segment=0 means HRU doesn't drain to any segment."""
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1], "hru_segment": [0]},
             geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
@@ -522,7 +522,7 @@ class TestTopologyValidation:
         assert ds["hru_segment"].values[0] == 0
 
     def test_missing_tosegment_raises(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1], "hru_segment": [1]},
             geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
@@ -537,7 +537,7 @@ class TestTopologyValidation:
             derivation.derive(sir, fabric=fabric, segments=segments)
 
     def test_missing_hru_segment_raises(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1]},  # no hru_segment column
             geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
@@ -629,7 +629,7 @@ class TestTopologyIntegrationDRB:
         drb_params_channel: xr.Dataset,
     ) -> None:
         """Topology extracted from GeoPackage columns matches reference params."""
-        sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
+        sir = xr.Dataset(coords={"nhm_id": drb_fabric["nhm_id"].values})
         seg_id_field = "nhm_seg" if "nhm_seg" in drb_segments.columns else "nsegment_v"
 
         ds = derivation.derive(
@@ -661,7 +661,7 @@ class TestTopologyIntegrationDRB:
         """Geodesic seg_length (no column) correlates with reference."""
         # Drop seg_length column to force geodesic computation
         segs_no_length = drb_segments.drop(columns=["seg_length"])
-        sir = xr.Dataset(coords={"hru_id": drb_fabric["nhm_id"].values})
+        sir = xr.Dataset(coords={"nhm_id": drb_fabric["nhm_id"].values})
         seg_id_field = "nhm_seg" if "nhm_seg" in segs_no_length.columns else "nsegment_v"
 
         ds = derivation.derive(
@@ -688,7 +688,7 @@ class TestDeriveGeometryFromFabric:
 
     def test_area_from_fabric(self, derivation: PywatershedDerivation) -> None:
         """hru_area computed from fabric polygon geometry."""
-        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
         # Two 1-degree squares near equator — area should be > 0
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -705,7 +705,7 @@ class TestDeriveGeometryFromFabric:
 
     def test_lat_from_fabric(self, derivation: PywatershedDerivation) -> None:
         """hru_lat computed from fabric centroid latitude."""
-        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
             geometry=[
@@ -722,10 +722,10 @@ class TestDeriveGeometryFromFabric:
         """When fabric is provided, SIR hru_area_m2/hru_lat are ignored."""
         sir = xr.Dataset(
             {
-                "hru_area_m2": ("hru_id", np.array([1.0, 1.0])),
-                "hru_lat": ("hru_id", np.array([0.0, 0.0])),
+                "hru_area_m2": ("nhm_id", np.array([1.0, 1.0])),
+                "hru_lat": ("nhm_id", np.array([0.0, 0.0])),
             },
-            coords={"hru_id": [1, 2]},
+            coords={"nhm_id": [1, 2]},
         )
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -760,8 +760,8 @@ class TestSirVariableRenaming:
 
     def test_default_rename(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
-            {"FctImp_mean": ("hru_id", np.array([5.0, 20.0]))},
-            coords={"hru_id": [1, 2]},
+            {"FctImp_mean": ("nhm_id", np.array([5.0, 20.0]))},
+            coords={"nhm_id": [1, 2]},
         )
         renamed = derivation.rename_sir_variables(sir)
         assert "impervious" in renamed
@@ -769,16 +769,16 @@ class TestSirVariableRenaming:
 
     def test_custom_rename(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
-            {"my_var": ("hru_id", np.array([1.0]))},
-            coords={"hru_id": [1]},
+            {"my_var": ("nhm_id", np.array([1.0]))},
+            coords={"nhm_id": [1]},
         )
         renamed = derivation.rename_sir_variables(sir, renames={"my_var": "new_var"})
         assert "new_var" in renamed
 
     def test_rename_noop_when_not_present(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
-            {"elevation": ("hru_id", np.array([100.0]))},
-            coords={"hru_id": [1]},
+            {"elevation": ("nhm_id", np.array([100.0]))},
+            coords={"nhm_id": [1]},
         )
         renamed = derivation.rename_sir_variables(sir)
         assert "elevation" in renamed
@@ -796,12 +796,12 @@ class TestCategoricalFractionMajority:
         """Majority class extracted from LndCov_ fraction columns."""
         sir = xr.Dataset(
             {
-                "LndCov_11": ("hru_id", np.array([0.1, 0.0, 0.0])),
-                "LndCov_41": ("hru_id", np.array([0.8, 0.1, 0.2])),
-                "LndCov_42": ("hru_id", np.array([0.05, 0.0, 0.7])),
-                "LndCov_71": ("hru_id", np.array([0.05, 0.9, 0.1])),
+                "LndCov_11": ("nhm_id", np.array([0.1, 0.0, 0.0])),
+                "LndCov_41": ("nhm_id", np.array([0.8, 0.1, 0.2])),
+                "LndCov_42": ("nhm_id", np.array([0.05, 0.0, 0.7])),
+                "LndCov_71": ("nhm_id", np.array([0.05, 0.9, 0.1])),
             },
-            coords={"hru_id": [1, 2, 3]},
+            coords={"nhm_id": [1, 2, 3]},
         )
         ds = derivation.derive(sir)
         assert "cov_type" in ds
@@ -815,8 +815,8 @@ class TestCategoricalFractionMajority:
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
         """When no fraction columns exist, falls back to land_cover."""
         sir = xr.Dataset(
-            {"land_cover": ("hru_id", np.array([42, 71]))},
-            coords={"hru_id": [1, 2]},
+            {"land_cover": ("nhm_id", np.array([42, 71]))},
+            coords={"nhm_id": [1, 2]},
         )
         ds = derivation.derive(sir)
         assert "cov_type" in ds

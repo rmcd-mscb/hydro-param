@@ -12,14 +12,14 @@ class TestPipelineResult:
     """Tests for PipelineResult dataclass."""
 
     def test_default_values(self) -> None:
-        sir = xr.Dataset({"elevation": ("hru_id", [100.0])}, coords={"hru_id": [1]})
+        sir = xr.Dataset({"elevation": ("nhm_id", [100.0])}, coords={"nhm_id": [1]})
         result = PipelineResult(sir=sir)
         assert result.sir is sir
         assert result.temporal == {}
         assert result.fabric is None
 
     def test_with_temporal(self) -> None:
-        sir = xr.Dataset(coords={"hru_id": [1]})
+        sir = xr.Dataset(coords={"nhm_id": [1]})
         temporal_ds = xr.Dataset({"temp": ("time", [1.0, 2.0])})
         result = PipelineResult(sir=sir, temporal={"gridmet": temporal_ds})
         assert "gridmet" in result.temporal
