@@ -344,6 +344,7 @@ def test_stage5_produces_sir(config_yaml: Path, fabric_gpkg: Path):
     id_field = config.target_fabric.id_field
     assert id_field in sir.dims
     assert sir.sizes[id_field] == 4
+    assert "hru_id" not in sir.dims  # verify no hardcoded fallback
 
 
 def test_sir_has_cf_metadata(config_yaml: Path, fabric_gpkg: Path):
