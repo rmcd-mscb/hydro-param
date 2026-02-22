@@ -208,7 +208,7 @@ def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.02) -> list[
     fabric : gpd.GeoDataFrame
         Spatial features (any CRS).
     buffer_frac : float
-        Fractional buffer to add around bounds (default 10%).
+        Fractional buffer to add around bounds (default 2%).
 
     Returns
     -------

@@ -57,6 +57,8 @@ class DatasetRequest(BaseModel):
     def _validate_year(self) -> DatasetRequest:
         if self.year is None:
             return self
+        if isinstance(self.year, list) and len(self.year) == 0:
+            raise ValueError("year list cannot be empty")
         years = [self.year] if isinstance(self.year, int) else self.year
         for y in years:
             if not (1900 <= y <= 2100):

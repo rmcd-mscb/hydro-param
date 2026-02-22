@@ -191,6 +191,11 @@ def test_dataset_request_year_list_rejects_out_of_range():
         DatasetRequest(name="test", year=[2020, 2200])
 
 
+def test_dataset_request_year_list_rejects_empty():
+    with pytest.raises(ValidationError, match="year list cannot be empty"):
+        DatasetRequest(name="test", year=[])
+
+
 def test_dataset_request_year_list_from_yaml(tmp_path: Path):
     raw = {
         "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
