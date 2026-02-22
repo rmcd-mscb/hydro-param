@@ -395,14 +395,12 @@ def init_cmd(
 def _translate_pws_to_pipeline(
     pws_config: object,
 ) -> PipelineConfig:
-    """Translate a PywatershedRunConfig into a PipelineConfig.
+    """Translate a PywatershedRunConfig into a generic PipelineConfig.
 
-    The pywatershed run config uses a model-specific schema; this
-    function maps it onto the generic pipeline config so the same
-    pipeline stages 1-5 can be reused.
-
-    Returns a ``PipelineConfig`` with ``output.derivation="pywatershed"``
-    so that stage 5 dispatches to the derivation plugin + formatter.
+    Maps the model-specific schema onto the generic pipeline config so
+    stages 1-5 can produce a raw SIR + temporal data.  No model-specific
+    transforms (derivation, renaming, unit conversion) are included —
+    those happen in ``pws_run_cmd()`` after the pipeline completes.
     """
     from hydro_param.config import (
         DatasetRequest,
@@ -463,7 +461,7 @@ def _translate_pws_to_pipeline(
             )
         )
 
-    # Climate (temporal)
+    # Climate (temporal) — map user-facing PRMS names to registry/gdptools names
     _CLIMATE_SOURCE_MAP = {
         "gridmet": "gridmet",
         "daymet_v4": "daymet_v4",
@@ -471,7 +469,6 @@ def _translate_pws_to_pipeline(
     }
     climate_ds_name = _CLIMATE_SOURCE_MAP.get(cfg.climate.source, cfg.climate.source)
 
-    # Map pywatershed climate variable names to registry variable names
     _CLIMATE_VAR_MAP = {
         "prcp": "pr",
         "tmax": "tmmx",
@@ -487,42 +484,10 @@ def _translate_pws_to_pipeline(
         )
     )
 
-    # Output with derivation
-    derivation_options: dict = {
-        "id_field": cfg.domain.id_field,
-        "segment_id_field": cfg.domain.segment_id_field,
-        "start": cfg.time.start,
-        "end": cfg.time.end,
-        "parameter_file": cfg.output.parameter_file,
-        "forcing_dir": cfg.output.forcing_dir,
-        "control_file": cfg.output.control_file,
-        "soltab_file": cfg.output.soltab_file,
-        # Temporal variable renaming (gridMET short names → PRMS names)
-        "temporal_renames": {
-            "pr": "prcp",
-            "tmmx": "tmax",
-            "tmmn": "tmin",
-        },
-        # Unit conversions for temporal data (K→C; formatter does C→F)
-        # Applied AFTER renames, so use post-rename names
-        "temporal_conversions": {
-            "tmax": ("K", "C"),
-            "tmin": ("K", "C"),
-        },
-    }
-    if cfg.domain.segment_path is not None:
-        derivation_options["segment_path"] = str(cfg.domain.segment_path)
-    if cfg.parameter_overrides.values:
-        derivation_options["parameter_overrides"] = {
-            "values": cfg.parameter_overrides.values,
-        }
-
     output = OutputConfig(
         path=cfg.output.path,
         format="netcdf",
         sir_name="pywatershed_sir",
-        derivation="pywatershed",
-        derivation_options=derivation_options,
     )
 
     processing = ProcessingConfig(
@@ -548,9 +513,13 @@ def _translate_pws_to_pipeline(
 def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     """Generate a complete pywatershed model setup.
 
-    Loads a pywatershed run configuration, translates it to a pipeline
-    config, runs the SIR pipeline, derives pywatershed parameters,
-    and writes output files (parameters.nc, forcing/, control.yml).
+    Two-phase workflow:
+
+    1. **Generic pipeline** — runs stages 1-5 to produce a raw SIR
+       (source units, source variable names) + temporal data.
+    2. **pywatershed post-processing** — derives PRMS parameters,
+       merges temporal data with renaming/unit conversion, and writes
+       output files (parameters.nc, forcing/, control.yml).
 
     Parameters
     ----------
@@ -565,6 +534,13 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         datefmt="%H:%M:%S",
     )
 
+    import geopandas as gpd
+
+    from hydro_param.derivations.pywatershed import (
+        PywatershedDerivation,
+        merge_temporal_into_derived,
+    )
+    from hydro_param.output import get_formatter
     from hydro_param.pywatershed_config import load_pywatershed_config
 
     try:
@@ -579,14 +555,60 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("  Climate: %s", pws_config.climate.source)
     logger.info("  Output: %s", pws_config.output.path)
 
+    # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
     pipeline_config = _translate_pws_to_pipeline(pws_config)
     reg = _load_registry(registry)
 
     try:
-        run_pipeline_from_config(pipeline_config, reg)
+        result = run_pipeline_from_config(pipeline_config, reg)
     except Exception as exc:
-        logger.exception("pywatershed pipeline failed.")
+        logger.exception("Pipeline failed (phase 1).")
         raise SystemExit(1) from exc
+
+    # ── Phase 2: pywatershed post-processing ──
+    logger.info("Phase 2: pywatershed derivation + formatting")
+
+    plugin = PywatershedDerivation()
+    sir_renamed = plugin.rename_sir_variables(result.sir)
+
+    segments = None
+    if pws_config.domain.segment_path is not None:
+        segments = gpd.read_file(pws_config.domain.segment_path)
+
+    derivation_config: dict = {}
+    if pws_config.parameter_overrides.values:
+        derivation_config["parameter_overrides"] = {
+            "values": pws_config.parameter_overrides.values,
+        }
+
+    derived = plugin.derive(
+        sir_renamed,
+        config=derivation_config,
+        fabric=result.fabric,
+        segments=segments,
+        id_field=pws_config.domain.id_field,
+        segment_id_field=pws_config.domain.segment_id_field,
+    )
+
+    # Merge temporal data with model-specific renames + unit conversions
+    derived = merge_temporal_into_derived(
+        derived,
+        result.temporal,
+        renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
+        conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
+    )
+
+    # Write using the model-specific formatter
+    formatter = get_formatter("pywatershed")
+    formatter_config = {
+        "parameter_file": pws_config.output.parameter_file,
+        "forcing_dir": pws_config.output.forcing_dir,
+        "soltab_file": pws_config.output.soltab_file,
+        "control_file": pws_config.output.control_file,
+        "start": pws_config.time.start,
+        "end": pws_config.time.end,
+    }
+    formatter.write(derived, pws_config.output.path, formatter_config)
 
     logger.info("pywatershed model setup complete: %s", pws_config.output.path)
 

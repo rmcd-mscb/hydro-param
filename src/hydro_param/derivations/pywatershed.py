@@ -61,6 +61,58 @@ _DEFAULTS: dict[str, float] = {
 _IMPERV_STOR_MAX_DEFAULT = 0.03
 
 
+def merge_temporal_into_derived(
+    derived: xr.Dataset,
+    temporal: dict[str, xr.Dataset],
+    renames: dict[str, str] | None = None,
+    conversions: dict[str, tuple[str, str]] | None = None,
+) -> xr.Dataset:
+    """Merge temporal data into derived dataset with renaming and unit conversion.
+
+    Parameters
+    ----------
+    derived
+        Derived parameter dataset (output of ``PywatershedDerivation.derive()``).
+    temporal
+        Temporal datasets keyed by dataset name from ``PipelineResult.temporal``.
+    renames
+        Variable name mapping ``{source_name: target_name}``.
+    conversions
+        Unit conversions ``{variable_name: (from_unit, to_unit)}``.
+        Applied **after** renames (use target names).
+
+    Returns
+    -------
+    xr.Dataset
+        Derived dataset with temporal variables merged in.
+    """
+    renames = renames or {}
+    conversions = conversions or {}
+
+    for _ds_name, ds in temporal.items():
+        # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
+        actual_renames = {old: new for old, new in renames.items() if old in ds}
+        if actual_renames:
+            ds = ds.rename(actual_renames)
+
+        # Apply unit conversions (e.g., K→C for temperature)
+        for var_name, (from_unit, to_unit) in conversions.items():
+            if var_name in ds:
+                da = ds[var_name]
+                converted = convert(da.values.astype(np.float64), from_unit, to_unit)
+                ds[var_name] = da.copy(data=converted)
+
+        # Align temporal feature dimension to derived dataset's nhru
+        for var in ds.data_vars:
+            da = ds[str(var)]
+            feat_dims = [d for d in da.dims if d != "time"]
+            if feat_dims and "nhru" in derived.dims and feat_dims[0] != "nhru":
+                da = da.rename({feat_dims[0]: "nhru"})
+            derived[str(var)] = da
+
+    return derived
+
+
 class PywatershedDerivation:
     """Derive pywatershed/PRMS parameters from SIR physical properties.
 
@@ -162,16 +214,6 @@ class PywatershedDerivation:
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(sir, ds, fabric=fabric, id_field=id_field)
-
-        # Step 2: Topology (tosegment, hru_segment, seg_length)
-        if fabric is not None and segments is not None:
-            ds = self._derive_topology(
-                ds,
-                fabric=fabric,
-                segments=segments,
-                id_field=id_field,
-                segment_id_field=segment_id_field,
-            )
 
         # Step 2: Topology (tosegment, hru_segment, seg_length)
         if fabric is not None and segments is not None:

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -532,127 +531,7 @@ def stage5_format_output(
             ds.to_dataframe().to_parquet(temporal_path)
             logger.info("Wrote temporal → %s", temporal_path)
 
-    # Derivation + formatting dispatch (model-specific post-processing)
-    if config.output.derivation is not None:
-        _run_derivation(
-            sir=sir,
-            temporal=temporal_results,
-            fabric=fabric,
-            config=config,
-        )
-
     return sir
-
-
-def _run_derivation(
-    sir: xr.Dataset,
-    temporal: dict[str, xr.Dataset],
-    fabric: gpd.GeoDataFrame,
-    config: PipelineConfig,
-) -> None:
-    """Dispatch to a model-specific derivation plugin + formatter.
-
-    Runs derivation and writes output as a side effect; does not
-    modify or return the SIR.
-
-    Parameters
-    ----------
-    sir
-        Standardized Internal Representation from stage 5 assembly.
-    temporal
-        Temporal datasets keyed by dataset name.
-    fabric
-        Target fabric GeoDataFrame.
-    config
-        Pipeline configuration with derivation settings.
-    """
-    from hydro_param.derivations.pywatershed import PywatershedDerivation
-    from hydro_param.output import get_formatter
-    from hydro_param.units import convert as unit_convert
-
-    derivation_name = config.output.derivation
-    options = config.output.derivation_options
-
-    _DERIVATION_REGISTRY: dict[str, type] = {
-        "pywatershed": PywatershedDerivation,
-    }
-
-    if derivation_name not in _DERIVATION_REGISTRY:
-        available = ", ".join(sorted(_DERIVATION_REGISTRY))
-        raise ValueError(f"Unknown derivation plugin '{derivation_name}'. Available: {available}")
-
-    # Validate required derivation options early
-    for key in ("start", "end"):
-        if not options.get(key):
-            raise ValueError(
-                f"derivation_options['{key}'] is required when derivation='{derivation_name}'"
-            )
-
-    logger.info("Running derivation plugin: %s", derivation_name)
-    plugin_cls = _DERIVATION_REGISTRY[derivation_name]
-
-    # Build plugin kwargs from derivation_options
-    lookup_tables_dir = options.get("lookup_tables_dir")
-    plugin = plugin_cls(lookup_tables_dir=Path(lookup_tables_dir) if lookup_tables_dir else None)
-
-    # Load fabric/segments for topology if paths provided
-    fabric_for_derivation = fabric
-    segments = None
-    if "segment_path" in options:
-        segments = gpd.read_file(options["segment_path"])
-
-    # Rename SIR variables for the derivation plugin
-    sir_renamed = plugin.rename_sir_variables(sir, options.get("variable_renames", {}))
-
-    # Run derivation
-    derived = plugin.derive(
-        sir_renamed,
-        config=options,
-        fabric=fabric_for_derivation,
-        segments=segments,
-        id_field=options.get("id_field", "nhm_id"),
-        segment_id_field=options.get("segment_id_field", "nhm_seg"),
-    )
-
-    # Merge temporal data into derived dataset for formatter
-    for _ds_name, ds in temporal.items():
-        # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
-        temporal_renames = options.get("temporal_renames", {})
-        actual_renames = {old: new for old, new in temporal_renames.items() if old in ds}
-        if actual_renames:
-            ds = ds.rename(actual_renames)
-
-        # Apply unit conversions (e.g., K→C for temperature)
-        # Uses post-rename names; produces new DataArrays (no in-place mutation)
-        temp_conversions = options.get("temporal_conversions", {})
-        for var_name, (from_unit, to_unit) in temp_conversions.items():
-            if var_name in ds:
-                da = ds[var_name]
-                converted = unit_convert(da.values.astype(np.float64), from_unit, to_unit)
-                ds[var_name] = da.copy(data=converted)
-
-        # Align temporal feature dimension to derived dataset's nhru
-        # Temporal data uses id_field (e.g., nhm_id); derived uses nhru
-        for var in ds.data_vars:
-            da = ds[str(var)]
-            # Find the feature dimension (non-time dimension)
-            feat_dims = [d for d in da.dims if d != "time"]
-            if feat_dims and "nhru" in derived.dims and feat_dims[0] != "nhru":
-                feat_dim = feat_dims[0]
-                da = da.rename({feat_dim: "nhru"})
-            derived[str(var)] = da
-
-    # Write using the model-specific formatter
-    formatter = get_formatter(derivation_name)
-    formatter_config = {
-        "parameter_file": options.get("parameter_file", "parameters.nc"),
-        "forcing_dir": options.get("forcing_dir", "forcing"),
-        "soltab_file": options.get("soltab_file", "soltab.nc"),
-        "control_file": options.get("control_file", "control.yml"),
-        "start": options["start"],
-        "end": options["end"],
-    }
-    formatter.write(derived, config.output.path, formatter_config)
 
 
 # ---------------------------------------------------------------------------
