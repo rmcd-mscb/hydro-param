@@ -220,12 +220,14 @@ class PywatershedDerivation:
             pywatershed parameter dataset with PRMS-convention units.
         """
         config = config or {}
-        nhru = sir.sizes.get("hru_id", 0)
+        # Detect the feature ID dimension from the SIR
+        sir_id_dim = id_field if id_field in sir.dims else "hru_id"
+        nhru = sir.sizes.get(sir_id_dim, 0)
         ds = xr.Dataset()
 
         # Carry HRU coordinates so derived params retain stable indexing
-        if "hru_id" in sir.coords:
-            ds = ds.assign_coords(nhru=sir["hru_id"].values)
+        if sir_id_dim in sir.coords:
+            ds = ds.assign_coords(nhru=sir[sir_id_dim].values)
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(sir, ds, fabric=fabric, id_field=id_field)
@@ -282,7 +284,8 @@ class PywatershedDerivation:
         """
         if fabric is not None and id_field in fabric.columns:
             # Align fabric rows to SIR HRU ordering
-            hru_ids = sir["hru_id"].values if "hru_id" in sir.coords else None
+            sir_id_dim = id_field if id_field in sir.dims else "hru_id"
+            hru_ids = sir[sir_id_dim].values if sir_id_dim in sir.coords else None
             if hru_ids is not None:
                 fab = fabric.set_index(id_field).loc[hru_ids].reset_index()
             else:
