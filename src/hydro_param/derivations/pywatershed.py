@@ -173,6 +173,16 @@ class PywatershedDerivation:
                 segment_id_field=segment_id_field,
             )
 
+        # Step 2: Topology (tosegment, hru_segment, seg_length)
+        if fabric is not None and segments is not None:
+            ds = self._derive_topology(
+                ds,
+                fabric=fabric,
+                segments=segments,
+                id_field=id_field,
+                segment_id_field=segment_id_field,
+            )
+
         # Step 3: Topographic parameters (hru_elev, hru_slope, hru_aspect)
         ds = self._derive_topography(sir, ds)
 
