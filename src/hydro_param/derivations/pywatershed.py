@@ -13,6 +13,7 @@ Future PRs will add steps 5 (soils), 6 (waterbody overlay),
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -89,15 +90,15 @@ def merge_temporal_into_derived(
     renames = renames or {}
     conversions = conversions or {}
 
-    # Collect per-year chunks that share the same variables, then concatenate.
-    # Keys like "gridmet_2020", "gridmet_2021" have identical variables;
+    # Collect per-year chunks by base dataset name, then concatenate.
+    # Keys like "gridmet_2020", "gridmet_2021" share the base name "gridmet";
     # we concatenate along time before merging into derived.
-    chunks_by_varset: dict[tuple[str, ...], list[xr.Dataset]] = {}
-    for _ds_name, ds in temporal.items():
-        var_key = tuple(sorted(str(v) for v in ds.data_vars))
-        chunks_by_varset.setdefault(var_key, []).append(ds)
+    chunks_by_source: dict[str, list[xr.Dataset]] = {}
+    for ds_name, ds in temporal.items():
+        base_name = re.sub(r"_\d{4}$", "", ds_name)
+        chunks_by_source.setdefault(base_name, []).append(ds)
 
-    for _var_key, chunks in chunks_by_varset.items():
+    for _source, chunks in chunks_by_source.items():
         if len(chunks) > 1:
             chunks.sort(key=lambda c: c["time"].values[0])
             ds = xr.concat(chunks, dim="time")
