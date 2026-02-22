@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:grasswiki.otsdam.org)",
+      "Bash(gh search:*)",
+      "Bash(gh release view:*)",
+      "Bash(gh release list:*)",
+      "Read(//tmp/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-lock-edits.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-format.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
