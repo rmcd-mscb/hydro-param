@@ -21,6 +21,7 @@ from hydro_param.pipeline import (
     Stage4Results,
     _buffered_bbox,
     _process_temporal,
+    _split_time_period_by_year,
     resolve_bbox,
     stage1_resolve_fabric,
     stage2_resolve_datasets,
@@ -1041,6 +1042,37 @@ def test_process_temporal_unsupported_strategy():
 
     with pytest.raises(NotImplementedError, match="Temporal processing not supported"):
         _process_temporal(fabric, entry, ds_req, [var_spec], config)
+
+
+def test_split_time_period_single_year():
+    """Single-year period returns one chunk."""
+    result = _split_time_period_by_year(["2020-01-01", "2020-12-31"])
+    assert result == [["2020-01-01", "2020-12-31"]]
+
+
+def test_split_time_period_multi_year():
+    """Multi-year period splits at year boundaries."""
+    result = _split_time_period_by_year(["2020-01-01", "2021-12-31"])
+    assert result == [
+        ["2020-01-01", "2020-12-31"],
+        ["2021-01-01", "2021-12-31"],
+    ]
+
+
+def test_split_time_period_partial_years():
+    """Partial years at start/end are preserved."""
+    result = _split_time_period_by_year(["2020-03-15", "2022-06-30"])
+    assert result == [
+        ["2020-03-15", "2020-12-31"],
+        ["2021-01-01", "2021-12-31"],
+        ["2022-01-01", "2022-06-30"],
+    ]
+
+
+def test_split_time_period_same_day():
+    """Single-day period returns one chunk."""
+    result = _split_time_period_by_year(["2020-06-15", "2020-06-15"])
+    assert result == [["2020-06-15", "2020-06-15"]]
 
 
 def test_stage4_multi_year_produces_suffixed_keys():

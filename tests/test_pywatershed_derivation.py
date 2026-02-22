@@ -917,3 +917,38 @@ class TestMergeTemporalIntoDerived:
         result = merge_temporal_into_derived(derived, {})
 
         assert list(result.data_vars) == ["hru_elev"]
+
+    def test_concatenates_year_chunks_sorted(self) -> None:
+        """Multi-year chunks are sorted by time before concatenation."""
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        derived = xr.Dataset(
+            {"hru_elev": ("nhru", [100.0])},
+            coords={"nhru": [1]},
+        )
+
+        # Provide chunks out of order to verify sorting
+        temporal = {
+            "gridmet_2021": xr.Dataset(
+                {"pr": (("nhru", "time"), [[3.0, 4.0]])},
+                coords={
+                    "nhru": [1],
+                    "time": np.array(["2021-01-01", "2021-01-02"], dtype="datetime64[D]"),
+                },
+            ),
+            "gridmet_2020": xr.Dataset(
+                {"pr": (("nhru", "time"), [[1.0, 2.0]])},
+                coords={
+                    "nhru": [1],
+                    "time": np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[D]"),
+                },
+            ),
+        }
+
+        result = merge_temporal_into_derived(derived, temporal)
+
+        assert "pr" in result
+        # Should have 4 time steps concatenated in chronological order
+        assert result.sizes["time"] == 4
+        expected_values = [1.0, 2.0, 3.0, 4.0]
+        np.testing.assert_array_equal(result["pr"].values[0], expected_values)

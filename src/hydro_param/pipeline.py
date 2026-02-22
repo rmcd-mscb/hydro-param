@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import cast
 
@@ -425,6 +425,35 @@ def _process_temporal(
         )
 
 
+def _split_time_period_by_year(time_period: list[str]) -> list[list[str]]:
+    """Split a time period into per-year chunks at calendar year boundaries.
+
+    Parameters
+    ----------
+    time_period : list[str]
+        ``[start, end]`` ISO date strings.
+
+    Returns
+    -------
+    list[list[str]]
+        List of ``[start, end]`` pairs, one per calendar year.
+
+    Examples
+    --------
+    >>> _split_time_period_by_year(["2020-03-15", "2022-06-30"])
+    [['2020-03-15', '2020-12-31'], ['2021-01-01', '2021-12-31'], ['2022-01-01', '2022-06-30']]
+    """
+    start = date.fromisoformat(time_period[0])
+    end = date.fromisoformat(time_period[1])
+    chunks: list[list[str]] = []
+    while start <= end:
+        year_end = date(start.year, 12, 31)
+        chunk_end = min(year_end, end)
+        chunks.append([start.isoformat(), chunk_end.isoformat()])
+        start = date(start.year + 1, 1, 1)
+    return chunks
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
@@ -462,26 +491,38 @@ def stage4_process(
         var_names = [v.name for v in var_specs]
 
         if entry.temporal:
+            # Split temporal processing by year to keep files manageable
+            year_chunks = _split_time_period_by_year(cast(list[str], ds_req.time_period))
             logger.info(
-                "Dataset %d/%d: %s [%s, temporal] vars=%s period=%s",
+                "Dataset %d/%d: %s [%s, temporal] vars=%s period=%s (%d year chunks)",
                 ds_idx,
                 len(resolved),
                 ds_req.name,
                 entry.strategy,
                 var_names,
                 ds_req.time_period,
+                len(year_chunks),
             )
             t_ds = time.perf_counter()
-            ds = _process_temporal(fabric, entry, ds_req, var_specs, config)
-            temporal_results[ds_req.name] = ds
-            categories[ds_req.name] = category
-            logger.info(
-                "  %s complete: %d vars, %d time steps (%.1fs)",
-                ds_req.name,
-                len(ds.data_vars),
-                ds.sizes.get("time", 0),
-                time.perf_counter() - t_ds,
-            )
+
+            for chunk_period in year_chunks:
+                chunk_year = chunk_period[0][:4]
+                t_chunk = time.perf_counter()
+                chunk_req = ds_req.model_copy(update={"time_period": chunk_period})
+                ds = _process_temporal(fabric, entry, chunk_req, var_specs, config)
+                result_key = f"{ds_req.name}_{chunk_year}"
+                temporal_results[result_key] = ds
+                categories[result_key] = category
+                logger.info(
+                    "  %s year %s: %d vars, %d time steps (%.1fs)",
+                    ds_req.name,
+                    chunk_year,
+                    len(ds.data_vars),
+                    ds.sizes.get("time", 0),
+                    time.perf_counter() - t_chunk,
+                )
+
+            logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
             continue
 
         # Expand years: list → iterate, bare int → [int], None → [None]

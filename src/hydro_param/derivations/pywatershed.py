@@ -13,6 +13,7 @@ Future PRs will add steps 5 (soils), 6 (waterbody overlay),
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -89,7 +90,21 @@ def merge_temporal_into_derived(
     renames = renames or {}
     conversions = conversions or {}
 
-    for _ds_name, ds in temporal.items():
+    # Collect per-year chunks by base dataset name, then concatenate.
+    # Keys like "gridmet_2020", "gridmet_2021" share the base name "gridmet";
+    # we concatenate along time before merging into derived.
+    chunks_by_source: dict[str, list[xr.Dataset]] = {}
+    for ds_name, ds in temporal.items():
+        base_name = re.sub(r"_\d{4}$", "", ds_name)
+        chunks_by_source.setdefault(base_name, []).append(ds)
+
+    for _source, chunks in chunks_by_source.items():
+        if len(chunks) > 1:
+            chunks.sort(key=lambda c: c["time"].values[0])
+            ds = xr.concat(chunks, dim="time")
+        else:
+            ds = chunks[0]
+
         # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
         actual_renames = {old: new for old, new in renames.items() if old in ds}
         if actual_renames:
