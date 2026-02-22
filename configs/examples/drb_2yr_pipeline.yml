@@ -1,0 +1,40 @@
+# DRB 2-year pipeline config: DEM + NLCD + gridMET
+# Produces a SIR with topographic stats, land cover fractions, and temporal climate.
+#
+# Usage:
+#   hydro-param run configs/examples/drb_2yr_pipeline.yml
+
+target_fabric:
+  path: data/pywatershed_gis/drb_2yr/nhru.gpkg
+  id_field: nhm_id
+
+domain:
+  type: bbox
+  bbox: [-75.8, 39.6, -74.4, 42.5]
+
+datasets:
+  # 3DEP 10m DEM — elevation, slope, aspect (mean zonal stats)
+  - name: dem_3dep_10m
+    variables: [elevation, slope, aspect]
+    statistics: [mean]
+
+  # NLCD Land Cover via NHGF STAC OSN — categorical fractions
+  - name: nlcd_osn_lndcov
+    variables: [LndCov]
+    statistics: [categorical]
+    year: 2021
+
+  # gridMET daily climate (OPeNDAP via ClimateR catalog)
+  - name: gridmet
+    variables: [pr, tmmx, tmmn]
+    statistics: [mean]
+    time_period: ["2020-01-01", "2021-12-31"]
+
+output:
+  path: output
+  format: netcdf
+  sir_name: drb_2yr_sir
+
+processing:
+  engine: exactextract
+  batch_size: 500

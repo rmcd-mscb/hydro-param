@@ -676,3 +676,148 @@ class TestTopologyIntegrationDRB:
         assert np.all(computed > 0), "All segment lengths should be positive"
         correlation = np.corrcoef(computed, ref_seg_length)[0, 1]
         assert correlation > 0.9, f"Correlation too low: {correlation}"
+
+
+# ------------------------------------------------------------------
+# Geometry from fabric GeoDataFrame
+# ------------------------------------------------------------------
+
+
+class TestDeriveGeometryFromFabric:
+    """Tests for step 1: geometry from fabric GeoDataFrame."""
+
+    def test_area_from_fabric(self, derivation: PywatershedDerivation) -> None:
+        """hru_area computed from fabric polygon geometry."""
+        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        # Two 1-degree squares near equator — area should be > 0
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
+        assert "hru_area" in ds
+        assert np.all(ds["hru_area"].values > 0)
+        assert ds["hru_area"].attrs["units"] == "acres"
+
+    def test_lat_from_fabric(self, derivation: PywatershedDerivation) -> None:
+        """hru_lat computed from fabric centroid latitude."""
+        sir = xr.Dataset(coords={"hru_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2]},
+            geometry=[
+                Polygon([(0, 40), (1, 40), (1, 41), (0, 41)]),
+                Polygon([(0, 42), (1, 42), (1, 43), (0, 43)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
+        assert "hru_lat" in ds
+        np.testing.assert_allclose(ds["hru_lat"].values, [40.5, 42.5], atol=0.01)
+
+    def test_fabric_geometry_overrides_sir(self, derivation: PywatershedDerivation) -> None:
+        """When fabric is provided, SIR hru_area_m2/hru_lat are ignored."""
+        sir = xr.Dataset(
+            {
+                "hru_area_m2": ("hru_id", np.array([1.0, 1.0])),
+                "hru_lat": ("hru_id", np.array([0.0, 0.0])),
+            },
+            coords={"hru_id": [1, 2]},
+        )
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2]},
+            geometry=[
+                Polygon([(0, 40), (1, 40), (1, 41), (0, 41)]),
+                Polygon([(0, 42), (1, 42), (1, 43), (0, 43)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
+        # Should NOT be 1.0 (from SIR) — should be computed from fabric
+        assert np.all(ds["hru_area"].values > 1.0)
+        # Should NOT be 0.0 (from SIR) — should be ~40.5, ~42.5
+        assert np.all(ds["hru_lat"].values > 30.0)
+
+    def test_fallback_without_fabric(
+        self, derivation: PywatershedDerivation, sir_geometry: xr.Dataset
+    ) -> None:
+        """Without fabric, falls back to SIR-based geometry."""
+        ds = derivation.derive(sir_geometry)
+        assert "hru_area" in ds
+        np.testing.assert_allclose(ds["hru_area"].values[0], 1000.0, atol=1.0)
+
+
+# ------------------------------------------------------------------
+# SIR variable renaming
+# ------------------------------------------------------------------
+
+
+class TestSirVariableRenaming:
+    """Tests for SIR variable renaming."""
+
+    def test_default_rename(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(
+            {"FctImp_mean": ("hru_id", np.array([5.0, 20.0]))},
+            coords={"hru_id": [1, 2]},
+        )
+        renamed = derivation.rename_sir_variables(sir)
+        assert "impervious" in renamed
+        assert "FctImp_mean" not in renamed
+
+    def test_custom_rename(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(
+            {"my_var": ("hru_id", np.array([1.0]))},
+            coords={"hru_id": [1]},
+        )
+        renamed = derivation.rename_sir_variables(sir, renames={"my_var": "new_var"})
+        assert "new_var" in renamed
+
+    def test_rename_noop_when_not_present(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(
+            {"elevation": ("hru_id", np.array([100.0]))},
+            coords={"hru_id": [1]},
+        )
+        renamed = derivation.rename_sir_variables(sir)
+        assert "elevation" in renamed
+
+
+# ------------------------------------------------------------------
+# Categorical fraction majority
+# ------------------------------------------------------------------
+
+
+class TestCategoricalFractionMajority:
+    """Tests for computing majority class from categorical fractions."""
+
+    def test_majority_from_lndcov_fractions(self, derivation: PywatershedDerivation) -> None:
+        """Majority class extracted from LndCov_ fraction columns."""
+        sir = xr.Dataset(
+            {
+                "LndCov_11": ("hru_id", np.array([0.1, 0.0, 0.0])),
+                "LndCov_41": ("hru_id", np.array([0.8, 0.1, 0.2])),
+                "LndCov_42": ("hru_id", np.array([0.05, 0.0, 0.7])),
+                "LndCov_71": ("hru_id", np.array([0.05, 0.9, 0.1])),
+            },
+            coords={"hru_id": [1, 2, 3]},
+        )
+        ds = derivation.derive(sir)
+        assert "cov_type" in ds
+        # HRU 1: LndCov_41 (Deciduous Forest) highest → cov_type 3
+        assert ds["cov_type"].values[0] == 3
+        # HRU 2: LndCov_71 (Grassland) highest → cov_type 1
+        assert ds["cov_type"].values[1] == 1
+        # HRU 3: LndCov_42 (Evergreen Forest) highest → cov_type 4
+        assert ds["cov_type"].values[2] == 4
+
+    def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
+        """When no fraction columns exist, falls back to land_cover."""
+        sir = xr.Dataset(
+            {"land_cover": ("hru_id", np.array([42, 71]))},
+            coords={"hru_id": [1, 2]},
+        )
+        ds = derivation.derive(sir)
+        assert "cov_type" in ds
+        assert ds["cov_type"].values[0] == 4  # Evergreen → coniferous

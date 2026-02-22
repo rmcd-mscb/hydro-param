@@ -80,6 +80,41 @@ class PywatershedDerivation:
         self._lookup_tables_dir = lookup_tables_dir or Path("configs/lookup_tables")
         self._lookup_cache: dict[str, dict] = {}
 
+    def rename_sir_variables(
+        self,
+        sir: xr.Dataset,
+        renames: dict[str, str] | None = None,
+    ) -> xr.Dataset:
+        """Rename SIR variables for derivation compatibility.
+
+        Applies a mapping from pipeline SIR names to the names expected
+        by this derivation plugin.  If no explicit renames are provided,
+        applies the default mapping for common NHGF STAC / gdptools
+        variable names.
+
+        Parameters
+        ----------
+        sir
+            Input SIR dataset.
+        renames
+            Explicit variable name mapping ``{old: new}``.  Merged with
+            (and overrides) the built-in defaults.
+
+        Returns
+        -------
+        xr.Dataset
+            SIR with renamed variables.
+        """
+        defaults: dict[str, str] = {
+            "FctImp_mean": "impervious",
+        }
+        mapping = {**defaults, **(renames or {})}
+        actual = {old: new for old, new in mapping.items() if old in sir}
+        if actual:
+            sir = sir.rename(actual)
+            logger.info("SIR variable renames: %s", actual)
+        return sir
+
     def derive(
         self,
         sir: xr.Dataset,
@@ -126,7 +161,17 @@ class PywatershedDerivation:
             ds = ds.assign_coords(nhru=sir["hru_id"].values)
 
         # Step 1: Geometry (hru_area, hru_lat)
-        ds = self._derive_geometry(sir, ds)
+        ds = self._derive_geometry(sir, ds, fabric=fabric, id_field=id_field)
+
+        # Step 2: Topology (tosegment, hru_segment, seg_length)
+        if fabric is not None and segments is not None:
+            ds = self._derive_topology(
+                ds,
+                fabric=fabric,
+                segments=segments,
+                id_field=id_field,
+                segment_id_field=segment_id_field,
+            )
 
         # Step 2: Topology (tosegment, hru_segment, seg_length)
         if fabric is not None and segments is not None:
@@ -163,24 +208,61 @@ class PywatershedDerivation:
     # Step 1: Geometry extraction
     # ------------------------------------------------------------------
 
-    def _derive_geometry(self, sir: xr.Dataset, ds: xr.Dataset) -> xr.Dataset:
+    def _derive_geometry(
+        self,
+        sir: xr.Dataset,
+        ds: xr.Dataset,
+        *,
+        fabric: gpd.GeoDataFrame | None = None,
+        id_field: str = "nhm_id",
+    ) -> xr.Dataset:
         """Step 1: Compute basic geometry from the target fabric.
 
-        Expects the SIR to contain ``hru_area_m2`` (HRU area in square
-        meters) and ``hru_lat`` (centroid latitude in decimal degrees).
+        When *fabric* is provided, computes area via EPSG:5070 equal-area
+        projection and latitude from EPSG:4326 centroids.  Falls back to
+        SIR variables ``hru_area_m2`` and ``hru_lat`` when fabric is not
+        available.
         """
-        if "hru_area_m2" in sir:
+        if fabric is not None and id_field in fabric.columns:
+            # Align fabric rows to SIR HRU ordering
+            hru_ids = sir["hru_id"].values if "hru_id" in sir.coords else None
+            if hru_ids is not None:
+                fab = fabric.set_index(id_field).loc[hru_ids].reset_index()
+            else:
+                fab = fabric
+
+            # Area via equal-area projection (EPSG:5070 = CONUS Albers)
+            fab_5070 = fab.to_crs(epsg=5070)
+            area_m2 = fab_5070.geometry.area.values
             ds["hru_area"] = xr.DataArray(
-                convert(sir["hru_area_m2"].values, "m2", "acres"),
+                convert(area_m2, "m2", "acres"),
                 dims="nhru",
                 attrs={"units": "acres", "long_name": "Area of HRU"},
             )
-        if "hru_lat" in sir:
+
+            # Latitude from WGS84 centroids (compute in projected CRS, reproject)
+            centroids_5070 = fab_5070.geometry.centroid
+            centroids_4326 = gpd.GeoSeries(centroids_5070, crs="EPSG:5070").to_crs(epsg=4326)
+            lats = centroids_4326.y.values
             ds["hru_lat"] = xr.DataArray(
-                sir["hru_lat"].values,
+                lats,
                 dims="nhru",
                 attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
             )
+        else:
+            # Fallback to SIR-based geometry
+            if "hru_area_m2" in sir:
+                ds["hru_area"] = xr.DataArray(
+                    convert(sir["hru_area_m2"].values, "m2", "acres"),
+                    dims="nhru",
+                    attrs={"units": "acres", "long_name": "Area of HRU"},
+                )
+            if "hru_lat" in sir:
+                ds["hru_lat"] = xr.DataArray(
+                    sir["hru_lat"].values,
+                    dims="nhru",
+                    attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
+                )
         return ds
 
     # ------------------------------------------------------------------
@@ -394,23 +476,40 @@ class PywatershedDerivation:
     def _derive_landcover(self, sir: xr.Dataset, ds: xr.Dataset) -> xr.Dataset:
         """Step 4: Derive vegetation and impervious parameters from NLCD.
 
-        Expects the SIR to contain ``land_cover`` (dominant NLCD class
-        per HRU), and optionally ``tree_canopy`` (percent, 0-100) and
-        ``impervious`` (percent, 0-100).
-        """
-        # Accept both "land_cover" and "land_cover_majority" (pipeline
-        # appends a statistic suffix for non-mean aggregations)
-        lc_var = None
-        for candidate in ("land_cover", "land_cover_majority"):
-            if candidate in sir:
-                lc_var = candidate
-                break
+        Supports three input modes:
 
-        if lc_var is not None:
+        1. **Categorical fractions** (preferred): SIR contains columns
+           like ``LndCov_11``, ``LndCov_21``, etc. from gdptools
+           ``ZonalGen(categorical=True)``.  The majority class is
+           computed via argmax.
+        2. **Single majority value**: ``land_cover`` or
+           ``land_cover_majority`` containing the dominant NLCD class.
+        3. **Impervious/canopy**: ``impervious`` (0-100%) and
+           ``tree_canopy`` (0-100%).
+        """
+        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
+        lc_var = None
+        nlcd_values = self._compute_majority_from_fractions(sir)
+
+        if nlcd_values is None:
+            # Fallback to single majority value
+            for candidate in ("land_cover", "land_cover_majority"):
+                if candidate in sir:
+                    lc_var = candidate
+                    break
+
+        has_lc = nlcd_values is not None or lc_var is not None
+        if nlcd_values is not None:
             nlcd_table = self._load_lookup_table("nlcd_to_prms_cov_type")
             mapping = nlcd_table["mapping"]
-            nlcd_values = sir[lc_var].values.astype(int)
             cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values])
+        elif lc_var is not None:
+            nlcd_table = self._load_lookup_table("nlcd_to_prms_cov_type")
+            mapping = nlcd_table["mapping"]
+            nlcd_values_lc = sir[lc_var].values.astype(int)
+            cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
+
+        if has_lc:
             ds["cov_type"] = xr.DataArray(
                 cov_type,
                 dims="nhru",
@@ -443,6 +542,64 @@ class PywatershedDerivation:
             )
 
         return ds
+
+    @staticmethod
+    def _compute_majority_from_fractions(
+        sir: xr.Dataset,
+        prefixes: tuple[str, ...] = ("LndCov_", "land_cover_"),
+    ) -> np.ndarray | None:
+        """Compute majority NLCD class from categorical fraction columns.
+
+        Scans SIR variables for columns matching ``{prefix}{class_code}``
+        (e.g., ``LndCov_11``, ``LndCov_41``).  For each HRU, returns the
+        class code with the highest fraction.
+
+        Parameters
+        ----------
+        sir
+            SIR dataset potentially containing fraction columns.
+        prefixes
+            Variable name prefixes to search for.
+
+        Returns
+        -------
+        np.ndarray or None
+            Array of majority NLCD class codes (int), or ``None`` if no
+            fraction columns found.
+        """
+        for prefix in prefixes:
+            fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+            if len(fraction_vars) < 2:
+                continue
+
+            # Extract class codes from suffixes
+            class_codes: list[int] = []
+            valid_vars: list[str] = []
+            for v in fraction_vars:
+                suffix = v[len(prefix) :]
+                try:
+                    class_codes.append(int(suffix))
+                    valid_vars.append(v)
+                except ValueError:
+                    continue
+
+            if len(class_codes) < 2:
+                continue
+
+            # Stack fractions into (nhru, n_classes) array
+            fractions = np.column_stack([sir[v].values for v in valid_vars])
+            codes = np.array(class_codes)
+            majority_idx = np.argmax(fractions, axis=1)
+            majority_class = codes[majority_idx]
+
+            logger.info(
+                "Computed majority class from %d categorical fraction columns (prefix=%r)",
+                len(valid_vars),
+                prefix,
+            )
+            return majority_class
+
+        return None
 
     # ------------------------------------------------------------------
     # Step 8: Lookup table application
