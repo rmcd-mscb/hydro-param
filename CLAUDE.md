@@ -149,7 +149,7 @@ Always run these locally before pushing to a branch:
 1. `pixi run -e dev check` — runs lint, format-check, typecheck, and tests
 2. `pixi run -e dev pre-commit` — runs all pre-commit hooks (ruff, mypy, detect-secrets)
 
-If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lock` — CI uses `--locked` and will fail if the lock file is stale.
+If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lock` — CI uses `locked: true` in setup-pixi and will fail if the lock file is stale.
 
 ## What NOT to Do
 
