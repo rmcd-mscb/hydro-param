@@ -89,7 +89,20 @@ def merge_temporal_into_derived(
     renames = renames or {}
     conversions = conversions or {}
 
+    # Collect per-year chunks that share the same variables, then concatenate.
+    # Keys like "gridmet_2020", "gridmet_2021" have identical variables;
+    # we concatenate along time before merging into derived.
+    chunks_by_varset: dict[tuple[str, ...], list[xr.Dataset]] = {}
     for _ds_name, ds in temporal.items():
+        var_key = tuple(sorted(str(v) for v in ds.data_vars))
+        chunks_by_varset.setdefault(var_key, []).append(ds)
+
+    for _var_key, chunks in chunks_by_varset.items():
+        if len(chunks) > 1:
+            ds = xr.concat(chunks, dim="time")
+        else:
+            ds = chunks[0]
+
         # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
         actual_renames = {old: new for old, new in renames.items() if old in ds}
         if actual_renames:
