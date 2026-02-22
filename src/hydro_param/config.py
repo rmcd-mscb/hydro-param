@@ -45,13 +45,23 @@ class DatasetRequest(BaseModel):
     source: Path | None = None
     variables: list[str] = []
     statistics: list[str] = Field(default_factory=lambda: ["mean"])
-    year: int | None = Field(default=None, ge=1900, le=2100)
+    year: int | list[int] | None = Field(default=None)
     time_period: list[str] | None = Field(
         default=None,
         min_length=2,
         max_length=2,
         description="[start, end] ISO date strings for temporal datasets",
     )
+
+    @model_validator(mode="after")
+    def _validate_year(self) -> DatasetRequest:
+        if self.year is None:
+            return self
+        years = [self.year] if isinstance(self.year, int) else self.year
+        for y in years:
+            if not (1900 <= y <= 2100):
+                raise ValueError(f"Year {y} outside valid range 1900-2100")
+        return self
 
     @model_validator(mode="after")
     def _validate_time_period(self) -> DatasetRequest:

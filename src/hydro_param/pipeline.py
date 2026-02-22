@@ -53,6 +53,7 @@ class Stage4Results:
 
     static: dict[str, pd.DataFrame] = field(default_factory=dict)
     temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+    categories: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -199,7 +200,7 @@ def stage2_resolve_datasets(
     return resolved
 
 
-def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.1) -> list[float]:
+def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.02) -> list[float]:
     """Compute WGS84 bbox from fabric with fractional buffer.
 
     Parameters
@@ -255,7 +256,7 @@ def _process_batch(
                 collection_id=cast(str, entry.collection),
                 variable_name=var_spec.name,
                 id_field=config.target_fabric.id_field,
-                year=ds_req.year,
+                year=cast(int | None, ds_req.year),
                 engine=config.processing.engine,
                 statistics=ds_req.statistics,
                 categorical=var_spec.categorical,
@@ -283,7 +284,7 @@ def _process_batch(
             )
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
-    for var_spec in var_specs:
+    for i, var_spec in enumerate(var_specs):
         if isinstance(var_spec, DerivedVariableSpec):
             # Load source once, then derive
             if var_spec.source not in source_cache:
@@ -310,6 +311,10 @@ def _process_batch(
         tiff_path = work_dir / f"{var_spec.name}.tif"
         save_to_geotiff(da, tiff_path)
 
+        # Free derived/fetched raster before zonal stats to reduce peak memory
+        if isinstance(var_spec, DerivedVariableSpec):
+            del da
+
         # Determine if variable is categorical
         categorical = isinstance(var_spec, VariableSpec) and var_spec.categorical
 
@@ -327,6 +332,19 @@ def _process_batch(
             y_coord=entry.y_coord,
         )
         results[var_spec.name] = df
+
+        # Clean up GeoTIFF after zonal stats
+        tiff_path.unlink(missing_ok=True)
+
+        # Release source from cache when no remaining derived vars need it
+        if isinstance(var_spec, DerivedVariableSpec):
+            remaining = var_specs[i + 1 :]
+            source_still_needed = any(
+                isinstance(v, DerivedVariableSpec) and v.source == var_spec.source
+                for v in remaining
+            )
+            if not source_still_needed and var_spec.source in source_cache:
+                del source_cache[var_spec.source]
 
     return results
 
@@ -437,25 +455,55 @@ def stage4_process(
 
     all_results: dict[str, list[pd.DataFrame]] = {}
     temporal_results: dict[str, xr.Dataset] = {}
+    categories: dict[str, str] = {}
 
     for entry, ds_req, var_specs in resolved:
         logger.info("Processing dataset: %s", ds_req.name)
+        category = entry.category or "uncategorized"
 
         if entry.temporal:
             ds = _process_temporal(fabric, entry, ds_req, var_specs, config)
             temporal_results[ds_req.name] = ds
+            categories[ds_req.name] = category
             continue
 
-        for batch_id in batch_ids:
-            batch = fabric[fabric["batch_id"] == batch_id]
-            logger.info("  Batch %d/%d: %d features", batch_id + 1, len(batch_ids), len(batch))
+        # Expand years: list → iterate, bare int → [int], None → [None]
+        if isinstance(ds_req.year, list):
+            years: list[int | None] = list(ds_req.year)
+        elif ds_req.year is not None:
+            years = [ds_req.year]
+        else:
+            years = [None]
 
-            with tempfile.TemporaryDirectory(prefix="hydro_param_") as tmp:
-                work_dir = Path(tmp)
-                batch_results = _process_batch(batch, entry, ds_req, var_specs, config, work_dir)
+        for year in years:
+            # Create single-year request for _process_batch
+            year_req = ds_req.model_copy(update={"year": year})
 
-            for var_name, df in batch_results.items():
-                all_results.setdefault(var_name, []).append(df)
+            for batch_id in batch_ids:
+                batch = fabric[fabric["batch_id"] == batch_id]
+                logger.info(
+                    "  Batch %d/%d: %d features (year=%s)",
+                    batch_id + 1,
+                    len(batch_ids),
+                    len(batch),
+                    year,
+                )
+
+                with tempfile.TemporaryDirectory(prefix="hydro_param_") as tmp:
+                    work_dir = Path(tmp)
+                    batch_results = _process_batch(
+                        batch, entry, year_req, var_specs, config, work_dir
+                    )
+
+                for var_name, df in batch_results.items():
+                    # Year-suffix result keys when multiple years are specified
+                    result_key = f"{var_name}_{year}" if year is not None else var_name
+                    all_results.setdefault(result_key, []).append(df)
+
+            # Track categories with year-suffixed keys
+            for var_spec in var_specs:
+                result_key = f"{var_spec.name}_{year}" if year is not None else var_spec.name
+                categories[result_key] = category
 
     # Merge batch results per variable
     merged: dict[str, pd.DataFrame] = {}
@@ -463,7 +511,7 @@ def stage4_process(
         merged[var_name] = pd.concat(dfs)
         logger.info("  %s: %d total features", var_name, len(merged[var_name]))
 
-    return Stage4Results(static=merged, temporal=temporal_results)
+    return Stage4Results(static=merged, temporal=temporal_results, categories=categories)
 
 
 def stage5_format_output(
@@ -497,9 +545,23 @@ def stage5_format_output(
     if isinstance(results, Stage4Results):
         static_results = results.static
         temporal_results = results.temporal
+        categories = results.categories
     else:
         static_results = results
         temporal_results = {}
+        categories = {}
+
+    sir_attrs = {
+        "title": f"Hydrologic parameters: {config.output.sir_name}",
+        "institution": "hydro-param",
+        "source": "hydro-param pipeline",
+        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
+        "Conventions": "CF-1.8",
+        "target_fabric": str(config.target_fabric.path),
+        "target_fabric_id_field": id_field,
+        "n_features": len(feature_ids),
+        "processing_engine": config.processing.engine,
+    }
 
     data_vars: dict[str, tuple] = {}
     for var_name, df in static_results.items():
@@ -515,45 +577,69 @@ def stage5_format_output(
     sir = xr.Dataset(
         data_vars,
         coords={"hru_id": feature_ids},
-        attrs={
-            "title": f"Hydrologic parameters: {config.output.sir_name}",
-            "institution": "hydro-param",
-            "source": "hydro-param pipeline",
-            "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
-            "Conventions": "CF-1.8",
-            "target_fabric": str(config.target_fabric.path),
-            "target_fabric_id_field": id_field,
-            "n_features": len(feature_ids),
-            "processing_engine": config.processing.engine,
-        },
+        attrs=sir_attrs,
     )
 
     # Write output
     output_dir = config.output.path
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Write combined SIR (used by pywatershed plugin and PipelineResult)
+    if not data_vars:
+        logger.warning("No static results to write; skipping static SIR file.")
     if data_vars:
         if config.output.format == "netcdf":
-            out_path = output_dir / f"{config.output.sir_name}.nc"
-            sir.to_netcdf(out_path)
-            logger.info("Wrote SIR → %s", out_path)
+            sir_path = output_dir / f"{config.output.sir_name}.nc"
+            sir.to_netcdf(sir_path)
+            logger.info("Wrote SIR → %s", sir_path)
         elif config.output.format == "parquet":
-            out_path = output_dir / f"{config.output.sir_name}.parquet"
-            sir.to_dataframe().to_parquet(out_path)
-            logger.info("Wrote SIR → %s", out_path)
-    else:
-        logger.warning("No static results to write; skipping static SIR file.")
+            sir_path = output_dir / f"{config.output.sir_name}.parquet"
+            sir.to_dataframe().to_parquet(sir_path)
+            logger.info("Wrote SIR → %s", sir_path)
 
-    # Write temporal results as separate files
-    for ds_name, ds in temporal_results.items():
+    # Write per-variable files organized by category
+    for var_name, df in static_results.items():
+        category = categories.get(var_name, "uncategorized")
+        var_dir = output_dir / category
+        var_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build single-variable xr.Dataset
+        var_data_vars: dict[str, tuple] = {}
+        for col in df.columns:
+            col_name = f"{var_name}_{col}" if col != "mean" else var_name
+            if hasattr(df.index, "name") and df.index.name == id_field:
+                values = df[col].reindex(feature_ids).values
+            else:
+                values = df[col].values
+            var_data_vars[col_name] = ("hru_id", values)
+
+        var_ds = xr.Dataset(
+            var_data_vars,
+            coords={"hru_id": feature_ids},
+            attrs=sir_attrs,
+        )
+
         if config.output.format == "netcdf":
-            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.nc"
-            ds.to_netcdf(temporal_path)
-            logger.info("Wrote temporal → %s", temporal_path)
+            out_path = var_dir / f"{var_name}.nc"
+            var_ds.to_netcdf(out_path)
         elif config.output.format == "parquet":
-            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.parquet"
+            out_path = var_dir / f"{var_name}.parquet"
+            var_ds.to_dataframe().to_parquet(out_path)
+        logger.info("Wrote %s → %s", var_name, out_path)
+
+    # Write temporal results as per-dataset files in category directories
+    for ds_name, ds in temporal_results.items():
+        category = categories.get(ds_name, "climate")
+        var_dir = output_dir / category
+        var_dir.mkdir(parents=True, exist_ok=True)
+
+        if config.output.format == "netcdf":
+            temporal_path = var_dir / f"{ds_name}_temporal.nc"
+            ds.to_netcdf(temporal_path)
+        elif config.output.format == "parquet":
+            temporal_path = var_dir / f"{ds_name}_temporal.parquet"
             ds.to_dataframe().to_parquet(temporal_path)
-            logger.info("Wrote temporal → %s", temporal_path)
+        logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
 
     return sir
 
