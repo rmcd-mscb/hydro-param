@@ -19,6 +19,7 @@ from hydro_param.config import PipelineConfig, load_config
 from hydro_param.dataset_registry import load_registry
 from hydro_param.pipeline import (
     Stage4Results,
+    _buffered_bbox,
     _process_temporal,
     resolve_bbox,
     stage1_resolve_fabric,
@@ -402,6 +403,39 @@ def test_resolve_bbox_unsupported_type():
     )
     with pytest.raises(NotImplementedError, match="not yet supported"):
         resolve_bbox(config)
+
+
+# ---------------------------------------------------------------------------
+# _buffered_bbox
+# ---------------------------------------------------------------------------
+
+
+def test_buffered_bbox_geographic():
+    """_buffered_bbox returns WGS84 bbox with buffer for geographic CRS."""
+    gdf = gpd.GeoDataFrame(
+        {"id": [1]},
+        geometry=[box(-75.0, 40.0, -74.0, 41.0)],
+        crs="EPSG:4326",
+    )
+    result = _buffered_bbox(gdf, buffer_frac=0.1)
+    assert len(result) == 4
+    assert result[0] < -75.0  # west buffered
+    assert result[1] < 40.0  # south buffered
+    assert result[2] > -74.0  # east buffered
+    assert result[3] > 41.0  # north buffered
+
+
+def test_buffered_bbox_projected():
+    """_buffered_bbox reprojects to WGS84 for projected CRS fabrics."""
+    gdf = gpd.GeoDataFrame(
+        {"id": [1]},
+        geometry=[box(-75.0, 40.0, -74.0, 41.0)],
+        crs="EPSG:4326",
+    ).to_crs("EPSG:5070")
+    result = _buffered_bbox(gdf, buffer_frac=0.0)
+    # Should be approximately the original WGS84 bounds
+    assert -76.0 < result[0] < -74.5
+    assert 39.5 < result[1] < 40.5
 
 
 # ---------------------------------------------------------------------------

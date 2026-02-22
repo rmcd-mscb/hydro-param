@@ -238,7 +238,9 @@ def fetch_stac_cog(
         da = cast(xr.DataArray, rioxarray.open_rasterio(asset.href, masked=True))
         da = da.squeeze("band", drop=True)
         try:
-            da = da.rio.clip_box(minx=bbox[0], miny=bbox[1], maxx=bbox[2], maxy=bbox[3])
+            da = da.rio.clip_box(
+                minx=bbox[0], miny=bbox[1], maxx=bbox[2], maxy=bbox[3], crs="EPSG:4326"
+            )
         except (rioxarray.exceptions.NoDataInBounds, ValueError):
             # Item may not overlap after precise clipping
             logger.debug("Tile %s has no data in bbox, skipping", item.id)
@@ -275,8 +277,8 @@ def fetch_local_tiff(
     """Load a local GeoTIFF clipped to the bounding box.
 
     Reads the file referenced by ``entry.source`` and clips to the
-    bounding box.  The bbox is assumed to be in the dataset's CRS
-    (``entry.crs``).
+    bounding box.  The bbox is in EPSG:4326; rioxarray handles
+    reprojection to the raster's native CRS internally.
 
     Parameters
     ----------
@@ -284,7 +286,7 @@ def fetch_local_tiff(
         Registry entry with ``strategy="local_tiff"`` and a ``source``
         path pointing to a GeoTIFF file.
     bbox : list[float]
-        ``[west, south, east, north]`` in the dataset's CRS.
+        ``[west, south, east, north]`` in EPSG:4326.
     dataset_name : str
         Dataset name for use in error messages.
 
@@ -354,6 +356,7 @@ def fetch_local_tiff(
             miny=bbox[1],
             maxx=bbox[2],
             maxy=bbox[3],
+            crs="EPSG:4326",
         )
     except (NoDataInBounds, ValueError) as exc:
         raise RuntimeError(f"No data in bbox={bbox} for {source_path}") from exc

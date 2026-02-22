@@ -85,6 +85,17 @@ def _make_entry(source: str, crs: str = "EPSG:5070", categorical: bool = False) 
     )
 
 
+# Raster covers EPSG:5070 x=[1M, 1M+3000], y=[2M, 2M+3000].
+# WGS84 equivalents (approximate):
+#   Full:   (-84.078, 40.448) to (-84.037, 40.471)
+#   Middle: (-84.071, 40.452) to (-84.057, 40.460)
+#   Small:  (-84.078, 40.448) to (-84.073, 40.450)
+
+_FULL_BBOX = [-84.078, 40.448, -84.037, 40.472]
+_MID_BBOX = [-84.071, 40.452, -84.057, 40.460]
+_SMALL_BBOX = [-84.078, 40.448, -84.073, 40.451]
+
+
 # ---------------------------------------------------------------------------
 # Tests: fetch_local_tiff
 # ---------------------------------------------------------------------------
@@ -95,9 +106,7 @@ def test_fetch_local_tiff_loads_continuous(tmp_path: Path):
     tiff = _make_tiff(tmp_path / "elev.tif")
     entry = _make_entry(str(tiff))
 
-    # Bbox covering roughly the middle of the raster
-    bbox = [1_000_500.0, 2_000_500.0, 1_001_500.0, 2_001_500.0]
-    da = fetch_local_tiff(entry, bbox)
+    da = fetch_local_tiff(entry, _MID_BBOX)
 
     assert isinstance(da, xr.DataArray)
     assert da.size > 0
@@ -110,9 +119,7 @@ def test_fetch_local_tiff_loads_categorical(tmp_path: Path):
     tiff = _make_tiff(tmp_path / "nlcd.tif", categorical=True)
     entry = _make_entry(str(tiff), categorical=True)
 
-    # Full extent bbox
-    bbox = [1_000_000.0, 2_000_000.0, 1_003_000.0, 2_003_000.0]
-    da = fetch_local_tiff(entry, bbox)
+    da = fetch_local_tiff(entry, _FULL_BBOX)
 
     assert isinstance(da, xr.DataArray)
     # Should contain our NLCD classes
@@ -130,12 +137,10 @@ def test_fetch_local_tiff_clips_to_bbox(tmp_path: Path):
     tiff = _make_tiff(tmp_path / "elev.tif")
     entry = _make_entry(str(tiff))
 
-    # Small bbox: ~10 cells x 10 cells
-    bbox = [1_000_000.0, 2_000_000.0, 1_000_300.0, 2_000_300.0]
-    da = fetch_local_tiff(entry, bbox)
+    da = fetch_local_tiff(entry, _SMALL_BBOX)
 
-    assert da.shape[0] <= 12  # ~10 cells + boundary tolerance
-    assert da.shape[1] <= 12
+    assert da.shape[0] <= 15  # ~10 cells + reprojection boundary tolerance
+    assert da.shape[1] <= 15
 
 
 def test_fetch_local_tiff_preserves_crs(tmp_path: Path):
@@ -143,8 +148,7 @@ def test_fetch_local_tiff_preserves_crs(tmp_path: Path):
     tiff = _make_tiff(tmp_path / "elev.tif", crs="EPSG:5070")
     entry = _make_entry(str(tiff), crs="EPSG:5070")
 
-    bbox = [1_000_000.0, 2_000_000.0, 1_003_000.0, 2_003_000.0]
-    da = fetch_local_tiff(entry, bbox)
+    da = fetch_local_tiff(entry, _FULL_BBOX)
 
     assert da.rio.crs is not None
     assert da.rio.crs.to_epsg() == 5070
@@ -163,7 +167,7 @@ def test_fetch_local_tiff_no_data_in_bbox_raises(tmp_path: Path):
     tiff = _make_tiff(tmp_path / "elev.tif")
     entry = _make_entry(str(tiff))
 
-    # Bbox far outside raster extent
+    # Bbox far outside raster extent (WGS84)
     bbox = [0.0, 0.0, 1.0, 1.0]
     with pytest.raises(RuntimeError, match="No data in bbox"):
         fetch_local_tiff(entry, bbox)

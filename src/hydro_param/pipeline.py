@@ -199,6 +199,30 @@ def stage2_resolve_datasets(
     return resolved
 
 
+def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.1) -> list[float]:
+    """Compute WGS84 bbox from fabric with fractional buffer.
+
+    Parameters
+    ----------
+    fabric : gpd.GeoDataFrame
+        Spatial features (any CRS).
+    buffer_frac : float
+        Fractional buffer to add around bounds (default 10%).
+
+    Returns
+    -------
+    list[float]
+        ``[west, south, east, north]`` in EPSG:4326.
+    """
+    if fabric.crs and not fabric.crs.is_geographic:
+        bounds = fabric.to_crs("EPSG:4326").total_bounds
+    else:
+        bounds = fabric.total_bounds
+    dx = (bounds[2] - bounds[0]) * buffer_frac
+    dy = (bounds[3] - bounds[1]) * buffer_frac
+    return [bounds[0] - dx, bounds[1] - dy, bounds[2] + dx, bounds[3] + dy]
+
+
 def _process_batch(
     batch_fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
@@ -240,8 +264,8 @@ def _process_batch(
             results[var_spec.name] = df
         return results
 
-    # TODO: Reproject batch bounds into entry.crs when fabric CRS != dataset CRS
-    bbox = list(batch_fabric.total_bounds)
+    # Compute WGS84 bbox with buffer for STAC/remote queries
+    bbox = _buffered_bbox(batch_fabric)
 
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
