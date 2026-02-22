@@ -1,7 +1,13 @@
 #!/bin/bash
 # Run mypy on edited Python files for immediate type-error feedback
 INPUT=$(cat)
-FILE_PATH=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['tool_input']['file_path'])" "$INPUT" 2>/dev/null)
+FILE_PATH=$(echo "$INPUT" | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['tool_input']['file_path'])" 2>&1)
+PARSE_STATUS=$?
+
+if [[ $PARSE_STATUS -ne 0 || -z "$FILE_PATH" ]]; then
+  echo "WARNING: mypy-check.sh could not parse file path from hook input. Skipping." >&2
+  exit 0
+fi
 
 # Only run on Python files under src/hydro_param/
 if [[ "$FILE_PATH" != *.py ]]; then

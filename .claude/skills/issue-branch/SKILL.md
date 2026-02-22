@@ -27,7 +27,7 @@ The user provides a short description of the work. For example:
 4. **Create and checkout a feature branch** named `<type>/<issue-number>-<short-description>`:
    - Use lowercase, hyphens for spaces
    - Keep the short description to 3-5 words max
-   - Branch from `main` (pull latest first with `git pull origin main`)
+   - Branch from `main` using `git fetch origin main && git checkout -b <branch> origin/main`
 
 5. **Report** the issue URL and branch name to the user.
 
@@ -36,8 +36,8 @@ The user provides a short description of the work. For example:
 User: `/issue-branch add soils derivation step`
 
 Result:
-- Issue: `feat: add soils derivation step` → `https://github.com/rmcd-mscb/hydro-param/issues/59`
-- Branch: `feat/59-add-soils-derivation-step`
+- Issue: `feat: add soils derivation step` → `https://github.com/rmcd-mscb/hydro-param/issues/<N>`
+- Branch: `feat/<N>-add-soils-derivation-step`
 
 ## Rules
 

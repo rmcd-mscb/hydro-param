@@ -1,7 +1,6 @@
 ---
 name: pixi-lock-sync
 description: Detect pyproject.toml changes and regenerate pixi.lock
-disable-model-invocation: true
 ---
 
 # /pixi-lock-sync — Lock File Synchronization
