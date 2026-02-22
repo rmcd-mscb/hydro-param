@@ -19,6 +19,7 @@ from hydro_param.config import PipelineConfig, load_config
 from hydro_param.dataset_registry import load_registry
 from hydro_param.pipeline import (
     Stage4Results,
+    _buffered_bbox,
     _process_temporal,
     resolve_bbox,
     stage1_resolve_fabric,
@@ -405,6 +406,39 @@ def test_resolve_bbox_unsupported_type():
 
 
 # ---------------------------------------------------------------------------
+# _buffered_bbox
+# ---------------------------------------------------------------------------
+
+
+def test_buffered_bbox_geographic():
+    """_buffered_bbox returns WGS84 bbox with buffer for geographic CRS."""
+    gdf = gpd.GeoDataFrame(
+        {"id": [1]},
+        geometry=[box(-75.0, 40.0, -74.0, 41.0)],
+        crs="EPSG:4326",
+    )
+    result = _buffered_bbox(gdf, buffer_frac=0.1)
+    assert len(result) == 4
+    assert result[0] < -75.0  # west buffered
+    assert result[1] < 40.0  # south buffered
+    assert result[2] > -74.0  # east buffered
+    assert result[3] > 41.0  # north buffered
+
+
+def test_buffered_bbox_projected():
+    """_buffered_bbox reprojects to WGS84 for projected CRS fabrics."""
+    gdf = gpd.GeoDataFrame(
+        {"id": [1]},
+        geometry=[box(-75.0, 40.0, -74.0, 41.0)],
+        crs="EPSG:4326",
+    ).to_crs("EPSG:5070")
+    result = _buffered_bbox(gdf, buffer_frac=0.0)
+    # Should be approximately the original WGS84 bounds
+    assert -76.0 < result[0] < -74.5
+    assert 39.5 < result[1] < 40.5
+
+
+# ---------------------------------------------------------------------------
 # get_processor (kept from original tests)
 # ---------------------------------------------------------------------------
 
@@ -785,14 +819,18 @@ def test_stage5_handles_stage4_results(config_yaml: Path, fabric_gpkg: Path):
     assert isinstance(sir, xr.Dataset)
     assert "elevation" in sir.data_vars
 
-    # Check temporal file was written
+    # Check temporal file was written in category directory
     output_dir = config.output.path
-    temporal_path = output_dir / f"{config.output.sir_name}_snodas_temporal.nc"
+    temporal_path = output_dir / "climate" / "snodas_temporal.nc"
     assert temporal_path.exists()
 
     loaded = xr.open_dataset(temporal_path)
     assert "SWE" in loaded.data_vars
     loaded.close()
+
+    # Check per-variable static file was written in category directory
+    static_path = output_dir / "uncategorized" / "elevation.nc"
+    assert static_path.exists()
 
 
 def test_stage5_backward_compat_dict(config_yaml: Path, fabric_gpkg: Path):
@@ -1005,6 +1043,137 @@ def test_process_temporal_unsupported_strategy():
         _process_temporal(fabric, entry, ds_req, [var_spec], config)
 
 
+def test_stage4_multi_year_produces_suffixed_keys():
+    """Multi-year datasets produce year-suffixed result keys in stage4."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"], "batch_id": [0, 0]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        crs="EPSG:5070",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+        year=[2020, 2021],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11, 21]}, index=["a", "b"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+
+    assert "LndCov_2020" in results.static
+    assert "LndCov_2021" in results.static
+    assert "LndCov" not in results.static
+    assert results.categories["LndCov_2020"] == "land_cover"
+    assert results.categories["LndCov_2021"] == "land_cover"
+
+
+def test_stage4_single_year_produces_suffixed_key():
+    """A single-int year still produces a year-suffixed result key."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+        year=2021,
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+
+    assert "LndCov_2021" in results.static
+    assert "LndCov" not in results.static
+
+
+def test_stage4_no_year_produces_unsuffixed_key():
+    """When year=None, result keys have no year suffix."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+
+    assert "LndCov" in results.static
+    assert not any("LndCov_" in k for k in results.static)
+
+
 def test_process_temporal_empty_statistics_raises():
     """_process_temporal raises if statistics list is empty."""
     from hydro_param.config import DatasetRequest
@@ -1111,6 +1280,6 @@ def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, cap
     static_path = config.output.path / f"{config.output.sir_name}.nc"
     assert not static_path.exists()
 
-    # Temporal file SHOULD exist
-    temporal_path = config.output.path / f"{config.output.sir_name}_snodas_temporal.nc"
+    # Temporal file SHOULD exist in category directory
+    temporal_path = config.output.path / "climate" / "snodas_temporal.nc"
     assert temporal_path.exists()

@@ -821,3 +821,99 @@ class TestCategoricalFractionMajority:
         ds = derivation.derive(sir)
         assert "cov_type" in ds
         assert ds["cov_type"].values[0] == 4  # Evergreen → coniferous
+
+
+# ------------------------------------------------------------------
+# merge_temporal_into_derived
+# ------------------------------------------------------------------
+
+
+class TestMergeTemporalIntoDerived:
+    """Tests for the merge_temporal_into_derived() helper."""
+
+    def test_renames_variables(self) -> None:
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        derived = xr.Dataset(
+            {"hru_elev": ("nhru", [100.0, 200.0])},
+            coords={"nhru": [1, 2]},
+        )
+        temporal = {
+            "gridmet": xr.Dataset(
+                {
+                    "pr": (("nhru", "time"), np.array([[1.0, 2.0], [3.0, 4.0]])),
+                    "tmmx": (("nhru", "time"), np.array([[300.0, 301.0], [302.0, 303.0]])),
+                    "tmmn": (("nhru", "time"), np.array([[280.0, 281.0], [282.0, 283.0]])),
+                },
+                coords={"nhru": [1, 2], "time": ["2020-01-01", "2020-01-02"]},
+            )
+        }
+
+        result = merge_temporal_into_derived(
+            derived,
+            temporal,
+            renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
+        )
+
+        assert "prcp" in result
+        assert "tmax" in result
+        assert "tmin" in result
+        assert "pr" not in result
+        assert "tmmx" not in result
+
+    def test_converts_units(self) -> None:
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        derived = xr.Dataset(
+            {"hru_elev": ("nhru", [100.0])},
+            coords={"nhru": [1]},
+        )
+        temporal = {
+            "gridmet": xr.Dataset(
+                {
+                    "tmax": (("nhru", "time"), np.array([[300.0]])),
+                },
+                coords={"nhru": [1], "time": ["2020-01-01"]},
+            )
+        }
+
+        result = merge_temporal_into_derived(
+            derived,
+            temporal,
+            conversions={"tmax": ("K", "C")},
+        )
+
+        # 300K = 26.85°C
+        np.testing.assert_allclose(result["tmax"].values[0, 0], 26.85, atol=0.01)
+
+    def test_aligns_dimension(self) -> None:
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        derived = xr.Dataset(
+            {"hru_elev": ("nhru", [100.0, 200.0])},
+            coords={"nhru": [1, 2]},
+        )
+        temporal = {
+            "gridmet": xr.Dataset(
+                {
+                    "pr": (("nhm_id", "time"), np.array([[1.0], [2.0]])),
+                },
+                coords={"nhm_id": [1, 2], "time": ["2020-01-01"]},
+            )
+        }
+
+        result = merge_temporal_into_derived(derived, temporal)
+
+        assert "nhru" in result["pr"].dims
+
+    def test_empty_temporal_is_noop(self) -> None:
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        derived = xr.Dataset(
+            {"hru_elev": ("nhru", [100.0])},
+            coords={"nhru": [1]},
+        )
+
+        result = merge_temporal_into_derived(derived, {})
+
+        assert list(result.data_vars) == ["hru_elev"]

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -54,6 +53,7 @@ class Stage4Results:
 
     static: dict[str, pd.DataFrame] = field(default_factory=dict)
     temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+    categories: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -200,6 +200,30 @@ def stage2_resolve_datasets(
     return resolved
 
 
+def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.02) -> list[float]:
+    """Compute WGS84 bbox from fabric with fractional buffer.
+
+    Parameters
+    ----------
+    fabric : gpd.GeoDataFrame
+        Spatial features (any CRS).
+    buffer_frac : float
+        Fractional buffer to add around bounds (default 2%).
+
+    Returns
+    -------
+    list[float]
+        ``[west, south, east, north]`` in EPSG:4326.
+    """
+    if fabric.crs and not fabric.crs.is_geographic:
+        bounds = fabric.to_crs("EPSG:4326").total_bounds
+    else:
+        bounds = fabric.total_bounds
+    dx = (bounds[2] - bounds[0]) * buffer_frac
+    dy = (bounds[3] - bounds[1]) * buffer_frac
+    return [bounds[0] - dx, bounds[1] - dy, bounds[2] + dx, bounds[3] + dy]
+
+
 def _process_batch(
     batch_fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
@@ -232,7 +256,7 @@ def _process_batch(
                 collection_id=cast(str, entry.collection),
                 variable_name=var_spec.name,
                 id_field=config.target_fabric.id_field,
-                year=ds_req.year,
+                year=cast(int | None, ds_req.year),
                 engine=config.processing.engine,
                 statistics=ds_req.statistics,
                 categorical=var_spec.categorical,
@@ -241,8 +265,8 @@ def _process_batch(
             results[var_spec.name] = df
         return results
 
-    # TODO: Reproject batch bounds into entry.crs when fabric CRS != dataset CRS
-    bbox = list(batch_fabric.total_bounds)
+    # Compute WGS84 bbox with buffer for STAC/remote queries
+    bbox = _buffered_bbox(batch_fabric)
 
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
@@ -260,7 +284,7 @@ def _process_batch(
             )
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
-    for var_spec in var_specs:
+    for i, var_spec in enumerate(var_specs):
         if isinstance(var_spec, DerivedVariableSpec):
             # Load source once, then derive
             if var_spec.source not in source_cache:
@@ -287,6 +311,10 @@ def _process_batch(
         tiff_path = work_dir / f"{var_spec.name}.tif"
         save_to_geotiff(da, tiff_path)
 
+        # Free derived/fetched raster before zonal stats to reduce peak memory
+        if isinstance(var_spec, DerivedVariableSpec):
+            del da
+
         # Determine if variable is categorical
         categorical = isinstance(var_spec, VariableSpec) and var_spec.categorical
 
@@ -304,6 +332,19 @@ def _process_batch(
             y_coord=entry.y_coord,
         )
         results[var_spec.name] = df
+
+        # Clean up GeoTIFF after zonal stats
+        tiff_path.unlink(missing_ok=True)
+
+        # Release source from cache when no remaining derived vars need it
+        if isinstance(var_spec, DerivedVariableSpec):
+            remaining = var_specs[i + 1 :]
+            source_still_needed = any(
+                isinstance(v, DerivedVariableSpec) and v.source == var_spec.source
+                for v in remaining
+            )
+            if not source_still_needed and var_spec.source in source_cache:
+                del source_cache[var_spec.source]
 
     return results
 
@@ -414,33 +455,97 @@ def stage4_process(
 
     all_results: dict[str, list[pd.DataFrame]] = {}
     temporal_results: dict[str, xr.Dataset] = {}
+    categories: dict[str, str] = {}
 
-    for entry, ds_req, var_specs in resolved:
-        logger.info("Processing dataset: %s", ds_req.name)
+    for ds_idx, (entry, ds_req, var_specs) in enumerate(resolved, 1):
+        category = entry.category or "uncategorized"
+        var_names = [v.name for v in var_specs]
 
         if entry.temporal:
+            logger.info(
+                "Dataset %d/%d: %s [%s, temporal] vars=%s period=%s",
+                ds_idx,
+                len(resolved),
+                ds_req.name,
+                entry.strategy,
+                var_names,
+                ds_req.time_period,
+            )
+            t_ds = time.perf_counter()
             ds = _process_temporal(fabric, entry, ds_req, var_specs, config)
             temporal_results[ds_req.name] = ds
+            categories[ds_req.name] = category
+            logger.info(
+                "  %s complete: %d vars, %d time steps (%.1fs)",
+                ds_req.name,
+                len(ds.data_vars),
+                ds.sizes.get("time", 0),
+                time.perf_counter() - t_ds,
+            )
             continue
 
-        for batch_id in batch_ids:
-            batch = fabric[fabric["batch_id"] == batch_id]
-            logger.info("  Batch %d/%d: %d features", batch_id + 1, len(batch_ids), len(batch))
+        # Expand years: list → iterate, bare int → [int], None → [None]
+        if isinstance(ds_req.year, list):
+            years: list[int | None] = list(ds_req.year)
+        elif ds_req.year is not None:
+            years = [ds_req.year]
+        else:
+            years = [None]
 
-            with tempfile.TemporaryDirectory(prefix="hydro_param_") as tmp:
-                work_dir = Path(tmp)
-                batch_results = _process_batch(batch, entry, ds_req, var_specs, config, work_dir)
+        year_label = years if len(years) > 1 else (years[0] if years[0] is not None else "none")
+        logger.info(
+            "Dataset %d/%d: %s [%s, static] vars=%s year=%s",
+            ds_idx,
+            len(resolved),
+            ds_req.name,
+            entry.strategy,
+            var_names,
+            year_label,
+        )
+        t_ds = time.perf_counter()
 
-            for var_name, df in batch_results.items():
-                all_results.setdefault(var_name, []).append(df)
+        for year in years:
+            # Create single-year request for _process_batch
+            year_req = ds_req.model_copy(update={"year": year})
+
+            for batch_id in batch_ids:
+                batch = fabric[fabric["batch_id"] == batch_id]
+                t_batch = time.perf_counter()
+
+                with tempfile.TemporaryDirectory(prefix="hydro_param_") as tmp:
+                    work_dir = Path(tmp)
+                    batch_results = _process_batch(
+                        batch, entry, year_req, var_specs, config, work_dir
+                    )
+
+                logger.info(
+                    "  Batch %d/%d: %d features, year=%s (%.1fs)",
+                    batch_id + 1,
+                    len(batch_ids),
+                    len(batch),
+                    year,
+                    time.perf_counter() - t_batch,
+                )
+
+                for var_name, df in batch_results.items():
+                    # Year-suffix result keys when multiple years are specified
+                    result_key = f"{var_name}_{year}" if year is not None else var_name
+                    all_results.setdefault(result_key, []).append(df)
+
+            # Track categories with year-suffixed keys
+            for var_spec in var_specs:
+                result_key = f"{var_spec.name}_{year}" if year is not None else var_spec.name
+                categories[result_key] = category
+
+        logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
     # Merge batch results per variable
     merged: dict[str, pd.DataFrame] = {}
     for var_name, dfs in all_results.items():
         merged[var_name] = pd.concat(dfs)
-        logger.info("  %s: %d total features", var_name, len(merged[var_name]))
+        logger.info("  Merged %s: %d total features", var_name, len(merged[var_name]))
 
-    return Stage4Results(static=merged, temporal=temporal_results)
+    return Stage4Results(static=merged, temporal=temporal_results, categories=categories)
 
 
 def stage5_format_output(
@@ -474,9 +579,23 @@ def stage5_format_output(
     if isinstance(results, Stage4Results):
         static_results = results.static
         temporal_results = results.temporal
+        categories = results.categories
     else:
         static_results = results
         temporal_results = {}
+        categories = {}
+
+    sir_attrs = {
+        "title": f"Hydrologic parameters: {config.output.sir_name}",
+        "institution": "hydro-param",
+        "source": "hydro-param pipeline",
+        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
+        "Conventions": "CF-1.8",
+        "target_fabric": str(config.target_fabric.path),
+        "target_fabric_id_field": id_field,
+        "n_features": len(feature_ids),
+        "processing_engine": config.processing.engine,
+    }
 
     data_vars: dict[str, tuple] = {}
     for var_name, df in static_results.items():
@@ -492,167 +611,71 @@ def stage5_format_output(
     sir = xr.Dataset(
         data_vars,
         coords={"hru_id": feature_ids},
-        attrs={
-            "title": f"Hydrologic parameters: {config.output.sir_name}",
-            "institution": "hydro-param",
-            "source": "hydro-param pipeline",
-            "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
-            "Conventions": "CF-1.8",
-            "target_fabric": str(config.target_fabric.path),
-            "target_fabric_id_field": id_field,
-            "n_features": len(feature_ids),
-            "processing_engine": config.processing.engine,
-        },
+        attrs=sir_attrs,
     )
 
     # Write output
     output_dir = config.output.path
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Write combined SIR (used by pywatershed plugin and PipelineResult)
+    if not data_vars:
+        logger.warning("No static results to write; skipping static SIR file.")
     if data_vars:
         if config.output.format == "netcdf":
-            out_path = output_dir / f"{config.output.sir_name}.nc"
-            sir.to_netcdf(out_path)
-            logger.info("Wrote SIR → %s", out_path)
+            sir_path = output_dir / f"{config.output.sir_name}.nc"
+            sir.to_netcdf(sir_path)
+            logger.info("Wrote SIR → %s", sir_path)
         elif config.output.format == "parquet":
-            out_path = output_dir / f"{config.output.sir_name}.parquet"
-            sir.to_dataframe().to_parquet(out_path)
-            logger.info("Wrote SIR → %s", out_path)
-    else:
-        logger.warning("No static results to write; skipping static SIR file.")
+            sir_path = output_dir / f"{config.output.sir_name}.parquet"
+            sir.to_dataframe().to_parquet(sir_path)
+            logger.info("Wrote SIR → %s", sir_path)
 
-    # Write temporal results as separate files
-    for ds_name, ds in temporal_results.items():
-        if config.output.format == "netcdf":
-            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.nc"
-            ds.to_netcdf(temporal_path)
-            logger.info("Wrote temporal → %s", temporal_path)
-        elif config.output.format == "parquet":
-            temporal_path = output_dir / f"{config.output.sir_name}_{ds_name}_temporal.parquet"
-            ds.to_dataframe().to_parquet(temporal_path)
-            logger.info("Wrote temporal → %s", temporal_path)
+    # Write per-variable files organized by category
+    for var_name, df in static_results.items():
+        category = categories.get(var_name, "uncategorized")
+        var_dir = output_dir / category
+        var_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derivation + formatting dispatch (model-specific post-processing)
-    if config.output.derivation is not None:
-        _run_derivation(
-            sir=sir,
-            temporal=temporal_results,
-            fabric=fabric,
-            config=config,
+        # Build single-variable xr.Dataset
+        var_data_vars: dict[str, tuple] = {}
+        for col in df.columns:
+            col_name = f"{var_name}_{col}" if col != "mean" else var_name
+            if hasattr(df.index, "name") and df.index.name == id_field:
+                values = df[col].reindex(feature_ids).values
+            else:
+                values = df[col].values
+            var_data_vars[col_name] = ("hru_id", values)
+
+        var_ds = xr.Dataset(
+            var_data_vars,
+            coords={"hru_id": feature_ids},
+            attrs=sir_attrs,
         )
 
+        if config.output.format == "netcdf":
+            out_path = var_dir / f"{var_name}.nc"
+            var_ds.to_netcdf(out_path)
+        elif config.output.format == "parquet":
+            out_path = var_dir / f"{var_name}.parquet"
+            var_ds.to_dataframe().to_parquet(out_path)
+        logger.info("Wrote %s → %s", var_name, out_path)
+
+    # Write temporal results as per-dataset files in category directories
+    for ds_name, ds in temporal_results.items():
+        category = categories.get(ds_name, "climate")
+        var_dir = output_dir / category
+        var_dir.mkdir(parents=True, exist_ok=True)
+
+        if config.output.format == "netcdf":
+            temporal_path = var_dir / f"{ds_name}_temporal.nc"
+            ds.to_netcdf(temporal_path)
+        elif config.output.format == "parquet":
+            temporal_path = var_dir / f"{ds_name}_temporal.parquet"
+            ds.to_dataframe().to_parquet(temporal_path)
+        logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
+
     return sir
-
-
-def _run_derivation(
-    sir: xr.Dataset,
-    temporal: dict[str, xr.Dataset],
-    fabric: gpd.GeoDataFrame,
-    config: PipelineConfig,
-) -> None:
-    """Dispatch to a model-specific derivation plugin + formatter.
-
-    Runs derivation and writes output as a side effect; does not
-    modify or return the SIR.
-
-    Parameters
-    ----------
-    sir
-        Standardized Internal Representation from stage 5 assembly.
-    temporal
-        Temporal datasets keyed by dataset name.
-    fabric
-        Target fabric GeoDataFrame.
-    config
-        Pipeline configuration with derivation settings.
-    """
-    from hydro_param.derivations.pywatershed import PywatershedDerivation
-    from hydro_param.output import get_formatter
-    from hydro_param.units import convert as unit_convert
-
-    derivation_name = config.output.derivation
-    options = config.output.derivation_options
-
-    _DERIVATION_REGISTRY: dict[str, type] = {
-        "pywatershed": PywatershedDerivation,
-    }
-
-    if derivation_name not in _DERIVATION_REGISTRY:
-        available = ", ".join(sorted(_DERIVATION_REGISTRY))
-        raise ValueError(f"Unknown derivation plugin '{derivation_name}'. Available: {available}")
-
-    # Validate required derivation options early
-    for key in ("start", "end"):
-        if not options.get(key):
-            raise ValueError(
-                f"derivation_options['{key}'] is required when derivation='{derivation_name}'"
-            )
-
-    logger.info("Running derivation plugin: %s", derivation_name)
-    plugin_cls = _DERIVATION_REGISTRY[derivation_name]
-
-    # Build plugin kwargs from derivation_options
-    lookup_tables_dir = options.get("lookup_tables_dir")
-    plugin = plugin_cls(lookup_tables_dir=Path(lookup_tables_dir) if lookup_tables_dir else None)
-
-    # Load fabric/segments for topology if paths provided
-    fabric_for_derivation = fabric
-    segments = None
-    if "segment_path" in options:
-        segments = gpd.read_file(options["segment_path"])
-
-    # Rename SIR variables for the derivation plugin
-    sir_renamed = plugin.rename_sir_variables(sir, options.get("variable_renames", {}))
-
-    # Run derivation
-    derived = plugin.derive(
-        sir_renamed,
-        config=options,
-        fabric=fabric_for_derivation,
-        segments=segments,
-        id_field=options.get("id_field", "nhm_id"),
-        segment_id_field=options.get("segment_id_field", "nhm_seg"),
-    )
-
-    # Merge temporal data into derived dataset for formatter
-    for _ds_name, ds in temporal.items():
-        # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
-        temporal_renames = options.get("temporal_renames", {})
-        actual_renames = {old: new for old, new in temporal_renames.items() if old in ds}
-        if actual_renames:
-            ds = ds.rename(actual_renames)
-
-        # Apply unit conversions (e.g., K→C for temperature)
-        # Uses post-rename names; produces new DataArrays (no in-place mutation)
-        temp_conversions = options.get("temporal_conversions", {})
-        for var_name, (from_unit, to_unit) in temp_conversions.items():
-            if var_name in ds:
-                da = ds[var_name]
-                converted = unit_convert(da.values.astype(np.float64), from_unit, to_unit)
-                ds[var_name] = da.copy(data=converted)
-
-        # Align temporal feature dimension to derived dataset's nhru
-        # Temporal data uses id_field (e.g., nhm_id); derived uses nhru
-        for var in ds.data_vars:
-            da = ds[str(var)]
-            # Find the feature dimension (non-time dimension)
-            feat_dims = [d for d in da.dims if d != "time"]
-            if feat_dims and "nhru" in derived.dims and feat_dims[0] != "nhru":
-                feat_dim = feat_dims[0]
-                da = da.rename({feat_dim: "nhru"})
-            derived[str(var)] = da
-
-    # Write using the model-specific formatter
-    formatter = get_formatter(derivation_name)
-    formatter_config = {
-        "parameter_file": options.get("parameter_file", "parameters.nc"),
-        "forcing_dir": options.get("forcing_dir", "forcing"),
-        "soltab_file": options.get("soltab_file", "soltab.nc"),
-        "control_file": options.get("control_file", "control.yml"),
-        "start": options["start"],
-        "end": options["end"],
-    }
-    formatter.write(derived, config.output.path, formatter_config)
 
 
 # ---------------------------------------------------------------------------
@@ -682,25 +705,63 @@ def run_pipeline_from_config(
 
     logger.info("=" * 60)
     logger.info("hydro-param pipeline: %s", config.output.sir_name)
+    logger.info(
+        "  Fabric: %s (id_field=%s)", config.target_fabric.path, config.target_fabric.id_field
+    )
+    logger.info(
+        "  Datasets: %d, Engine: %s, Batch size: %d",
+        len(config.datasets),
+        config.processing.engine,
+        config.processing.batch_size,
+    )
+    logger.info("  Output: %s (%s)", config.output.path, config.output.format)
     logger.info("=" * 60)
 
     # Stage 1: Resolve target fabric (applies domain filter if configured)
+    t1 = time.perf_counter()
     fabric = stage1_resolve_fabric(config)
 
     # Spatial batching
     fabric = spatial_batch(fabric, batch_size=config.processing.batch_size)
+    batch_ids = sorted(fabric["batch_id"].unique())
+    batch_sizes = fabric.groupby("batch_id").size()
+    logger.info(
+        "Spatial batching: %d features → %d batches (min=%d, max=%d, mean=%d) (%.1fs)",
+        len(fabric),
+        len(batch_ids),
+        batch_sizes.min(),
+        batch_sizes.max(),
+        batch_sizes.mean(),
+        time.perf_counter() - t1,
+    )
 
     # Stage 2: Resolve source datasets
+    t2 = time.perf_counter()
     resolved = stage2_resolve_datasets(config, registry)
+    logger.info("Stage 2 complete (%.1fs)", time.perf_counter() - t2)
 
     # Stage 3: Weights (handled internally by gdptools ZonalGen)
-    logger.info("Stage 3: Weights computed internally by gdptools ZonalGen")
+    logger.info("Stage 3: Weights computed internally by gdptools")
 
     # Stage 4: Process datasets
+    t4 = time.perf_counter()
     results = stage4_process(fabric, resolved, config)
+    logger.info(
+        "Stage 4 complete: %d static vars, %d temporal datasets (%.1fs)",
+        len(results.static),
+        len(results.temporal),
+        time.perf_counter() - t4,
+    )
 
     # Stage 5: Format output
+    t5 = time.perf_counter()
     sir = stage5_format_output(results, config, fabric)
+    logger.info(
+        "Stage 5 complete: SIR has %d variables, %d features (%.1fs)",
+        len(sir.data_vars),
+        sir.sizes.get("hru_id", 0),
+        time.perf_counter() - t5,
+    )
 
     elapsed = time.perf_counter() - t0
     logger.info("=" * 60)

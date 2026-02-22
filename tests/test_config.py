@@ -175,10 +175,45 @@ def test_dataset_request_year_default_none():
 
 
 def test_dataset_request_year_rejects_invalid():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="outside valid range"):
         DatasetRequest(name="test", year=1800)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="outside valid range"):
         DatasetRequest(name="test", year=2200)
+
+
+def test_dataset_request_year_accepts_list():
+    ds = DatasetRequest(name="nlcd", variables=["LndCov"], year=[2019, 2020, 2021])
+    assert ds.year == [2019, 2020, 2021]
+
+
+def test_dataset_request_year_list_rejects_out_of_range():
+    with pytest.raises(ValidationError, match="outside valid range"):
+        DatasetRequest(name="test", year=[2020, 2200])
+
+
+def test_dataset_request_year_list_rejects_empty():
+    with pytest.raises(ValidationError, match="year list cannot be empty"):
+        DatasetRequest(name="test", year=[])
+
+
+def test_dataset_request_year_list_from_yaml(tmp_path: Path):
+    raw = {
+        "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {
+                "name": "nlcd",
+                "variables": ["LndCov"],
+                "statistics": ["categorical"],
+                "year": [2020, 2021],
+            },
+        ],
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert config.datasets[0].year == [2020, 2021]
 
 
 # ---------------------------------------------------------------------------

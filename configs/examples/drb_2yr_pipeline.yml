@@ -13,16 +13,16 @@ domain:
   bbox: [-75.8, 39.6, -74.4, 42.5]
 
 datasets:
-  # 3DEP 10m DEM — elevation, slope, aspect (mean zonal stats)
+  # 3DEP 10m DEM — elevation, slope, aspect
   - name: dem_3dep_10m
     variables: [elevation, slope, aspect]
     statistics: [mean]
 
-  # NLCD Land Cover via NHGF STAC OSN — categorical fractions
+  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
   - name: nlcd_osn_lndcov
     variables: [LndCov]
     statistics: [categorical]
-    year: 2021
+    year: [2020, 2021]
 
   # gridMET daily climate (OPeNDAP via ClimateR catalog)
   - name: gridmet
@@ -37,4 +37,4 @@ output:
 
 processing:
   engine: exactextract
-  batch_size: 500
+  batch_size: 80
