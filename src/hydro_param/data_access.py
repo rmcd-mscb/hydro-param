@@ -390,7 +390,7 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
     clean.attrs = {k: v for k, v in da.attrs.items() if k != "_FillValue"}
     clean.encoding = {k: v for k, v in da.encoding.items() if k != "_FillValue"}
     clean.rio.to_raster(path)
-    logger.info("Saved GeoTIFF: %s (%s)", path, da.shape)
+    logger.debug("Saved GeoTIFF: %s (%s)", path, da.shape)
     return path
 
 

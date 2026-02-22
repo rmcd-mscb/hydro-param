@@ -457,14 +457,31 @@ def stage4_process(
     temporal_results: dict[str, xr.Dataset] = {}
     categories: dict[str, str] = {}
 
-    for entry, ds_req, var_specs in resolved:
-        logger.info("Processing dataset: %s", ds_req.name)
+    for ds_idx, (entry, ds_req, var_specs) in enumerate(resolved, 1):
         category = entry.category or "uncategorized"
+        var_names = [v.name for v in var_specs]
 
         if entry.temporal:
+            logger.info(
+                "Dataset %d/%d: %s [%s, temporal] vars=%s period=%s",
+                ds_idx,
+                len(resolved),
+                ds_req.name,
+                entry.strategy,
+                var_names,
+                ds_req.time_period,
+            )
+            t_ds = time.perf_counter()
             ds = _process_temporal(fabric, entry, ds_req, var_specs, config)
             temporal_results[ds_req.name] = ds
             categories[ds_req.name] = category
+            logger.info(
+                "  %s complete: %d vars, %d time steps (%.1fs)",
+                ds_req.name,
+                len(ds.data_vars),
+                ds.sizes.get("time", 0),
+                time.perf_counter() - t_ds,
+            )
             continue
 
         # Expand years: list → iterate, bare int → [int], None → [None]
@@ -475,25 +492,40 @@ def stage4_process(
         else:
             years = [None]
 
+        year_label = years if len(years) > 1 else (years[0] if years[0] is not None else "none")
+        logger.info(
+            "Dataset %d/%d: %s [%s, static] vars=%s year=%s",
+            ds_idx,
+            len(resolved),
+            ds_req.name,
+            entry.strategy,
+            var_names,
+            year_label,
+        )
+        t_ds = time.perf_counter()
+
         for year in years:
             # Create single-year request for _process_batch
             year_req = ds_req.model_copy(update={"year": year})
 
             for batch_id in batch_ids:
                 batch = fabric[fabric["batch_id"] == batch_id]
-                logger.info(
-                    "  Batch %d/%d: %d features (year=%s)",
-                    batch_id + 1,
-                    len(batch_ids),
-                    len(batch),
-                    year,
-                )
+                t_batch = time.perf_counter()
 
                 with tempfile.TemporaryDirectory(prefix="hydro_param_") as tmp:
                     work_dir = Path(tmp)
                     batch_results = _process_batch(
                         batch, entry, year_req, var_specs, config, work_dir
                     )
+
+                logger.info(
+                    "  Batch %d/%d: %d features, year=%s (%.1fs)",
+                    batch_id + 1,
+                    len(batch_ids),
+                    len(batch),
+                    year,
+                    time.perf_counter() - t_batch,
+                )
 
                 for var_name, df in batch_results.items():
                     # Year-suffix result keys when multiple years are specified
@@ -505,11 +537,13 @@ def stage4_process(
                 result_key = f"{var_spec.name}_{year}" if year is not None else var_spec.name
                 categories[result_key] = category
 
+        logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
+
     # Merge batch results per variable
     merged: dict[str, pd.DataFrame] = {}
     for var_name, dfs in all_results.items():
         merged[var_name] = pd.concat(dfs)
-        logger.info("  %s: %d total features", var_name, len(merged[var_name]))
+        logger.info("  Merged %s: %d total features", var_name, len(merged[var_name]))
 
     return Stage4Results(static=merged, temporal=temporal_results, categories=categories)
 
@@ -671,25 +705,63 @@ def run_pipeline_from_config(
 
     logger.info("=" * 60)
     logger.info("hydro-param pipeline: %s", config.output.sir_name)
+    logger.info(
+        "  Fabric: %s (id_field=%s)", config.target_fabric.path, config.target_fabric.id_field
+    )
+    logger.info(
+        "  Datasets: %d, Engine: %s, Batch size: %d",
+        len(config.datasets),
+        config.processing.engine,
+        config.processing.batch_size,
+    )
+    logger.info("  Output: %s (%s)", config.output.path, config.output.format)
     logger.info("=" * 60)
 
     # Stage 1: Resolve target fabric (applies domain filter if configured)
+    t1 = time.perf_counter()
     fabric = stage1_resolve_fabric(config)
 
     # Spatial batching
     fabric = spatial_batch(fabric, batch_size=config.processing.batch_size)
+    batch_ids = sorted(fabric["batch_id"].unique())
+    batch_sizes = fabric.groupby("batch_id").size()
+    logger.info(
+        "Spatial batching: %d features → %d batches (min=%d, max=%d, mean=%d) (%.1fs)",
+        len(fabric),
+        len(batch_ids),
+        batch_sizes.min(),
+        batch_sizes.max(),
+        batch_sizes.mean(),
+        time.perf_counter() - t1,
+    )
 
     # Stage 2: Resolve source datasets
+    t2 = time.perf_counter()
     resolved = stage2_resolve_datasets(config, registry)
+    logger.info("Stage 2 complete (%.1fs)", time.perf_counter() - t2)
 
     # Stage 3: Weights (handled internally by gdptools ZonalGen)
-    logger.info("Stage 3: Weights computed internally by gdptools ZonalGen")
+    logger.info("Stage 3: Weights computed internally by gdptools")
 
     # Stage 4: Process datasets
+    t4 = time.perf_counter()
     results = stage4_process(fabric, resolved, config)
+    logger.info(
+        "Stage 4 complete: %d static vars, %d temporal datasets (%.1fs)",
+        len(results.static),
+        len(results.temporal),
+        time.perf_counter() - t4,
+    )
 
     # Stage 5: Format output
+    t5 = time.perf_counter()
     sir = stage5_format_output(results, config, fabric)
+    logger.info(
+        "Stage 5 complete: SIR has %d variables, %d features (%.1fs)",
+        len(sir.data_vars),
+        sir.sizes.get("hru_id", 0),
+        time.perf_counter() - t5,
+    )
 
     elapsed = time.perf_counter() - t0
     logger.info("=" * 60)
