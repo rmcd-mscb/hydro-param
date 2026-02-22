@@ -1,0 +1,42 @@
+# DRB 2-year pywatershed model setup config
+# Generates parameters.nc, forcing/, and control.yml for pywatershed v2.
+#
+# Usage:
+#   hydro-param pywatershed run configs/examples/drb_2yr_pywatershed.yml
+
+target_model: pywatershed
+version: "2.0"
+
+domain:
+  source: custom
+  extraction_method: bbox
+  bbox: [-75.8, 39.6, -74.4, 42.5]
+  fabric_path: data/pywatershed_gis/drb_2yr/nhru.gpkg
+  segment_path: data/pywatershed_gis/drb_2yr/nsegment.gpkg
+  id_field: nhm_id
+  segment_id_field: nhm_seg
+
+time:
+  start: "2020-01-01"
+  end: "2021-12-31"
+  timestep: daily
+
+climate:
+  source: gridmet
+  method: area_weighted_mean
+  variables: [prcp, tmax, tmin]
+
+datasets:
+  topography: dem_3dep_10m
+  landcover: nlcd_osn_lndcov
+
+processing:
+  zonal_method: exactextract
+  batch_size: 500
+
+output:
+  path: models/pywatershed
+  format: netcdf
+  parameter_file: parameters.nc
+  forcing_dir: forcing
+  control_file: control.yml

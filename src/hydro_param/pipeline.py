@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import cast
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -53,6 +54,15 @@ class Stage4Results:
 
     static: dict[str, pd.DataFrame] = field(default_factory=dict)
     temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineResult:
+    """Full pipeline result including static SIR, temporal data, and fabric."""
+
+    sir: xr.Dataset
+    temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+    fabric: gpd.GeoDataFrame | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +532,114 @@ def stage5_format_output(
             ds.to_dataframe().to_parquet(temporal_path)
             logger.info("Wrote temporal → %s", temporal_path)
 
+    # Derivation + formatting dispatch (model-specific post-processing)
+    if config.output.derivation is not None:
+        sir = _run_derivation(
+            sir=sir,
+            temporal=temporal_results,
+            fabric=fabric,
+            config=config,
+        )
+
     return sir
+
+
+def _run_derivation(
+    sir: xr.Dataset,
+    temporal: dict[str, xr.Dataset],
+    fabric: gpd.GeoDataFrame,
+    config: PipelineConfig,
+) -> xr.Dataset:
+    """Dispatch to a model-specific derivation plugin + formatter.
+
+    Parameters
+    ----------
+    sir
+        Standardized Internal Representation from stage 5 assembly.
+    temporal
+        Temporal datasets keyed by dataset name.
+    fabric
+        Target fabric GeoDataFrame.
+    config
+        Pipeline configuration with derivation settings.
+
+    Returns
+    -------
+    xr.Dataset
+        Derived parameter dataset.
+    """
+    from hydro_param.derivations.pywatershed import PywatershedDerivation
+    from hydro_param.output import get_formatter
+
+    derivation_name = config.output.derivation
+    options = config.output.derivation_options
+
+    _DERIVATION_REGISTRY: dict[str, type] = {
+        "pywatershed": PywatershedDerivation,
+    }
+
+    if derivation_name not in _DERIVATION_REGISTRY:
+        available = ", ".join(sorted(_DERIVATION_REGISTRY))
+        raise ValueError(f"Unknown derivation plugin '{derivation_name}'. Available: {available}")
+
+    logger.info("Running derivation plugin: %s", derivation_name)
+    plugin_cls = _DERIVATION_REGISTRY[derivation_name]
+
+    # Build plugin kwargs from derivation_options
+    lookup_tables_dir = options.get("lookup_tables_dir")
+    plugin = plugin_cls(lookup_tables_dir=Path(lookup_tables_dir) if lookup_tables_dir else None)
+
+    # Load fabric/segments for topology if paths provided
+    fabric_for_derivation = fabric
+    segments = None
+    if "segment_path" in options:
+        segments = gpd.read_file(options["segment_path"])
+
+    # Rename SIR variables for the derivation plugin
+    sir = plugin.rename_sir_variables(sir, options.get("variable_renames", {}))
+
+    # Run derivation
+    derived = plugin.derive(
+        sir,
+        config=options,
+        fabric=fabric_for_derivation,
+        segments=segments,
+        id_field=options.get("id_field", "nhm_id"),
+        segment_id_field=options.get("segment_id_field", "nhm_seg"),
+    )
+
+    # Merge temporal data into derived dataset for formatter
+    for _ds_name, ds in temporal.items():
+        # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
+        temporal_renames = options.get("temporal_renames", {})
+        for old_name, new_name in temporal_renames.items():
+            if old_name in ds:
+                ds = ds.rename({old_name: new_name})
+        # Apply unit conversions (e.g., K→C for temperature)
+        temp_conversions = options.get("temporal_conversions", {})
+        for var_name, (from_unit, to_unit) in temp_conversions.items():
+            if var_name in ds:
+                from hydro_param.units import convert as unit_convert
+
+                ds[var_name].values = unit_convert(
+                    ds[var_name].values.astype(np.float64), from_unit, to_unit
+                )
+        for var in ds.data_vars:
+            derived[str(var)] = ds[str(var)]
+
+    # Write using the model-specific formatter
+    formatter = get_formatter(derivation_name)
+    formatter_config = {
+        "parameter_file": options.get("parameter_file", "parameters.nc"),
+        "forcing_dir": options.get("forcing_dir", "forcing"),
+        "soltab_file": options.get("soltab_file", "soltab.nc"),
+        "control_file": options.get("control_file", "control.yml"),
+        "start": options.get("start"),
+        "end": options.get("end"),
+    }
+    formatter.write(derived, config.output.path, formatter_config)
+
+    return derived
 
 
 # ---------------------------------------------------------------------------
@@ -530,31 +647,25 @@ def stage5_format_output(
 # ---------------------------------------------------------------------------
 
 
-def run_pipeline(
-    config_path: str | Path,
-    registry_path: str | Path | None = None,
-) -> xr.Dataset:
-    """Execute the full parameterization pipeline.
+def run_pipeline_from_config(
+    config: PipelineConfig,
+    registry: DatasetRegistry,
+) -> PipelineResult:
+    """Execute the full pipeline from pre-loaded config and registry.
 
     Parameters
     ----------
-    config_path : str or Path
-        Path to the pipeline YAML config.
-    registry_path : str or Path or None
-        Path to a dataset registry YAML file or directory. Defaults to
-        ``configs/datasets/``.
+    config
+        Pipeline configuration.
+    registry
+        Dataset registry.
 
     Returns
     -------
-    xr.Dataset
-        The Standardized Internal Representation of computed parameters.
+    PipelineResult
+        Full results including static SIR, temporal data, and fabric.
     """
     t0 = time.perf_counter()
-
-    config = load_config(config_path)
-    if registry_path is None:
-        registry_path = DEFAULT_REGISTRY
-    registry = load_registry(registry_path)
 
     logger.info("=" * 60)
     logger.info("hydro-param pipeline: %s", config.output.sir_name)
@@ -589,7 +700,35 @@ def run_pipeline(
     )
     logger.info("=" * 60)
 
-    return sir
+    return PipelineResult(sir=sir, temporal=results.temporal, fabric=fabric)
+
+
+def run_pipeline(
+    config_path: str | Path,
+    registry_path: str | Path | None = None,
+) -> xr.Dataset:
+    """Execute the full parameterization pipeline.
+
+    Parameters
+    ----------
+    config_path : str or Path
+        Path to the pipeline YAML config.
+    registry_path : str or Path or None
+        Path to a dataset registry YAML file or directory. Defaults to
+        ``configs/datasets/``.
+
+    Returns
+    -------
+    xr.Dataset
+        The Standardized Internal Representation of computed parameters.
+    """
+    config = load_config(config_path)
+    if registry_path is None:
+        registry_path = DEFAULT_REGISTRY
+    registry = load_registry(registry_path)
+
+    result = run_pipeline_from_config(config, registry)
+    return result.sir
 
 
 def main() -> int:

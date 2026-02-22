@@ -21,8 +21,9 @@ from pathlib import Path
 
 from cyclopts import App
 
+from hydro_param.config import PipelineConfig
 from hydro_param.dataset_registry import DatasetEntry, DatasetRegistry, load_registry
-from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline
+from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline, run_pipeline_from_config
 from hydro_param.project import find_project_root, init_project
 
 logger = logging.getLogger(__name__)
@@ -387,17 +388,168 @@ def init_cmd(
 
 
 # ---------------------------------------------------------------------------
+# pywatershed helpers
+# ---------------------------------------------------------------------------
+
+
+def _translate_pws_to_pipeline(
+    pws_config: object,
+) -> PipelineConfig:
+    """Translate a PywatershedRunConfig into a PipelineConfig.
+
+    The pywatershed run config uses a model-specific schema; this
+    function maps it onto the generic pipeline config so the same
+    pipeline stages 1-5 can be reused.
+
+    Returns a ``PipelineConfig`` with ``output.derivation="pywatershed"``
+    so that stage 5 dispatches to the derivation plugin + formatter.
+    """
+    from hydro_param.config import (
+        DatasetRequest,
+        DomainConfig,
+        OutputConfig,
+        ProcessingConfig,
+        TargetFabricConfig,
+    )  # noqa: F811 — local import for clarity
+    from hydro_param.pywatershed_config import PywatershedRunConfig
+
+    cfg: PywatershedRunConfig = pws_config  # type: ignore[assignment]
+
+    # Target fabric
+    if cfg.domain.fabric_path is None:
+        raise ValueError("pywatershed config requires 'fabric_path' in domain")
+    target_fabric = TargetFabricConfig(
+        path=cfg.domain.fabric_path,
+        id_field=cfg.domain.id_field,
+    )
+
+    # Domain
+    if cfg.domain.extraction_method == "bbox":
+        domain = DomainConfig(type="bbox", bbox=cfg.domain.bbox)
+    else:
+        raise NotImplementedError(
+            f"Extraction method '{cfg.domain.extraction_method}' not yet supported"
+        )
+
+    # Datasets
+    datasets: list[DatasetRequest] = []
+
+    # Topography
+    datasets.append(
+        DatasetRequest(
+            name=cfg.datasets.topography,
+            variables=["elevation", "slope", "aspect"],
+            statistics=["mean"],
+        )
+    )
+
+    # Land cover (categorical fractions)
+    lc_name = cfg.datasets.landcover
+    if lc_name.startswith("nlcd_osn"):
+        datasets.append(
+            DatasetRequest(
+                name=lc_name,
+                variables=["LndCov"],
+                statistics=["categorical"],
+                year=2021,
+            )
+        )
+    else:
+        datasets.append(
+            DatasetRequest(
+                name=lc_name,
+                variables=["land_cover"],
+                statistics=["majority"],
+            )
+        )
+
+    # Climate (temporal)
+    _CLIMATE_SOURCE_MAP = {
+        "gridmet": "gridmet",
+        "daymet_v4": "daymet_v4",
+        "conus404_ba": "conus404_ba",
+    }
+    climate_ds_name = _CLIMATE_SOURCE_MAP.get(cfg.climate.source, cfg.climate.source)
+
+    # Map pywatershed climate variable names to registry variable names
+    _CLIMATE_VAR_MAP = {
+        "prcp": "pr",
+        "tmax": "tmmx",
+        "tmin": "tmmn",
+    }
+    climate_vars = [_CLIMATE_VAR_MAP.get(v, v) for v in cfg.climate.variables]
+    datasets.append(
+        DatasetRequest(
+            name=climate_ds_name,
+            variables=climate_vars,
+            statistics=["mean"],
+            time_period=[cfg.time.start, cfg.time.end],
+        )
+    )
+
+    # Output with derivation
+    derivation_options: dict = {
+        "id_field": cfg.domain.id_field,
+        "segment_id_field": cfg.domain.segment_id_field,
+        "start": cfg.time.start,
+        "end": cfg.time.end,
+        "parameter_file": cfg.output.parameter_file,
+        "forcing_dir": cfg.output.forcing_dir,
+        "control_file": cfg.output.control_file,
+        "soltab_file": cfg.output.soltab_file,
+        # Temporal variable renaming (gridMET names → PRMS names)
+        "temporal_renames": {
+            "precipitation_amount": "prcp",
+            "daily_maximum_temperature": "tmax",
+            "daily_minimum_temperature": "tmin",
+        },
+        # Unit conversions for temporal data (K→C; formatter does C→F)
+        "temporal_conversions": {
+            "tmax": ("K", "C"),
+            "tmin": ("K", "C"),
+        },
+    }
+    if cfg.domain.segment_path is not None:
+        derivation_options["segment_path"] = str(cfg.domain.segment_path)
+    if cfg.parameter_overrides.values:
+        derivation_options["parameter_overrides"] = {
+            "values": cfg.parameter_overrides.values,
+        }
+
+    output = OutputConfig(
+        path=cfg.output.path,
+        format="netcdf",
+        sir_name="pywatershed_sir",
+        derivation="pywatershed",
+        derivation_options=derivation_options,
+    )
+
+    processing = ProcessingConfig(
+        engine=cfg.processing.zonal_method,
+        batch_size=cfg.processing.batch_size,
+    )
+
+    return PipelineConfig(
+        target_fabric=target_fabric,
+        domain=domain,
+        datasets=datasets,
+        output=output,
+        processing=processing,
+    )
+
+
+# ---------------------------------------------------------------------------
 # pywatershed run
 # ---------------------------------------------------------------------------
 
 
 @pws_app.command(name="run")
 def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
-    """Validate and summarise a pywatershed run configuration.
+    """Generate a complete pywatershed model setup.
 
-    Loads a pywatershed run configuration YAML, validates all fields,
-    and prints a summary.  Full pipeline orchestration (SIR generation,
-    derivation, and output writing) will be added in a future release.
+    Loads a pywatershed run configuration, translates it to a pipeline
+    config, runs the SIR pipeline, derives pywatershed parameters,
+    and writes output files (parameters.nc, forcing/, control.yml).
 
     Parameters
     ----------
@@ -425,10 +577,17 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("  Time: %s to %s", pws_config.time.start, pws_config.time.end)
     logger.info("  Climate: %s", pws_config.climate.source)
     logger.info("  Output: %s", pws_config.output.path)
-    logger.info(
-        "Full pipeline orchestration (SIR → derivation → format) "
-        "will be available in a future release."
-    )
+
+    pipeline_config = _translate_pws_to_pipeline(pws_config)
+    reg = _load_registry(registry)
+
+    try:
+        run_pipeline_from_config(pipeline_config, reg)
+    except Exception as exc:
+        logger.exception("pywatershed pipeline failed.")
+        raise SystemExit(1) from exc
+
+    logger.info("pywatershed model setup complete: %s", pws_config.output.path)
 
 
 @pws_app.command(name="validate")

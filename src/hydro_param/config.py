@@ -75,6 +75,8 @@ class OutputConfig(BaseModel):
     path: Path = Path("./output")
     format: Literal["netcdf", "parquet"] = "netcdf"
     sir_name: str = "result"
+    derivation: str | None = None
+    derivation_options: dict = Field(default_factory=dict)
 
 
 class ProcessingConfig(BaseModel):
