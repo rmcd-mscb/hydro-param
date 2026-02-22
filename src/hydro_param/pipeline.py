@@ -534,7 +534,7 @@ def stage5_format_output(
 
     # Derivation + formatting dispatch (model-specific post-processing)
     if config.output.derivation is not None:
-        sir = _run_derivation(
+        _run_derivation(
             sir=sir,
             temporal=temporal_results,
             fabric=fabric,
@@ -549,8 +549,11 @@ def _run_derivation(
     temporal: dict[str, xr.Dataset],
     fabric: gpd.GeoDataFrame,
     config: PipelineConfig,
-) -> xr.Dataset:
+) -> None:
     """Dispatch to a model-specific derivation plugin + formatter.
+
+    Runs derivation and writes output as a side effect; does not
+    modify or return the SIR.
 
     Parameters
     ----------
@@ -562,14 +565,10 @@ def _run_derivation(
         Target fabric GeoDataFrame.
     config
         Pipeline configuration with derivation settings.
-
-    Returns
-    -------
-    xr.Dataset
-        Derived parameter dataset.
     """
     from hydro_param.derivations.pywatershed import PywatershedDerivation
     from hydro_param.output import get_formatter
+    from hydro_param.units import convert as unit_convert
 
     derivation_name = config.output.derivation
     options = config.output.derivation_options
@@ -581,6 +580,13 @@ def _run_derivation(
     if derivation_name not in _DERIVATION_REGISTRY:
         available = ", ".join(sorted(_DERIVATION_REGISTRY))
         raise ValueError(f"Unknown derivation plugin '{derivation_name}'. Available: {available}")
+
+    # Validate required derivation options early
+    for key in ("start", "end"):
+        if not options.get(key):
+            raise ValueError(
+                f"derivation_options['{key}'] is required when derivation='{derivation_name}'"
+            )
 
     logger.info("Running derivation plugin: %s", derivation_name)
     plugin_cls = _DERIVATION_REGISTRY[derivation_name]
@@ -596,11 +602,11 @@ def _run_derivation(
         segments = gpd.read_file(options["segment_path"])
 
     # Rename SIR variables for the derivation plugin
-    sir = plugin.rename_sir_variables(sir, options.get("variable_renames", {}))
+    sir_renamed = plugin.rename_sir_variables(sir, options.get("variable_renames", {}))
 
     # Run derivation
     derived = plugin.derive(
-        sir,
+        sir_renamed,
         config=options,
         fabric=fabric_for_derivation,
         segments=segments,
@@ -612,20 +618,29 @@ def _run_derivation(
     for _ds_name, ds in temporal.items():
         # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
         temporal_renames = options.get("temporal_renames", {})
-        for old_name, new_name in temporal_renames.items():
-            if old_name in ds:
-                ds = ds.rename({old_name: new_name})
+        actual_renames = {old: new for old, new in temporal_renames.items() if old in ds}
+        if actual_renames:
+            ds = ds.rename(actual_renames)
+
         # Apply unit conversions (e.g., K→C for temperature)
+        # Uses post-rename names; produces new DataArrays (no in-place mutation)
         temp_conversions = options.get("temporal_conversions", {})
         for var_name, (from_unit, to_unit) in temp_conversions.items():
             if var_name in ds:
-                from hydro_param.units import convert as unit_convert
+                da = ds[var_name]
+                converted = unit_convert(da.values.astype(np.float64), from_unit, to_unit)
+                ds[var_name] = da.copy(data=converted)
 
-                ds[var_name].values = unit_convert(
-                    ds[var_name].values.astype(np.float64), from_unit, to_unit
-                )
+        # Align temporal feature dimension to derived dataset's nhru
+        # Temporal data uses id_field (e.g., nhm_id); derived uses nhru
         for var in ds.data_vars:
-            derived[str(var)] = ds[str(var)]
+            da = ds[str(var)]
+            # Find the feature dimension (non-time dimension)
+            feat_dims = [d for d in da.dims if d != "time"]
+            if feat_dims and "nhru" in derived.dims and feat_dims[0] != "nhru":
+                feat_dim = feat_dims[0]
+                da = da.rename({feat_dim: "nhru"})
+            derived[str(var)] = da
 
     # Write using the model-specific formatter
     formatter = get_formatter(derivation_name)
@@ -634,12 +649,10 @@ def _run_derivation(
         "forcing_dir": options.get("forcing_dir", "forcing"),
         "soltab_file": options.get("soltab_file", "soltab.nc"),
         "control_file": options.get("control_file", "control.yml"),
-        "start": options.get("start"),
-        "end": options.get("end"),
+        "start": options["start"],
+        "end": options["end"],
     }
     formatter.write(derived, config.output.path, formatter_config)
-
-    return derived
 
 
 # ---------------------------------------------------------------------------

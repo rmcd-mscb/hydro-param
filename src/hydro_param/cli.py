@@ -497,13 +497,14 @@ def _translate_pws_to_pipeline(
         "forcing_dir": cfg.output.forcing_dir,
         "control_file": cfg.output.control_file,
         "soltab_file": cfg.output.soltab_file,
-        # Temporal variable renaming (gridMET names → PRMS names)
+        # Temporal variable renaming (gridMET short names → PRMS names)
         "temporal_renames": {
-            "precipitation_amount": "prcp",
-            "daily_maximum_temperature": "tmax",
-            "daily_minimum_temperature": "tmin",
+            "pr": "prcp",
+            "tmmx": "tmax",
+            "tmmn": "tmin",
         },
         # Unit conversions for temporal data (K→C; formatter does C→F)
+        # Applied AFTER renames, so use post-rename names
         "temporal_conversions": {
             "tmax": ("K", "C"),
             "tmin": ("K", "C"),
