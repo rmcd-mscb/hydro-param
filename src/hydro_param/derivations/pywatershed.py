@@ -99,6 +99,7 @@ def merge_temporal_into_derived(
 
     for _var_key, chunks in chunks_by_varset.items():
         if len(chunks) > 1:
+            chunks.sort(key=lambda c: c["time"].values[0])
             ds = xr.concat(chunks, dim="time")
         else:
             ds = chunks[0]

@@ -492,9 +492,7 @@ def stage4_process(
 
         if entry.temporal:
             # Split temporal processing by year to keep files manageable
-            year_chunks = _split_time_period_by_year(
-                cast(list[str], ds_req.time_period)
-            )
+            year_chunks = _split_time_period_by_year(cast(list[str], ds_req.time_period))
             logger.info(
                 "Dataset %d/%d: %s [%s, temporal] vars=%s period=%s (%d year chunks)",
                 ds_idx,
@@ -510,12 +508,8 @@ def stage4_process(
             for chunk_period in year_chunks:
                 chunk_year = chunk_period[0][:4]
                 t_chunk = time.perf_counter()
-                chunk_req = ds_req.model_copy(
-                    update={"time_period": chunk_period}
-                )
-                ds = _process_temporal(
-                    fabric, entry, chunk_req, var_specs, config
-                )
+                chunk_req = ds_req.model_copy(update={"time_period": chunk_period})
+                ds = _process_temporal(fabric, entry, chunk_req, var_specs, config)
                 result_key = f"{ds_req.name}_{chunk_year}"
                 temporal_results[result_key] = ds
                 categories[result_key] = category
@@ -528,9 +522,7 @@ def stage4_process(
                     time.perf_counter() - t_chunk,
                 )
 
-            logger.info(
-                "  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds
-            )
+            logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
             continue
 
         # Expand years: list → iterate, bare int → [int], None → [None]
