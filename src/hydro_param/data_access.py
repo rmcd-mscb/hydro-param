@@ -269,8 +269,13 @@ def fetch_stac_cog(
 
 
 def _is_remote_url(source: str) -> bool:
-    """Check if a source string is a remote HTTP(S) URL."""
-    return source.startswith("http://") or source.startswith("https://")
+    """Check if a source string is a remote HTTP(S) URL.
+
+    Only HTTP/HTTPS URLs are supported for direct remote access via GDAL
+    vsicurl. Other remote schemes (s3://, gs://) require different GDAL
+    virtual filesystem handlers and are not handled here.
+    """
+    return source.startswith(("http://", "https://"))
 
 
 def fetch_local_tiff(
@@ -286,6 +291,10 @@ def fetch_local_tiff(
     ``entry.source`` (dataset-level), or raises an error if neither is set.
     Remote HTTP(S) URLs are opened directly via GDAL vsicurl — no local
     file existence check is performed.
+
+    Note: The function name ``fetch_local_tiff`` corresponds to the
+    ``strategy="local_tiff"`` enum value in the registry schema. The strategy
+    now supports both local paths and remote HTTP(S) URLs via GDAL vsicurl.
 
     Parameters
     ----------
@@ -317,12 +326,12 @@ def fetch_local_tiff(
     from rioxarray.exceptions import NoDataInBounds
 
     # Resolve source: per-variable override > dataset-level
-    source = variable_source or entry.source
+    source = variable_source if variable_source is not None else entry.source
 
     if source is None:
         msg = (
-            f"Dataset '{dataset_name}' requires a local file "
-            f"(strategy: local_tiff) but no 'source' path set."
+            f"Dataset '{dataset_name}' requires a source path or URL "
+            f"(strategy: local_tiff) but neither variable_source nor entry.source is set."
         )
         if entry.download:
             if entry.download.files:
@@ -358,10 +367,19 @@ def fetch_local_tiff(
     else:
         source_path = Path(source)
         if not source_path.exists():
-            raise FileNotFoundError(f"Local GeoTIFF not found: {source_path}")
+            raise FileNotFoundError(f"GeoTIFF not found: {source_path}")
         logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
 
-    da = cast(xr.DataArray, rioxarray.open_rasterio(source, masked=True))
+    try:
+        da = cast(xr.DataArray, rioxarray.open_rasterio(source, masked=True))
+    except Exception as exc:
+        if _is_remote_url(source):
+            raise RuntimeError(
+                f"Failed to open remote raster for dataset '{dataset_name}': {source}\n"
+                f"The server may be unavailable or the URL may be incorrect.\n"
+                f"Original error: {exc}"
+            ) from exc
+        raise
     da = da.squeeze("band", drop=True)
 
     try:

@@ -1397,3 +1397,140 @@ def test_stage4_results_empty_has_no_files():
     assert len(results.static_files) == 0
     assert len(results.temporal_files) == 0
     assert len(results.categories) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-variable source_override tests
+# ---------------------------------------------------------------------------
+
+
+def test_stage2_allows_local_tiff_with_per_variable_sources(tmp_path: Path):
+    """local_tiff with no dataset source but all vars having source_override passes stage2."""
+    reg_raw = {
+        "datasets": {
+            "polaris_30m": {
+                "strategy": "local_tiff",
+                "category": "soils",
+                "variables": [
+                    {
+                        "name": "sand",
+                        "band": 1,
+                        "source_override": "http://example.com/sand.vrt",
+                    },
+                    {
+                        "name": "clay",
+                        "band": 1,
+                        "source_override": "http://example.com/clay.vrt",
+                    },
+                ],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "polaris_30m", "variables": ["sand", "clay"], "statistics": ["mean"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    # Should not raise — all requested vars have source_override
+    resolved = stage2_resolve_datasets(config, registry)
+    assert len(resolved) == 1
+
+
+def test_stage2_rejects_local_tiff_mixed_sources(tmp_path: Path):
+    """local_tiff raises when some requested vars lack source_override and no dataset source."""
+    reg_raw = {
+        "datasets": {
+            "polaris_30m": {
+                "strategy": "local_tiff",
+                "category": "soils",
+                "variables": [
+                    {
+                        "name": "sand",
+                        "band": 1,
+                        "source_override": "http://example.com/sand.vrt",
+                    },
+                    {"name": "theta_r", "band": 1},  # no source_override
+                ],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "polaris_30m", "variables": ["sand", "theta_r"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="polaris_30m"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
+    """_process_batch passes var_spec.source_override as variable_source to fetch_local_tiff."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    vrt_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+    entry = DatasetEntry(strategy="local_tiff", crs="EPSG:4326")
+    var_spec = VariableSpec(name="sand", band=1, source_override=vrt_url)
+    ds_req = DatasetRequest(name="polaris_30m", variables=["sand"], statistics=["mean"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"mean": [50.0, 60.0]}, index=["a", "b"])
+
+    with (
+        patch("hydro_param.pipeline.fetch_local_tiff") as mock_fetch,
+        patch("hydro_param.pipeline.save_to_geotiff"),
+        patch.object(ZonalProcessor, "process", return_value=mock_df),
+    ):
+        # Make fetch return a minimal DataArray
+        import numpy as np
+
+        mock_fetch.return_value = xr.DataArray(
+            np.ones((4, 4)),
+            dims=["y", "x"],
+            coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        )
+
+        results = _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+
+        # Verify variable_source was passed through
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs.kwargs["variable_source"] == vrt_url
+
+    assert "sand" in results

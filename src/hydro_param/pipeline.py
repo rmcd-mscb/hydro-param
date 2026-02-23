@@ -162,42 +162,51 @@ def stage2_resolve_datasets(
         if ds_req.source is not None:
             entry = entry.model_copy(update={"source": str(ds_req.source)})
 
-        # Validate: local_tiff datasets must have a source
+        # Validate: local_tiff datasets must have a source (dataset-level or per-variable)
         if entry.strategy == "local_tiff" and entry.source is None:
-            msg = (
-                f"Dataset '{ds_req.name}' requires a local file "
-                f"(strategy: local_tiff) but no 'source' path is set."
+            # Check if all requested variables have per-variable source overrides
+            requested_var_specs = [
+                registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
+            ]
+            all_vars_have_source = all(
+                isinstance(vs, VariableSpec) and vs.source_override is not None
+                for vs in requested_var_specs
             )
-            if entry.download:
-                if entry.download.files:
-                    msg += (
-                        f"\n\nThis dataset has {len(entry.download.files)} "
-                        f"downloadable files. Run:\n"
-                        f"  hydro-param datasets info {ds_req.name}"
-                    )
-                elif entry.download.url_template:
-                    start, end = entry.download.year_range
-                    n_vars = len(entry.download.variables_available)
-                    msg += (
-                        f"\n\nThis dataset has templated downloads "
-                        f"({end - start + 1} years x {n_vars} variables). Run:\n"
-                        f"  hydro-param datasets info {ds_req.name}"
-                    )
-                elif entry.download.url:
-                    msg += f"\n\nDownload from: {entry.download.url}"
-                    if entry.download.size_gb:
-                        msg += f"\nExpected size: ~{entry.download.size_gb} GB"
-                    if entry.download.format:
-                        msg += f"\nFormat: {entry.download.format}"
-                    if entry.download.notes:
-                        msg += f"\n{entry.download.notes.strip()}"
-            msg += (
-                f"\n\nThen set 'source' in your pipeline config:\n"
-                f"  datasets:\n"
-                f"    - name: {ds_req.name}\n"
-                f"      source: /path/to/downloaded/file.tif"
-            )
-            raise ValueError(msg)
+            if not all_vars_have_source:
+                msg = (
+                    f"Dataset '{ds_req.name}' requires a local file "
+                    f"(strategy: local_tiff) but no 'source' path is set."
+                )
+                if entry.download:
+                    if entry.download.files:
+                        msg += (
+                            f"\n\nThis dataset has {len(entry.download.files)} "
+                            f"downloadable files. Run:\n"
+                            f"  hydro-param datasets info {ds_req.name}"
+                        )
+                    elif entry.download.url_template:
+                        start, end = entry.download.year_range
+                        n_vars = len(entry.download.variables_available)
+                        msg += (
+                            f"\n\nThis dataset has templated downloads "
+                            f"({end - start + 1} years x {n_vars} variables). Run:\n"
+                            f"  hydro-param datasets info {ds_req.name}"
+                        )
+                    elif entry.download.url:
+                        msg += f"\n\nDownload from: {entry.download.url}"
+                        if entry.download.size_gb:
+                            msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+                        if entry.download.format:
+                            msg += f"\nFormat: {entry.download.format}"
+                        if entry.download.notes:
+                            msg += f"\n{entry.download.notes.strip()}"
+                msg += (
+                    f"\n\nThen set 'source' in your pipeline config:\n"
+                    f"  datasets:\n"
+                    f"    - name: {ds_req.name}\n"
+                    f"      source: /path/to/downloaded/file.tif"
+                )
+                raise ValueError(msg)
 
         # Validate: temporal datasets require time_period
         if entry.temporal and ds_req.time_period is None:
@@ -330,8 +339,8 @@ def _process_batch(
             )
         else:
             # Raw variable: fetch directly
-            # TODO: Pass var_spec.band to fetch routine for multi-band datasets
-            da = _fetch(entry, bbox, variable_source=var_spec.source)
+            # Per-variable source (e.g. POLARIS VRTs) overrides dataset-level source
+            da = _fetch(entry, bbox, variable_source=var_spec.source_override)
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
 

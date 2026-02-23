@@ -58,20 +58,18 @@ def test_build_climr_cat_dict_missing_catalog_id(mock_catalog: pd.DataFrame):
 # ---------------------------------------------------------------------------
 
 
-def test_is_remote_url_http():
-    assert _is_remote_url("http://example.com/data.vrt") is True
-
-
-def test_is_remote_url_https():
-    assert _is_remote_url("https://example.com/data.tif") is True
-
-
-def test_is_remote_url_local_path():
-    assert _is_remote_url("/data/local/file.tif") is False
-
-
-def test_is_remote_url_relative_path():
-    assert _is_remote_url("data/file.tif") is False
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("http://example.com/data.vrt", True),
+        ("https://example.com/data.tif", True),
+        ("/data/local/file.tif", False),
+        ("data/file.tif", False),
+        ("s3://bucket/key.tif", False),
+    ],
+)
+def test_is_remote_url(source: str, expected: bool):
+    assert _is_remote_url(source) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -133,10 +131,34 @@ def test_fetch_local_tiff_variable_source_override():
 
 def test_fetch_local_tiff_no_source_raises():
     """Raises ValueError when neither variable_source nor entry.source is set."""
-    rioxarray = pytest.importorskip("rioxarray")  # noqa: F841
+    pytest.importorskip("rioxarray")
 
     entry = DatasetEntry(strategy="local_tiff")
     bbox = [-75.8, 39.6, -74.4, 42.5]
 
-    with pytest.raises(ValueError, match="no 'source' path set"):
+    with pytest.raises(ValueError, match="requires a source path or URL"):
         fetch_local_tiff(entry, bbox, dataset_name="test_dataset")
+
+
+def test_fetch_local_tiff_variable_source_local_path_not_found():
+    """variable_source with a non-existent local path raises FileNotFoundError."""
+    pytest.importorskip("rioxarray")
+
+    entry = DatasetEntry(strategy="local_tiff", source="/valid/default.tif")
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with pytest.raises(FileNotFoundError, match="/nonexistent/override.tif"):
+        fetch_local_tiff(entry, bbox, variable_source="/nonexistent/override.tif")
+
+
+def test_fetch_local_tiff_remote_open_failure():
+    """Remote open failure wraps error with dataset context."""
+    rioxarray = pytest.importorskip("rioxarray")
+
+    vrt_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bad.vrt"
+    entry = DatasetEntry(strategy="local_tiff", source=vrt_url)
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with patch.object(rioxarray, "open_rasterio", side_effect=Exception("GDAL error")):
+        with pytest.raises(RuntimeError, match="Failed to open remote raster.*polaris"):
+            fetch_local_tiff(entry, bbox, dataset_name="polaris_30m")

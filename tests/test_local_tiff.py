@@ -181,7 +181,7 @@ def test_fetch_local_tiff_no_data_in_bbox_raises(tmp_path: Path):
 def test_fetch_local_tiff_no_source_raises():
     """ValueError when source is None and no download info."""
     entry = DatasetEntry(strategy="local_tiff")
-    with pytest.raises(ValueError, match="no 'source' path set"):
+    with pytest.raises(ValueError, match="requires a source path or URL"):
         fetch_local_tiff(entry, [0.0, 0.0, 1.0, 1.0])
 
 

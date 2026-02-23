@@ -23,7 +23,7 @@ class VariableSpec(BaseModel):
     long_name: str = ""
     categorical: bool = False
     asset_key: str | None = None  # per-variable STAC asset override (e.g. gNATSGO)
-    source: str | None = None  # per-variable source path/URL override (e.g. POLARIS VRTs)
+    source_override: str | None = None  # per-variable source path/URL (e.g. POLARIS VRTs)
 
 
 class DerivedVariableSpec(BaseModel):

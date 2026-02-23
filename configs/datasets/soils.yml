@@ -8,16 +8,17 @@
 # used to gap-fill where SSURGO has no data.
 #
 # gNATSGO = rasterized SSURGO + STATSGO2 gap-fill, 30m resolution.
-#   - Pre-summarized rasters on Planetary Computer (aws, rootzone, mukey).
+#   - Pre-summarized rasters on Planetary Computer (aws0_100, rootznemc, rootznaws, mukey).
 #   - For full property access, join mukey raster to SSURGO tabular data.
 #
-# POLARIS = probabilistic remapping of SSURGO point observations onto a 30m grid
-#   using machine learning (Chaney et al., 2019). Provides continuous surfaces
-#   with uncertainty (p5, mean, p50, p95) for 13 soil properties at 6 depths.
+# POLARIS = probabilistic remapping of SSURGO/STATSGO2 soil survey data onto a 30m
+#   grid using machine learning (Chaney et al., 2019). Provides continuous surfaces
+#   with uncertainty (p5, mean, mode, p50, p95) for 13 soil properties at 6 depths.
 #   Served as VRT mosaics from Duke University — can be opened directly via
 #   GDAL vsicurl over HTTP (no download needed for processing).
 #
-# Both provide rasterized access to the underlying SSURGO/STATSGO2 survey data.
+# gNATSGO and POLARIS both provide rasterized access to the underlying
+# SSURGO/STATSGO2 survey data.
 # For direct SSURGO polygon access: NRCS Soil Data Access (SDA) web service
 # or the soilDB R package.
 
@@ -84,39 +85,39 @@ datasets:
     # All 13 POLARIS soil properties listed below. download.files contains
     # only the subset needed for NHM-PRMS; see download.notes for URL pattern.
     #
-    # Variables with source: URLs can be processed directly over HTTP (no download).
-    # Variables without source: require downloading first (see download section).
+    # Variables with source_override: URLs can be processed directly over HTTP (no download).
+    # Variables without source_override: require downloading first (see download section).
     variables:
       - name: sand
         band: 1
         units: "%"
         long_name: "Sand content"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
       - name: silt
         band: 1
         units: "%"
         long_name: "Silt content"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/silt_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/silt_mean_0_5.vrt"
       - name: clay
         band: 1
         units: "%"
         long_name: "Clay content"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/clay_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/clay_mean_0_5.vrt"
       - name: bd
         band: 1
         units: "g/cm3"
         long_name: "Bulk density"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bd_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bd_mean_0_5.vrt"
       - name: theta_s
         band: 1
         units: "m3/m3"
         long_name: "Saturated water content (porosity)"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_0_5.vrt"
       - name: theta_r
         band: 1
         units: "m3/m3"
@@ -127,7 +128,7 @@ datasets:
         units: "log10(cm/hr)"
         long_name: "Saturated hydraulic conductivity"
         categorical: false
-        source: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/ksat_mean_0_5.vrt"
+        source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/ksat_mean_0_5.vrt"
       - name: ph
         band: 1
         units: ""
