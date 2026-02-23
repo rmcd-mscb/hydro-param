@@ -75,11 +75,12 @@ class PipelineResult:
     fabric: gpd.GeoDataFrame | None = None
 
     def load_sir(self) -> xr.Dataset:
-        """Lazily load all static per-variable files into a combined xr.Dataset."""
-        datasets = [xr.open_dataset(p) for p in self.static_files.values()]
-        if not datasets:
+        """Lazily load all static per-variable CSV files into a combined xr.Dataset."""
+        if not self.static_files:
             return xr.Dataset()
-        return xr.merge(datasets)
+        dfs = [pd.read_csv(p, index_col=0) for p in self.static_files.values()]
+        combined = pd.concat(dfs, axis=1)
+        return xr.Dataset.from_dataframe(combined)
 
 
 # ---------------------------------------------------------------------------
@@ -477,9 +478,13 @@ def _write_variable_file(
     category: str,
     config: PipelineConfig,
     feature_ids: object,
-    sir_attrs: dict[str, object],
 ) -> Path:
-    """Write a single per-variable output file.
+    """Write a single per-variable CSV file.
+
+    Renames columns using ``var_name_{col}`` (or just ``var_name`` when the
+    only statistic is ``"mean"``), reindexes to the full set of feature IDs,
+    sorts by ``id_field``, and writes a CSV with ``id_field`` as the first
+    column.
 
     Parameters
     ----------
@@ -493,40 +498,30 @@ def _write_variable_file(
         Pipeline configuration.
     feature_ids : array-like
         Feature IDs from the target fabric.
-    sir_attrs : dict
-        CF-1.8 metadata attributes.
 
     Returns
     -------
     Path
-        Path to the written output file.
+        Path to the written CSV file.
     """
     id_field = config.target_fabric.id_field
     output_dir = config.output.path
     var_dir = output_dir / category
     var_dir.mkdir(parents=True, exist_ok=True)
 
-    var_data_vars: dict[str, tuple] = {}
-    for col in df.columns:
-        col_name = f"{var_name}_{col}" if col != "mean" else var_name
-        if hasattr(df.index, "name") and df.index.name == id_field:
-            values = df[col].reindex(feature_ids).values
-        else:
-            values = df[col].values
-        var_data_vars[col_name] = (id_field, values)
+    # Rename columns: "mean" → var_name, others → var_name_{col}
+    rename_map = {col: (var_name if col == "mean" else f"{var_name}_{col}") for col in df.columns}
+    out_df = df.rename(columns=rename_map)
 
-    var_ds = xr.Dataset(
-        var_data_vars,
-        coords={id_field: feature_ids},
-        attrs=sir_attrs,
-    )
+    # Ensure index is id_field
+    if not (hasattr(out_df.index, "name") and out_df.index.name == id_field):
+        out_df.index.name = id_field
 
-    if config.output.format == "netcdf":
-        out_path = var_dir / f"{var_name}.nc"
-        var_ds.to_netcdf(out_path)
-    elif config.output.format == "parquet":
-        out_path = var_dir / f"{var_name}.parquet"
-        var_ds.to_dataframe().to_parquet(out_path)
+    # Reindex to full feature set (NaN for missing) and sort
+    out_df = out_df.reindex(feature_ids).sort_index()
+
+    out_path = var_dir / f"{var_name}.csv"
+    out_df.to_csv(out_path, index=True)
     logger.info("Wrote %s → %s", var_name, out_path)
     return out_path
 
@@ -617,7 +612,6 @@ def stage4_process(
 
     id_field = config.target_fabric.id_field
     feature_ids = fabric[id_field].values
-    sir_attrs = _build_sir_attrs(config, len(feature_ids))
 
     # Ensure output directory exists for incremental writes
     config.output.path.mkdir(parents=True, exist_ok=True)
@@ -727,7 +721,7 @@ def stage4_process(
             merged_df = pd.concat(dfs)
             category = categories.get(var_key, "uncategorized")
             static_files[var_key] = _write_variable_file(
-                var_key, merged_df, category, config, feature_ids, sir_attrs
+                var_key, merged_df, category, config, feature_ids
             )
             logger.info("  Merged %s: %d total features", var_key, len(merged_df))
 

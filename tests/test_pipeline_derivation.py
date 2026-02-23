@@ -32,10 +32,12 @@ class TestPipelineResult:
         assert "gridmet" in result.temporal_files
 
     def test_load_sir_from_files(self, tmp_path: Path) -> None:
-        """load_sir() assembles a combined Dataset from per-variable files."""
-        ds = xr.Dataset({"elevation": ("nhm_id", [100.0])}, coords={"nhm_id": [1]})
-        path = tmp_path / "elevation.nc"
-        ds.to_netcdf(path)
+        """load_sir() assembles a combined Dataset from per-variable CSV files."""
+        import pandas as pd
+
+        df = pd.DataFrame({"elevation": [100.0]}, index=pd.Index([1], name="nhm_id"))
+        path = tmp_path / "elevation.csv"
+        df.to_csv(path, index=True)
 
         result = PipelineResult(
             output_dir=tmp_path,

@@ -21,7 +21,6 @@ from hydro_param.pipeline import (
     PipelineResult,
     Stage4Results,
     _buffered_bbox,
-    _build_sir_attrs,
     _process_temporal,
     _split_time_period_by_year,
     _write_variable_file,
@@ -324,54 +323,31 @@ def test_stage2_rejects_unknown_dataset(config_yaml: Path, tmp_path: Path):
 
 
 def test_write_variable_file_returns_path(config_yaml: Path, fabric_gpkg: Path):
-    """_write_variable_file returns the written file path."""
+    """_write_variable_file returns the written CSV file path."""
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
     feature_ids = fabric["featureid"].values
-    sir_attrs = _build_sir_attrs(config, len(feature_ids))
 
     df = pd.DataFrame(
         {"mean": [100.0, 200.0, 300.0, 400.0]},
         index=pd.Index([1, 2, 3, 4], name="featureid"),
     )
 
-    path = _write_variable_file("elevation", df, "topography", config, feature_ids, sir_attrs)
+    path = _write_variable_file("elevation", df, "topography", config, feature_ids)
     assert path.exists()
-    assert path.suffix == ".nc"
+    assert path.suffix == ".csv"
 
-    ds = xr.open_dataset(path)
-    assert "elevation" in ds.data_vars
-    assert ds.attrs["Conventions"] == "CF-1.8"
-    ds.close()
-
-
-def test_per_variable_file_has_cf_metadata(config_yaml: Path, fabric_gpkg: Path):
-    """Per-variable files carry CF-1.8 attributes."""
-    config = load_config(config_yaml)
-    fabric = gpd.read_file(fabric_gpkg)
-    feature_ids = fabric["featureid"].values
-    sir_attrs = _build_sir_attrs(config, len(feature_ids))
-
-    df = pd.DataFrame(
-        {"mean": [100.0, 200.0, 300.0, 400.0]},
-        index=pd.Index([1, 2, 3, 4], name="featureid"),
-    )
-
-    path = _write_variable_file("elevation", df, "topography", config, feature_ids, sir_attrs)
-    ds = xr.open_dataset(path)
-    assert ds.attrs["Conventions"] == "CF-1.8"
-    assert "hydro-param" in ds.attrs["source"]
-    assert ds.attrs["n_features"] == 4
-    assert ds.attrs["target_fabric_id_field"] == "featureid"
-    ds.close()
+    result = pd.read_csv(path, index_col=0)
+    assert "elevation" in result.columns
+    assert len(result) == 4
+    assert result.index.name == "featureid"
 
 
 def test_load_sir_merges_variable_files(config_yaml: Path, fabric_gpkg: Path):
-    """PipelineResult.load_sir() merges per-variable files into one Dataset."""
+    """PipelineResult.load_sir() merges per-variable CSV files into one Dataset."""
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
     feature_ids = fabric["featureid"].values
-    sir_attrs = _build_sir_attrs(config, len(feature_ids))
 
     elev_df = pd.DataFrame(
         {"mean": [100.0, 200.0, 300.0, 400.0]},
@@ -382,8 +358,8 @@ def test_load_sir_merges_variable_files(config_yaml: Path, fabric_gpkg: Path):
         index=pd.Index([1, 2, 3, 4], name="featureid"),
     )
 
-    elev_path = _write_variable_file("elevation", elev_df, "topo", config, feature_ids, sir_attrs)
-    slope_path = _write_variable_file("slope", slope_df, "topo", config, feature_ids, sir_attrs)
+    elev_path = _write_variable_file("elevation", elev_df, "topo", config, feature_ids)
+    slope_path = _write_variable_file("slope", slope_df, "topo", config, feature_ids)
 
     result = PipelineResult(
         output_dir=config.output.path,
