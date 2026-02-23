@@ -1534,3 +1534,195 @@ def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
         assert call_kwargs.kwargs["variable_source"] == vrt_url
 
     assert "sand" in results
+
+
+# ---------------------------------------------------------------------------
+# Resume (manifest-based skip)
+# ---------------------------------------------------------------------------
+
+
+def test_stage4_resume_skips_completed_dataset(tmp_path: Path):
+    """With resume=True and valid manifest, stage4 skips completed datasets."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import (
+        ManifestEntry,
+        PipelineManifest,
+        dataset_fingerprint,
+        fabric_fingerprint,
+    )
+    from hydro_param.pipeline import stage4_process
+
+    # Create fabric with batch_id
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"], "batch_id": [0, 0]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    # Create output dir with existing file
+    output_dir = tmp_path / "output"
+    lc_dir = output_dir / "land_cover"
+    lc_dir.mkdir(parents=True)
+    csv_file = lc_dir / "LndCov.csv"
+    csv_file.write_text("hru_id,LndCov\na,11\nb,21\n")
+
+    # Create a fabric file so fingerprint works
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": True},
+    )
+
+    # Compute the expected fingerprint
+    ds_fp = dataset_fingerprint(ds_req, entry, [var_spec], config.processing)
+    fab_fp = fabric_fingerprint(config)
+
+    # Write a manifest
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint=ds_fp,
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    # process_nhgf_stac should NOT be called — dataset is skipped
+    with patch.object(ZonalProcessor, "process_nhgf_stac") as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_not_called()
+
+    assert "LndCov" in results.static_files
+    assert results.static_files["LndCov"] == csv_file
+
+
+def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path):
+    """With resume=True but changed fingerprint, stage4 reprocesses."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import ManifestEntry, PipelineManifest, fabric_fingerprint
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    output_dir = tmp_path / "output"
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": True},
+    )
+
+    fab_fp = fabric_fingerprint(config)
+
+    # Write manifest with STALE fingerprint
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint="sha256:stale_fingerprint",
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    # process_nhgf_stac SHOULD be called — fingerprint doesn't match
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
+    assert "LndCov" in results.static_files
+
+
+def test_stage4_resume_disabled_by_default(tmp_path: Path):
+    """With resume=False (default), stage4 processes everything."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+    )
+
+    # Default resume=False
+    assert config.processing.resume is False
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
+    assert "LndCov" in results.static_files

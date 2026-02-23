@@ -28,6 +28,7 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 
+from hydro_param import manifest as _manifest_mod
 from hydro_param.batching import spatial_batch
 from hydro_param.config import DatasetRequest, PipelineConfig, load_config
 from hydro_param.data_access import (
@@ -647,6 +648,22 @@ def stage4_process(
     # Ensure output directory exists for incremental writes
     config.output.path.mkdir(parents=True, exist_ok=True)
 
+    # Resume support: load manifest if resume is enabled
+    manifest: _manifest_mod.PipelineManifest | None = None
+    fab_fp: str = ""
+    if config.processing.resume:
+        manifest = _manifest_mod.load_manifest(config.output.path)
+        fab_fp = _manifest_mod.fabric_fingerprint(config)
+        if manifest is not None and manifest.fabric_fingerprint != fab_fp:
+            logger.warning(
+                "Fabric fingerprint changed — reprocessing all datasets (old=%s, new=%s)",
+                manifest.fabric_fingerprint,
+                fab_fp,
+            )
+            manifest = None
+        if manifest is None:
+            manifest = _manifest_mod.PipelineManifest(fabric_fingerprint=fab_fp)
+
     static_files: dict[str, Path] = {}
     temporal_files: dict[str, Path] = {}
     categories: dict[str, str] = {}
@@ -654,6 +671,25 @@ def stage4_process(
     for ds_idx, (entry, ds_req, var_specs) in enumerate(resolved, 1):
         category = entry.category or "uncategorized"
         var_names = [v.name for v in var_specs]
+
+        # Resume: check if this dataset can be skipped
+        if manifest is not None:
+            ds_fp = _manifest_mod.dataset_fingerprint(ds_req, entry, var_specs, config.processing)
+            if manifest.is_dataset_current(ds_req.name, ds_fp, config.output.path):
+                cached = manifest.entries[ds_req.name]
+                for k, rel in cached.static_files.items():
+                    static_files[k] = config.output.path / rel
+                    categories[k] = category
+                for k, rel in cached.temporal_files.items():
+                    temporal_files[k] = config.output.path / rel
+                    categories[k] = category
+                logger.info(
+                    "Dataset %d/%d: %s — skipped (outputs current)",
+                    ds_idx,
+                    len(resolved),
+                    ds_req.name,
+                )
+                continue
 
         if entry.temporal:
             # Split temporal processing by year to keep files manageable
@@ -689,6 +725,17 @@ def stage4_process(
                 temporal_files[result_key] = _write_temporal_file(result_key, ds, category, config)
 
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
+
+            # Update manifest after temporal dataset completes
+            if manifest is not None:
+                ds_temporal: dict[str, Path] = {
+                    k: temporal_files[k] for k in temporal_files if k.startswith(f"{ds_req.name}_")
+                }
+                manifest.entries[ds_req.name] = _manifest_mod.make_manifest_entry(
+                    ds_fp, {}, ds_temporal, config.output.path
+                )
+                manifest.save(config.output.path)
+
             continue
 
         # Expand years: list → iterate, bare int → [int], None → [None]
@@ -763,6 +810,18 @@ def stage4_process(
             logger.info("  Merged %s: %d total features", var_key, len(merged_df))
 
         logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
+
+        # Update manifest after static dataset completes
+        if manifest is not None:
+            ds_static: dict[str, Path] = {k: static_files[k] for k, dfs in ds_batch_results.items()}
+            manifest.entries[ds_req.name] = _manifest_mod.make_manifest_entry(
+                ds_fp, ds_static, {}, config.output.path
+            )
+            manifest.save(config.output.path)
+
+    # Final manifest save (ensures clean state)
+    if manifest is not None:
+        manifest.save(config.output.path)
 
     return Stage4Results(
         static_files=static_files, temporal_files=temporal_files, categories=categories
