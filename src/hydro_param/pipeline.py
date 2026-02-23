@@ -611,6 +611,37 @@ def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, objec
     }
 
 
+def _save_manifest_to_disk(
+    manifest: _manifest_mod.PipelineManifest,
+    output_dir: Path,
+) -> None:
+    """Save manifest to disk, logging errors instead of crashing the pipeline."""
+    try:
+        manifest.save(output_dir)
+    except OSError as exc:
+        logger.error(
+            "Failed to save manifest to %s: %s. "
+            "Resume support may not work on next run, but outputs are intact.",
+            output_dir,
+            exc,
+        )
+
+
+def _save_manifest(
+    manifest: _manifest_mod.PipelineManifest,
+    ds_name: str,
+    ds_fp: str,
+    static_files: dict[str, Path],
+    temporal_files: dict[str, Path],
+    output_dir: Path,
+) -> None:
+    """Update a manifest entry and save to disk."""
+    manifest.entries[ds_name] = _manifest_mod.make_manifest_entry(
+        ds_fp, static_files, temporal_files, output_dir
+    )
+    _save_manifest_to_disk(manifest, output_dir)
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
@@ -654,7 +685,8 @@ def stage4_process(
     if config.processing.resume:
         manifest = _manifest_mod.load_manifest(config.output.path)
         fab_fp = _manifest_mod.fabric_fingerprint(config)
-        if manifest is not None and manifest.fabric_fingerprint != fab_fp:
+        if manifest is not None and not manifest.is_fabric_current(fab_fp):
+            # Fabric changed: discard stale manifest and start fresh
             logger.warning(
                 "Fabric fingerprint changed — reprocessing all datasets (old=%s, new=%s)",
                 manifest.fabric_fingerprint,
@@ -672,9 +704,11 @@ def stage4_process(
         category = entry.category or "uncategorized"
         var_names = [v.name for v in var_specs]
 
+        # Compute dataset fingerprint unconditionally (cheap hash)
+        ds_fp = _manifest_mod.dataset_fingerprint(ds_req, entry, var_specs, config.processing)
+
         # Resume: check if this dataset can be skipped
         if manifest is not None:
-            ds_fp = _manifest_mod.dataset_fingerprint(ds_req, entry, var_specs, config.processing)
             if manifest.is_dataset_current(ds_req.name, ds_fp, config.output.path):
                 cached = manifest.entries[ds_req.name]
                 for k, rel in cached.static_files.items():
@@ -706,6 +740,9 @@ def stage4_process(
             )
             t_ds = time.perf_counter()
 
+            # Track this dataset's temporal files explicitly
+            ds_temporal_files: dict[str, Path] = {}
+
             for chunk_period in year_chunks:
                 chunk_year = chunk_period[0][:4]
                 t_chunk = time.perf_counter()
@@ -723,18 +760,15 @@ def stage4_process(
                 )
                 # Write temporal file immediately after each year chunk
                 temporal_files[result_key] = _write_temporal_file(result_key, ds, category, config)
+                ds_temporal_files[result_key] = temporal_files[result_key]
 
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
             # Update manifest after temporal dataset completes
             if manifest is not None:
-                ds_temporal: dict[str, Path] = {
-                    k: temporal_files[k] for k in temporal_files if k.startswith(f"{ds_req.name}_")
-                }
-                manifest.entries[ds_req.name] = _manifest_mod.make_manifest_entry(
-                    ds_fp, {}, ds_temporal, config.output.path
+                _save_manifest(
+                    manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path
                 )
-                manifest.save(config.output.path)
 
             continue
 
@@ -813,15 +847,12 @@ def stage4_process(
 
         # Update manifest after static dataset completes
         if manifest is not None:
-            ds_static: dict[str, Path] = {k: static_files[k] for k, dfs in ds_batch_results.items()}
-            manifest.entries[ds_req.name] = _manifest_mod.make_manifest_entry(
-                ds_fp, ds_static, {}, config.output.path
-            )
-            manifest.save(config.output.path)
+            ds_static: dict[str, Path] = {k: static_files[k] for k in ds_batch_results}
+            _save_manifest(manifest, ds_req.name, ds_fp, ds_static, {}, config.output.path)
 
-    # Final manifest save (ensures clean state)
+    # Final save: persists any entries added during the last dataset iteration
     if manifest is not None:
-        manifest.save(config.output.path)
+        _save_manifest_to_disk(manifest, config.output.path)
 
     return Stage4Results(
         static_files=static_files, temporal_files=temporal_files, categories=categories

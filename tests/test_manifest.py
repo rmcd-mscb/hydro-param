@@ -1,6 +1,9 @@
 """Tests for pipeline manifest (resume support)."""
 
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from hydro_param.config import PipelineConfig, ProcessingConfig
 from hydro_param.dataset_registry import DatasetEntry, DerivedVariableSpec, VariableSpec
@@ -36,6 +39,18 @@ def test_fabric_fingerprint(tmp_path: Path):
     # mtime and size should be numeric
     float(parts[1])
     int(parts[2])
+
+
+def test_fabric_fingerprint_missing_file(tmp_path: Path):
+    """fabric_fingerprint raises FileNotFoundError with actionable message."""
+    config = PipelineConfig(
+        target_fabric={"path": str(tmp_path / "nonexistent.gpkg"), "id_field": "id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    with pytest.raises(FileNotFoundError, match="Cannot compute fabric fingerprint"):
+        fabric_fingerprint(config)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +119,52 @@ def test_dataset_fingerprint_changes_on_batch_size():
     assert fp1 != fp2
 
 
+def test_dataset_fingerprint_changes_on_source_override():
+    """Different source_override produces different hash."""
+    from hydro_param.config import DatasetRequest
+
+    ds_req = DatasetRequest(name="polaris", variables=["sand"])
+    entry = DatasetEntry(strategy="local_tiff")
+    processing = ProcessingConfig()
+
+    vars1: list[VariableSpec | DerivedVariableSpec] = [
+        VariableSpec(name="sand", band=1, source_override="http://example.com/v1/sand.vrt")
+    ]
+    vars2: list[VariableSpec | DerivedVariableSpec] = [
+        VariableSpec(name="sand", band=1, source_override="http://example.com/v2/sand.vrt")
+    ]
+
+    fp1 = dataset_fingerprint(ds_req, entry, vars1, processing)
+    fp2 = dataset_fingerprint(ds_req, entry, vars2, processing)
+    assert fp1 != fp2
+
+
+def test_dataset_fingerprint_changes_on_gsd():
+    """Different gsd produces different hash."""
+    from hydro_param.config import DatasetRequest
+
+    ds_req = DatasetRequest(name="dem", variables=["elevation"])
+    var_specs: list[VariableSpec | DerivedVariableSpec] = [VariableSpec(name="elevation", band=1)]
+    processing = ProcessingConfig()
+
+    entry1 = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com",
+        collection="3dep",
+        gsd=10,
+    )
+    entry2 = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com",
+        collection="3dep",
+        gsd=30,
+    )
+
+    fp1 = dataset_fingerprint(ds_req, entry1, var_specs, processing)
+    fp2 = dataset_fingerprint(ds_req, entry2, var_specs, processing)
+    assert fp1 != fp2
+
+
 # ---------------------------------------------------------------------------
 # PipelineManifest save/load
 # ---------------------------------------------------------------------------
@@ -117,7 +178,7 @@ def test_manifest_save_load_roundtrip(tmp_path: Path):
             "dem": ManifestEntry(
                 fingerprint="sha256:abc123",
                 static_files={"elevation": "topo/elevation.csv"},
-                completed_at="2026-01-01T00:00:00+00:00",
+                completed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             ),
         },
     )
@@ -144,9 +205,35 @@ def test_manifest_load_corrupt(tmp_path: Path):
     assert load_manifest(tmp_path) is None
 
 
+def test_manifest_load_invalid_schema(tmp_path: Path):
+    """Returns None for valid YAML with wrong schema."""
+    manifest_path = tmp_path / ".manifest.yml"
+    manifest_path.write_text("version: 1\nentries: wrong_type\n")
+    assert load_manifest(tmp_path) is None
+
+
+def test_manifest_load_unsupported_version(tmp_path: Path):
+    """Returns None for manifest with unsupported version."""
+    manifest_path = tmp_path / ".manifest.yml"
+    manifest_path.write_text("version: 99\nfabric_fingerprint: test\nentries: {}\n")
+    assert load_manifest(tmp_path) is None
+
+
 # ---------------------------------------------------------------------------
-# is_dataset_current
+# is_dataset_current / is_fabric_current
 # ---------------------------------------------------------------------------
+
+
+def test_is_fabric_current_matches():
+    """is_fabric_current returns True when fingerprint matches."""
+    manifest = PipelineManifest(fabric_fingerprint="test.gpkg|1234.0|5678")
+    assert manifest.is_fabric_current("test.gpkg|1234.0|5678")
+
+
+def test_is_fabric_current_mismatch():
+    """is_fabric_current returns False when fingerprint differs."""
+    manifest = PipelineManifest(fabric_fingerprint="test.gpkg|1234.0|5678")
+    assert not manifest.is_fabric_current("test.gpkg|9999.0|9999")
 
 
 def test_is_dataset_current_valid(tmp_path: Path):
@@ -241,4 +328,4 @@ def test_make_manifest_entry_relative_paths(tmp_path: Path):
 
     assert entry.static_files["elevation"] == "topo/elevation.csv"
     assert entry.fingerprint == "sha256:abc"
-    assert entry.completed_at  # non-empty
+    assert entry.completed_at > datetime.min.replace(tzinfo=timezone.utc)

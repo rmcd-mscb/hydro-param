@@ -677,3 +677,25 @@ def test_run_pipeline_failure(mock_load_config, mock_run_pipeline, tmp_path: Pat
     config_path.write_text("dummy: true")
     with pytest.raises(SystemExit, match="1"):
         _run("run", str(config_path))
+
+
+@patch("hydro_param.cli.run_pipeline_from_config")
+@patch("hydro_param.cli.load_config")
+def test_run_resume_flag_sets_config(mock_load_config, mock_run_pipeline, tmp_path: Path):
+    """--resume flag causes processing.resume to be True in the config."""
+    from hydro_param.config import PipelineConfig
+
+    mock_cfg = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+    mock_load_config.return_value = mock_cfg
+
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("dummy: true")
+    _run("run", str(config_path), "--resume")
+
+    mock_run_pipeline.assert_called_once()
+    actual_cfg = mock_run_pipeline.call_args[0][0]
+    assert actual_cfg.processing.resume is True

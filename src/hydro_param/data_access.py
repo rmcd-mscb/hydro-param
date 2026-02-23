@@ -294,7 +294,7 @@ def fetch_local_tiff(
 
     Note: The function name ``fetch_local_tiff`` corresponds to the
     ``strategy="local_tiff"`` enum value in the registry schema. The strategy
-    now supports both local paths and remote HTTP(S) URLs via GDAL vsicurl.
+    supports both local paths and remote HTTP(S) URLs via GDAL vsicurl.
 
     Parameters
     ----------
@@ -376,7 +376,6 @@ def fetch_local_tiff(
         if _is_remote_url(source):
             raise RuntimeError(
                 f"Failed to open remote raster for dataset '{dataset_name}': {source}\n"
-                f"The server may be unavailable or the URL may be incorrect.\n"
                 f"Original error: {exc}"
             ) from exc
         raise
