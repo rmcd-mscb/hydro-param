@@ -454,6 +454,107 @@ def _split_time_period_by_year(time_period: list[str]) -> list[list[str]]:
     return chunks
 
 
+def _write_variable_file(
+    var_name: str,
+    df: pd.DataFrame,
+    category: str,
+    config: PipelineConfig,
+    feature_ids: object,
+    sir_attrs: dict[str, object],
+) -> None:
+    """Write a single per-variable output file.
+
+    Parameters
+    ----------
+    var_name : str
+        Variable name (used as filename stem).
+    df : pd.DataFrame
+        Merged zonal statistics for this variable.
+    category : str
+        Dataset category (used as subdirectory).
+    config : PipelineConfig
+        Pipeline configuration.
+    feature_ids : array-like
+        Feature IDs from the target fabric.
+    sir_attrs : dict
+        CF-1.8 metadata attributes.
+    """
+    id_field = config.target_fabric.id_field
+    output_dir = config.output.path
+    var_dir = output_dir / category
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    var_data_vars: dict[str, tuple] = {}
+    for col in df.columns:
+        col_name = f"{var_name}_{col}" if col != "mean" else var_name
+        if hasattr(df.index, "name") and df.index.name == id_field:
+            values = df[col].reindex(feature_ids).values
+        else:
+            values = df[col].values
+        var_data_vars[col_name] = (id_field, values)
+
+    var_ds = xr.Dataset(
+        var_data_vars,
+        coords={id_field: feature_ids},
+        attrs=sir_attrs,
+    )
+
+    if config.output.format == "netcdf":
+        out_path = var_dir / f"{var_name}.nc"
+        var_ds.to_netcdf(out_path)
+    elif config.output.format == "parquet":
+        out_path = var_dir / f"{var_name}.parquet"
+        var_ds.to_dataframe().to_parquet(out_path)
+    logger.info("Wrote %s → %s", var_name, out_path)
+
+
+def _write_temporal_file(
+    ds_name: str,
+    ds: xr.Dataset,
+    category: str,
+    config: PipelineConfig,
+) -> None:
+    """Write a single temporal output file.
+
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name (used as filename stem).
+    ds : xr.Dataset
+        Temporal dataset with ``(time, features)`` dimensions.
+    category : str
+        Dataset category (used as subdirectory).
+    config : PipelineConfig
+        Pipeline configuration.
+    """
+    output_dir = config.output.path
+    var_dir = output_dir / category
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    if config.output.format == "netcdf":
+        temporal_path = var_dir / f"{ds_name}_temporal.nc"
+        ds.to_netcdf(temporal_path)
+    elif config.output.format == "parquet":
+        temporal_path = var_dir / f"{ds_name}_temporal.parquet"
+        ds.to_dataframe().to_parquet(temporal_path)
+    logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
+
+
+def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, object]:
+    """Build CF-1.8 metadata attributes for SIR output."""
+    return {
+        "title": f"Hydrologic parameters: {config.output.sir_name}",
+        "institution": "hydro-param",
+        "source": "hydro-param pipeline",
+        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
+        "Conventions": "CF-1.8",
+        "target_fabric": str(config.target_fabric.path),
+        "target_fabric_id_field": config.target_fabric.id_field,
+        "n_features": n_features,
+        "processing_engine": config.processing.engine,
+    }
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
@@ -464,6 +565,9 @@ def stage4_process(
     Temporal datasets skip batching and are processed full-fabric via
     ``WeightGen`` + ``AggGen``. Static datasets use the existing batch
     loop with ``ZonalGen``.
+
+    Per-variable and temporal output files are written incrementally
+    as each dataset completes, reducing peak memory usage.
 
     Parameters
     ----------
@@ -482,7 +586,14 @@ def stage4_process(
     batch_ids = sorted(fabric["batch_id"].unique())
     logger.info("Stage 4: Processing %d datasets across %d batches", len(resolved), len(batch_ids))
 
-    all_results: dict[str, list[pd.DataFrame]] = {}
+    id_field = config.target_fabric.id_field
+    feature_ids = fabric[id_field].values
+    sir_attrs = _build_sir_attrs(config, len(feature_ids))
+
+    # Ensure output directory exists for incremental writes
+    config.output.path.mkdir(parents=True, exist_ok=True)
+
+    all_results: dict[str, pd.DataFrame] = {}
     temporal_results: dict[str, xr.Dataset] = {}
     categories: dict[str, str] = {}
 
@@ -521,6 +632,8 @@ def stage4_process(
                     ds.sizes.get("time", 0),
                     time.perf_counter() - t_chunk,
                 )
+                # Write temporal file immediately after each year chunk
+                _write_temporal_file(result_key, ds, category, config)
 
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
             continue
@@ -544,6 +657,9 @@ def stage4_process(
             year_label,
         )
         t_ds = time.perf_counter()
+
+        # Collect batch results for this dataset only
+        ds_batch_results: dict[str, list[pd.DataFrame]] = {}
 
         for year in years:
             # Create single-year request for _process_batch
@@ -571,22 +687,24 @@ def stage4_process(
                 for var_name, df in batch_results.items():
                     # Year-suffix result keys when multiple years are specified
                     result_key = f"{var_name}_{year}" if year is not None else var_name
-                    all_results.setdefault(result_key, []).append(df)
+                    ds_batch_results.setdefault(result_key, []).append(df)
 
             # Track categories with year-suffixed keys
             for var_spec in var_specs:
                 result_key = f"{var_spec.name}_{year}" if year is not None else var_spec.name
                 categories[result_key] = category
 
+        # Merge and write per-variable files immediately after this dataset completes
+        for var_key, dfs in ds_batch_results.items():
+            merged_df = pd.concat(dfs)
+            all_results[var_key] = merged_df
+            category = categories.get(var_key, "uncategorized")
+            _write_variable_file(var_key, merged_df, category, config, feature_ids, sir_attrs)
+            logger.info("  Merged %s: %d total features", var_key, len(merged_df))
+
         logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
-    # Merge batch results per variable
-    merged: dict[str, pd.DataFrame] = {}
-    for var_name, dfs in all_results.items():
-        merged[var_name] = pd.concat(dfs)
-        logger.info("  Merged %s: %d total features", var_name, len(merged[var_name]))
-
-    return Stage4Results(static=merged, temporal=temporal_results, categories=categories)
+    return Stage4Results(static=all_results, temporal=temporal_results, categories=categories)
 
 
 def stage5_format_output(
@@ -594,7 +712,11 @@ def stage5_format_output(
     config: PipelineConfig,
     fabric: gpd.GeoDataFrame,
 ) -> xr.Dataset:
-    """Stage 5: Assemble results into SIR and write output.
+    """Stage 5: Assemble combined SIR and write it.
+
+    Per-variable and temporal files are written incrementally during
+    Stage 4. This function assembles the combined SIR xr.Dataset from
+    the merged static results and writes the single combined file.
 
     Parameters
     ----------
@@ -610,7 +732,6 @@ def stage5_format_output(
     -------
     xr.Dataset
         The Standardized Internal Representation (CF-1.8 compliant).
-        Temporal results are written as separate files.
     """
     logger.info("Stage 5: Assembling SIR output")
     id_field = config.target_fabric.id_field
@@ -619,24 +740,10 @@ def stage5_format_output(
     # Support both legacy dict and Stage4Results
     if isinstance(results, Stage4Results):
         static_results = results.static
-        temporal_results = results.temporal
-        categories = results.categories
     else:
         static_results = results
-        temporal_results = {}
-        categories = {}
 
-    sir_attrs = {
-        "title": f"Hydrologic parameters: {config.output.sir_name}",
-        "institution": "hydro-param",
-        "source": "hydro-param pipeline",
-        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
-        "Conventions": "CF-1.8",
-        "target_fabric": str(config.target_fabric.path),
-        "target_fabric_id_field": id_field,
-        "n_features": len(feature_ids),
-        "processing_engine": config.processing.engine,
-    }
+    sir_attrs = _build_sir_attrs(config, len(feature_ids))
 
     data_vars: dict[str, tuple] = {}
     for var_name, df in static_results.items():
@@ -655,11 +762,10 @@ def stage5_format_output(
         attrs=sir_attrs,
     )
 
-    # Write output
+    # Write combined SIR
     output_dir = config.output.path
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write combined SIR (used by pywatershed plugin and PipelineResult)
     if not data_vars:
         logger.warning("No static results to write; skipping static SIR file.")
     if data_vars:
@@ -671,50 +777,6 @@ def stage5_format_output(
             sir_path = output_dir / f"{config.output.sir_name}.parquet"
             sir.to_dataframe().to_parquet(sir_path)
             logger.info("Wrote SIR → %s", sir_path)
-
-    # Write per-variable files organized by category
-    for var_name, df in static_results.items():
-        category = categories.get(var_name, "uncategorized")
-        var_dir = output_dir / category
-        var_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build single-variable xr.Dataset
-        var_data_vars: dict[str, tuple] = {}
-        for col in df.columns:
-            col_name = f"{var_name}_{col}" if col != "mean" else var_name
-            if hasattr(df.index, "name") and df.index.name == id_field:
-                values = df[col].reindex(feature_ids).values
-            else:
-                values = df[col].values
-            var_data_vars[col_name] = (id_field, values)
-
-        var_ds = xr.Dataset(
-            var_data_vars,
-            coords={id_field: feature_ids},
-            attrs=sir_attrs,
-        )
-
-        if config.output.format == "netcdf":
-            out_path = var_dir / f"{var_name}.nc"
-            var_ds.to_netcdf(out_path)
-        elif config.output.format == "parquet":
-            out_path = var_dir / f"{var_name}.parquet"
-            var_ds.to_dataframe().to_parquet(out_path)
-        logger.info("Wrote %s → %s", var_name, out_path)
-
-    # Write temporal results as per-dataset files in category directories
-    for ds_name, ds in temporal_results.items():
-        category = categories.get(ds_name, "climate")
-        var_dir = output_dir / category
-        var_dir.mkdir(parents=True, exist_ok=True)
-
-        if config.output.format == "netcdf":
-            temporal_path = var_dir / f"{ds_name}_temporal.nc"
-            ds.to_netcdf(temporal_path)
-        elif config.output.format == "parquet":
-            temporal_path = var_dir / f"{ds_name}_temporal.parquet"
-            ds.to_dataframe().to_parquet(temporal_path)
-        logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
 
     return sir
 

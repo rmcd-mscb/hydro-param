@@ -796,7 +796,11 @@ def test_stage4_results_dataclass():
 
 
 def test_stage5_handles_stage4_results(config_yaml: Path, fabric_gpkg: Path):
-    """stage5 accepts Stage4Results and writes temporal files separately."""
+    """stage5 accepts Stage4Results and writes combined SIR only.
+
+    Per-variable and temporal files are written incrementally during
+    stage4, not during stage5.
+    """
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
 
@@ -822,18 +826,9 @@ def test_stage5_handles_stage4_results(config_yaml: Path, fabric_gpkg: Path):
     assert isinstance(sir, xr.Dataset)
     assert "elevation" in sir.data_vars
 
-    # Check temporal file was written in category directory
-    output_dir = config.output.path
-    temporal_path = output_dir / "climate" / "snodas_temporal.nc"
-    assert temporal_path.exists()
-
-    loaded = xr.open_dataset(temporal_path)
-    assert "SWE" in loaded.data_vars
-    loaded.close()
-
-    # Check per-variable static file was written in category directory
-    static_path = output_dir / "uncategorized" / "elevation.nc"
-    assert static_path.exists()
+    # Combined SIR file should exist
+    sir_path = config.output.path / f"{config.output.sir_name}.nc"
+    assert sir_path.exists()
 
 
 def test_stage5_backward_compat_dict(config_yaml: Path, fabric_gpkg: Path):
@@ -1292,17 +1287,7 @@ def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, cap
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
 
-    temporal = {
-        "snodas": xr.Dataset(
-            {"SWE": (["time", "hru_id"], [[1.0, 2.0, 3.0, 4.0]])},
-            coords={
-                "time": pd.date_range("2020-01-01", periods=1),
-                "hru_id": [1, 2, 3, 4],
-            },
-        ),
-    }
-
-    results = Stage4Results(static={}, temporal=temporal)
+    results = Stage4Results(static={}, temporal={})
 
     with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
         sir = stage5_format_output(results, config, fabric)
@@ -1313,7 +1298,3 @@ def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, cap
     # Static SIR file should NOT exist
     static_path = config.output.path / f"{config.output.sir_name}.nc"
     assert not static_path.exists()
-
-    # Temporal file SHOULD exist in category directory
-    temporal_path = config.output.path / "climate" / "snodas_temporal.nc"
-    assert temporal_path.exists()
