@@ -24,7 +24,7 @@ flowchart TB
 
     S3 --> LOOP
 
-    subgraph Stage4["Stage 4: Process Datasets"]
+    subgraph Stage4["Stage 4: Process Datasets + Incremental Writes"]
         LOOP{"For each dataset"}
 
         LOOP -->|temporal| T1["Split by calendar year"]
@@ -35,6 +35,7 @@ flowchart TB
         T2 -->|climr_cat| T4["WeightGen + AggGen"]
         T3 --> T5["xr.Dataset per year"]
         T4 --> T5
+        T5 --> TW["Write temporal file"]
 
         B0 --> B1{"For each year"}
         B1 --> B2{"For each batch"}
@@ -52,21 +53,17 @@ flowchart TB
         B10 --> B11
 
         B11 --> MERGE["Concat batches"]
-        T5 --> TMERGE["Collect temporal"]
+        MERGE --> VW["Write per-variable file"]
     end
 
-    MERGE --> S5A
-    TMERGE --> S5A
+    VW --> S5A
+    TW --> S5A
 
-    subgraph Stage5["Stage 5: Format Output - SIR"]
+    subgraph Stage5["Stage 5: Format Output - Combined SIR"]
         S5A["Assemble SIR xr.Dataset"] --> S5B["Write combined SIR .nc"]
-        S5A --> S5C["Write per-variable files"]
-        S5A --> S5D["Write temporal files"]
     end
 
     S5B --> RESULT(["PipelineResult"])
-    S5C --> RESULT
-    S5D --> RESULT
 ```
 
 ## Data Flow Summary
@@ -76,8 +73,8 @@ flowchart TB
 | 1 | GeoPackage path + bbox | GeoDataFrame with `batch_id` | `pipeline.py`, `batching.py` |
 | 2 | Dataset names from config | `(DatasetEntry, DatasetRequest, [VarSpec])` tuples | `dataset_registry.py` |
 | 3 | *(internal to gdptools)* | Spatial weights | gdptools |
-| 4 | Fabric + resolved datasets | `Stage4Results(static, temporal, categories)` | `processing.py`, `data_access.py` |
-| 5 | Stage4Results + config | `PipelineResult(sir, temporal, fabric)` | `pipeline.py`, `output.py` |
+| 4 | Fabric + resolved datasets | `Stage4Results` + per-variable/temporal files written to disk | `processing.py`, `data_access.py`, `pipeline.py` |
+| 5 | Stage4Results + config | Combined SIR `.nc` → `PipelineResult` | `pipeline.py` |
 
 ## Processing Strategy Matrix
 
