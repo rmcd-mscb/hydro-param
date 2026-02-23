@@ -743,11 +743,41 @@ def test_real_registry_nlcd_osn_entries():
         assert entry.strategy == "nhgf_stac"
         assert entry.collection == collection
         assert entry.temporal is False
+        assert entry.year_range == [1985, 2024]
         assert entry.crs == "EPSG:5070"
         assert entry.category == "land_cover"
         assert len(entry.variables) == 1
         assert entry.variables[0].name == var_name
         assert entry.variables[0].categorical is categorical
+
+
+# ---------------------------------------------------------------------------
+# year_range field tests
+# ---------------------------------------------------------------------------
+
+
+def test_dataset_entry_year_range_default_none():
+    """year_range defaults to None."""
+    entry = DatasetEntry(strategy="local_tiff")
+    assert entry.year_range is None
+
+
+def test_dataset_entry_year_range_valid():
+    """year_range accepts a valid 2-element list."""
+    entry = DatasetEntry(strategy="local_tiff", year_range=[1985, 2024])
+    assert entry.year_range == [1985, 2024]
+
+
+def test_dataset_entry_year_range_invalid_order():
+    """year_range rejects start > end."""
+    with pytest.raises(ValidationError, match="year_range start must be <= end"):
+        DatasetEntry(strategy="local_tiff", year_range=[2024, 1985])
+
+
+def test_dataset_entry_year_range_wrong_length():
+    """year_range rejects lists that are not exactly 2 elements."""
+    with pytest.raises(ValidationError, match="2-element list"):
+        DatasetEntry(strategy="local_tiff", year_range=[1985])
 
 
 def test_variable_spec_asset_key():

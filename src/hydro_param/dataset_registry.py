@@ -142,6 +142,7 @@ class DatasetEntry(BaseModel):
     derived_variables: list[DerivedVariableSpec] = []
     category: str = ""
     temporal: bool = False
+    year_range: list[int] | None = None
 
     @model_validator(mode="after")
     def _validate_strategy_fields(self) -> DatasetEntry:
@@ -158,6 +159,14 @@ class DatasetEntry(BaseModel):
                 raise ValueError("nhgf_stac strategy requires 'collection'")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
+        if self.year_range is not None:
+            if len(self.year_range) != 2:
+                raise ValueError("year_range must be a 2-element list [start, end]")
+            if self.year_range[0] > self.year_range[1]:
+                raise ValueError(
+                    "year_range start must be <= end: "
+                    f"got [{self.year_range[0]}, {self.year_range[1]}]"
+                )
         return self
 
 
