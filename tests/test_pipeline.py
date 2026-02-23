@@ -1151,6 +1151,49 @@ def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
     assert not any("LndCov_" in k for k in results.static_files)
 
 
+def test_stage4_duplicate_var_key_raises(tmp_path: Path):
+    """stage4_process raises ValueError when two datasets produce the same var_key."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req1 = DatasetRequest(name="dataset_a", variables=["LndCov"], statistics=["categorical"])
+    ds_req2 = DatasetRequest(name="dataset_b", variables=["LndCov"], statistics=["categorical"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with (
+        patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df),
+        pytest.raises(ValueError, match="Duplicate static result key 'LndCov'"),
+    ):
+        stage4_process(
+            fabric,
+            [(entry, ds_req1, [var_spec]), (entry, ds_req2, [var_spec])],
+            config,
+        )
+
+
 def test_process_temporal_empty_statistics_raises():
     """_process_temporal raises if statistics list is empty."""
     from hydro_param.config import DatasetRequest

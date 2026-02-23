@@ -718,6 +718,12 @@ def stage4_process(
 
         # Merge and write per-variable files immediately after this dataset completes
         for var_key, dfs in ds_batch_results.items():
+            if var_key in static_files:
+                raise ValueError(
+                    f"Duplicate static result key '{var_key}' from dataset "
+                    f"'{ds_req.name}'. Overlapping variable names across "
+                    f"datasets or years; adjust your configuration to avoid collisions."
+                )
             merged_df = pd.concat(dfs)
             category = categories.get(var_key, "uncategorized")
             static_files[var_key] = _write_variable_file(
