@@ -18,11 +18,21 @@ datasets:
     variables: [elevation, slope, aspect]
     statistics: [mean]
 
+  # gNATSGO pre-summarized soil properties (Planetary Computer)
+  - name: gnatsgo_rasters
+    variables: [aws0_100, rootznemc, rootznaws]
+    statistics: [mean]
+
   # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
   - name: nlcd_osn_lndcov
     variables: [LndCov]
     statistics: [categorical]
     year: [2020, 2021]
+
+  # POLARIS soil texture properties, 30m (remote VRT, no download needed)
+  - name: polaris_30m
+    variables: [sand, silt, clay, theta_s, ksat]
+    statistics: [mean]
 
   # gridMET daily climate (OPeNDAP via ClimateR catalog)
   - name: gridmet

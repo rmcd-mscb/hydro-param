@@ -21,9 +21,9 @@ from pathlib import Path
 
 from cyclopts import App
 
-from hydro_param.config import PipelineConfig
+from hydro_param.config import PipelineConfig, load_config
 from hydro_param.dataset_registry import DatasetEntry, DatasetRegistry, load_registry
-from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline, run_pipeline_from_config
+from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline_from_config
 from hydro_param.project import find_project_root, init_project
 
 logger = logging.getLogger(__name__)
@@ -332,7 +332,7 @@ def _download_multi_file(
 
 
 @app.command(name="run")
-def run_cmd(config: Path, *, registry: Path | None = None) -> None:
+def run_cmd(config: Path, *, registry: Path | None = None, resume: bool = False) -> None:
     """Execute the parameterization pipeline.
 
     Parameters
@@ -341,6 +341,9 @@ def run_cmd(config: Path, *, registry: Path | None = None) -> None:
         Path to the pipeline YAML config.
     registry
         Path to a custom dataset registry YAML file or directory.
+    resume
+        Skip datasets whose outputs are already complete and inputs
+        haven't changed (manifest-based).
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -348,9 +351,14 @@ def run_cmd(config: Path, *, registry: Path | None = None) -> None:
         datefmt="%H:%M:%S",
     )
 
-    registry_path = str(registry) if registry is not None else None
     try:
-        run_pipeline(str(config), registry_path)
+        cfg = load_config(config)
+        if resume:
+            cfg = cfg.model_copy(
+                update={"processing": cfg.processing.model_copy(update={"resume": True})}
+            )
+        reg = _load_registry(registry)
+        run_pipeline_from_config(cfg, reg)
     except Exception as exc:
         logger.exception("Pipeline failed.")
         raise SystemExit(1) from exc

@@ -10,6 +10,7 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [2001, 2021]
     download:
       format: "COG"
       requester_pays: true
@@ -91,10 +92,12 @@ datasets:
         categorical: true
       - name: impervious
         band: 1
+        units: "%"
         long_name: "Percent developed imperviousness"
         categorical: false
       - name: tree_canopy
         band: 1
+        units: "%"
         long_name: "Percent tree canopy cover"
         categorical: false
 
@@ -106,6 +109,7 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     download:
       url_template: "s3://usgs-landcover/annual-nlcd/c1/v0/cu/mosaic/Annual_NLCD_{variable}_{year}_CU_C1V0.tif"
       year_range: [1985, 2024]
@@ -124,10 +128,12 @@ datasets:
         categorical: true
       - name: LndCnf
         band: 1
+        units: "%"
         long_name: "Land cover confidence"
         categorical: false
       - name: FctImp
         band: 1
+        units: "%"
         long_name: "Fractional impervious surface"
         categorical: false
       - name: ImpDsc
@@ -136,6 +142,7 @@ datasets:
         categorical: true
       - name: SpcChg
         band: 1
+        units: "day_of_year"
         long_name: "Spectral change day of year"
         categorical: false
 
@@ -151,6 +158,7 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: LndCov
         band: 1
@@ -166,9 +174,11 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: FctImp
         band: 1
+        units: "%"
         long_name: "Fractional impervious surface"
         categorical: false
 
@@ -181,6 +191,7 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: ImpDsc
         band: 1
@@ -196,6 +207,7 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: LndChg
         band: 1
@@ -211,9 +223,11 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: LndCnf
         band: 1
+        units: "%"
         long_name: "Land cover confidence"
         categorical: false
 
@@ -226,8 +240,10 @@ datasets:
     y_coord: "y"
     category: land_cover
     temporal: false
+    year_range: [1985, 2024]
     variables:
       - name: SpcChg
         band: 1
+        units: "day_of_year"
         long_name: "Spectral change day of year"
         categorical: false

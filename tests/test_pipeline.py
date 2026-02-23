@@ -1397,3 +1397,398 @@ def test_stage4_results_empty_has_no_files():
     assert len(results.static_files) == 0
     assert len(results.temporal_files) == 0
     assert len(results.categories) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-variable source_override tests
+# ---------------------------------------------------------------------------
+
+
+def test_stage2_allows_local_tiff_with_per_variable_sources(tmp_path: Path):
+    """local_tiff with no dataset source but all vars having source_override passes stage2."""
+    reg_raw = {
+        "datasets": {
+            "polaris_30m": {
+                "strategy": "local_tiff",
+                "category": "soils",
+                "variables": [
+                    {
+                        "name": "sand",
+                        "band": 1,
+                        "source_override": "http://example.com/sand.vrt",
+                    },
+                    {
+                        "name": "clay",
+                        "band": 1,
+                        "source_override": "http://example.com/clay.vrt",
+                    },
+                ],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "polaris_30m", "variables": ["sand", "clay"], "statistics": ["mean"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    # Should not raise — all requested vars have source_override
+    resolved = stage2_resolve_datasets(config, registry)
+    assert len(resolved) == 1
+
+
+def test_stage2_rejects_local_tiff_mixed_sources(tmp_path: Path):
+    """local_tiff raises when some requested vars lack source_override and no dataset source."""
+    reg_raw = {
+        "datasets": {
+            "polaris_30m": {
+                "strategy": "local_tiff",
+                "category": "soils",
+                "variables": [
+                    {
+                        "name": "sand",
+                        "band": 1,
+                        "source_override": "http://example.com/sand.vrt",
+                    },
+                    {"name": "theta_r", "band": 1},  # no source_override
+                ],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
+        "datasets": [
+            {"name": "polaris_30m", "variables": ["sand", "theta_r"]},
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="polaris_30m"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
+    """_process_batch passes var_spec.source_override as variable_source to fetch_local_tiff."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    vrt_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+    entry = DatasetEntry(strategy="local_tiff", crs="EPSG:4326")
+    var_spec = VariableSpec(name="sand", band=1, source_override=vrt_url)
+    ds_req = DatasetRequest(name="polaris_30m", variables=["sand"], statistics=["mean"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"mean": [50.0, 60.0]}, index=["a", "b"])
+
+    with (
+        patch("hydro_param.pipeline.fetch_local_tiff") as mock_fetch,
+        patch("hydro_param.pipeline.save_to_geotiff"),
+        patch.object(ZonalProcessor, "process", return_value=mock_df),
+    ):
+        # Make fetch return a minimal DataArray
+        import numpy as np
+
+        mock_fetch.return_value = xr.DataArray(
+            np.ones((4, 4)),
+            dims=["y", "x"],
+            coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        )
+
+        results = _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+
+        # Verify variable_source was passed through
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs.kwargs["variable_source"] == vrt_url
+
+    assert "sand" in results
+
+
+# ---------------------------------------------------------------------------
+# Resume (manifest-based skip)
+# ---------------------------------------------------------------------------
+
+
+def test_stage4_resume_skips_completed_dataset(tmp_path: Path):
+    """With resume=True and valid manifest, stage4 skips completed datasets."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import (
+        ManifestEntry,
+        PipelineManifest,
+        dataset_fingerprint,
+        fabric_fingerprint,
+    )
+    from hydro_param.pipeline import stage4_process
+
+    # Create fabric with batch_id
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"], "batch_id": [0, 0]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    # Create output dir with existing file
+    output_dir = tmp_path / "output"
+    lc_dir = output_dir / "land_cover"
+    lc_dir.mkdir(parents=True)
+    csv_file = lc_dir / "LndCov.csv"
+    csv_file.write_text("hru_id,LndCov\na,11\nb,21\n")
+
+    # Create a fabric file so fingerprint works
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": True},
+    )
+
+    # Compute the expected fingerprint
+    ds_fp = dataset_fingerprint(ds_req, entry, [var_spec], config.processing)
+    fab_fp = fabric_fingerprint(config)
+
+    # Write a manifest
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint=ds_fp,
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    # process_nhgf_stac should NOT be called — dataset is skipped
+    with patch.object(ZonalProcessor, "process_nhgf_stac") as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_not_called()
+
+    assert "LndCov" in results.static_files
+    assert results.static_files["LndCov"] == csv_file
+
+
+def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path):
+    """With resume=True but changed fingerprint, stage4 reprocesses."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import ManifestEntry, PipelineManifest, fabric_fingerprint
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    output_dir = tmp_path / "output"
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": True},
+    )
+
+    fab_fp = fabric_fingerprint(config)
+
+    # Write manifest with STALE fingerprint
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint="sha256:stale_fingerprint",
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    # process_nhgf_stac SHOULD be called — fingerprint doesn't match
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
+    assert "LndCov" in results.static_files
+
+
+def test_stage4_resume_disabled_by_default(tmp_path: Path):
+    """With resume=False (default), stage4 processes everything."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+    )
+
+    # Default resume=False
+    assert config.processing.resume is False
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
+    assert "LndCov" in results.static_files  # noqa: E501
+
+
+def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
+    """With resume=True but changed fabric, stage4 reprocesses all datasets."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import ManifestEntry, PipelineManifest
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    output_dir = tmp_path / "output"
+    lc_dir = output_dir / "land_cover"
+    lc_dir.mkdir(parents=True)
+    (lc_dir / "LndCov.csv").write_text("data")
+
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": True},
+    )
+
+    # Write manifest with STALE fabric fingerprint
+    manifest = PipelineManifest(
+        fabric_fingerprint="old_fabric.gpkg|0.0|0",
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint="sha256:doesnt_matter",
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    # Should reprocess because fabric fingerprint changed
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
+    assert "LndCov" in results.static_files  # noqa: E501

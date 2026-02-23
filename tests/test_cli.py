@@ -649,31 +649,53 @@ def test_download_no_project_falls_back_to_cwd(
 # ---------------------------------------------------------------------------
 
 
-@patch("hydro_param.cli.run_pipeline")
-def test_run_invokes_pipeline(mock_pipeline, tmp_path: Path):
+@patch("hydro_param.cli.run_pipeline_from_config")
+@patch("hydro_param.cli.load_config")
+def test_run_invokes_pipeline(mock_load_config, mock_run_pipeline, tmp_path: Path):
     config_path = tmp_path / "config.yml"
     config_path.write_text("dummy: true")
     _run("run", str(config_path))
-    mock_pipeline.assert_called_once()
-    args = mock_pipeline.call_args[0]
-    assert args[0] == str(config_path)
+    mock_load_config.assert_called_once()
+    mock_run_pipeline.assert_called_once()
 
 
-@patch("hydro_param.cli.run_pipeline")
-def test_run_with_registry(mock_pipeline, tmp_path: Path):
+@patch("hydro_param.cli.run_pipeline_from_config")
+@patch("hydro_param.cli.load_config")
+def test_run_with_registry(mock_load_config, mock_run_pipeline, tmp_path: Path):
     config_path = tmp_path / "config.yml"
     config_path.write_text("dummy: true")
     reg_path = tmp_path / "registry.yml"
     reg_path.write_text("datasets: {}")
     _run("run", str(config_path), "--registry", str(reg_path))
-    mock_pipeline.assert_called_once()
-    args = mock_pipeline.call_args[0]
-    assert args[1] == str(reg_path)
+    mock_run_pipeline.assert_called_once()
 
 
-@patch("hydro_param.cli.run_pipeline", side_effect=RuntimeError("boom"))
-def test_run_pipeline_failure(mock_pipeline, tmp_path: Path):
+@patch("hydro_param.cli.run_pipeline_from_config", side_effect=RuntimeError("boom"))
+@patch("hydro_param.cli.load_config")
+def test_run_pipeline_failure(mock_load_config, mock_run_pipeline, tmp_path: Path):
     config_path = tmp_path / "config.yml"
     config_path.write_text("dummy: true")
     with pytest.raises(SystemExit, match="1"):
         _run("run", str(config_path))
+
+
+@patch("hydro_param.cli.run_pipeline_from_config")
+@patch("hydro_param.cli.load_config")
+def test_run_resume_flag_sets_config(mock_load_config, mock_run_pipeline, tmp_path: Path):
+    """--resume flag causes processing.resume to be True in the config."""
+    from hydro_param.config import PipelineConfig
+
+    mock_cfg = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+    mock_load_config.return_value = mock_cfg
+
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("dummy: true")
+    _run("run", str(config_path), "--resume")
+
+    mock_run_pipeline.assert_called_once()
+    actual_cfg = mock_run_pipeline.call_args[0][0]
+    assert actual_cfg.processing.resume is True

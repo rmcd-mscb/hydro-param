@@ -743,11 +743,41 @@ def test_real_registry_nlcd_osn_entries():
         assert entry.strategy == "nhgf_stac"
         assert entry.collection == collection
         assert entry.temporal is False
+        assert entry.year_range == [1985, 2024]
         assert entry.crs == "EPSG:5070"
         assert entry.category == "land_cover"
         assert len(entry.variables) == 1
         assert entry.variables[0].name == var_name
         assert entry.variables[0].categorical is categorical
+
+
+# ---------------------------------------------------------------------------
+# year_range field tests
+# ---------------------------------------------------------------------------
+
+
+def test_dataset_entry_year_range_default_none():
+    """year_range defaults to None."""
+    entry = DatasetEntry(strategy="local_tiff")
+    assert entry.year_range is None
+
+
+def test_dataset_entry_year_range_valid():
+    """year_range accepts a valid 2-element list."""
+    entry = DatasetEntry(strategy="local_tiff", year_range=[1985, 2024])
+    assert entry.year_range == [1985, 2024]
+
+
+def test_dataset_entry_year_range_invalid_order():
+    """year_range rejects start > end."""
+    with pytest.raises(ValidationError, match="year_range start must be <= end"):
+        DatasetEntry(strategy="local_tiff", year_range=[2024, 1985])
+
+
+def test_dataset_entry_year_range_wrong_length():
+    """year_range rejects lists that are not exactly 2 elements."""
+    with pytest.raises(ValidationError, match="2-element list"):
+        DatasetEntry(strategy="local_tiff", year_range=[1985])
 
 
 def test_variable_spec_asset_key():
@@ -757,3 +787,36 @@ def test_variable_spec_asset_key():
 
     var_default = VariableSpec(name="elevation", band=1)
     assert var_default.asset_key is None
+
+
+def test_variable_spec_source_override_field():
+    """VariableSpec accepts optional source_override URL."""
+    url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+    var = VariableSpec(name="sand", band=1, source_override=url)
+    assert var.source_override == url
+
+
+def test_variable_spec_source_override_default_none():
+    """VariableSpec.source_override defaults to None."""
+    var = VariableSpec(name="elevation", band=1)
+    assert var.source_override is None
+
+
+def test_real_registry_polaris_has_variable_sources():
+    """Verify key POLARIS variables have per-variable source_override URLs."""
+    registry_path = Path("configs/datasets")
+    if not registry_path.exists():
+        pytest.skip("configs/datasets/ not found")
+    registry = load_registry(registry_path)
+    polaris = registry.get("polaris_30m")
+
+    # These variables should have source_override URLs for remote VRT access
+    expected_with_source = {"sand", "silt", "clay", "theta_s", "ksat", "bd"}
+    for var in polaris.variables:
+        if var.name in expected_with_source:
+            assert var.source_override is not None, f"{var.name} should have a source URL"
+            assert var.source_override.startswith("http://"), (
+                f"{var.name} source should be HTTP URL"
+            )
+        elif var.name in {"theta_r", "ph", "om", "lambda", "hb", "n", "alpha"}:
+            assert var.source_override is None, f"{var.name} should not have a source URL"

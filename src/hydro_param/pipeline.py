@@ -28,6 +28,7 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 
+from hydro_param import manifest as _manifest_mod
 from hydro_param.batching import spatial_batch
 from hydro_param.config import DatasetRequest, PipelineConfig, load_config
 from hydro_param.data_access import (
@@ -162,42 +163,51 @@ def stage2_resolve_datasets(
         if ds_req.source is not None:
             entry = entry.model_copy(update={"source": str(ds_req.source)})
 
-        # Validate: local_tiff datasets must have a source
+        # Validate: local_tiff datasets must have a source (dataset-level or per-variable)
         if entry.strategy == "local_tiff" and entry.source is None:
-            msg = (
-                f"Dataset '{ds_req.name}' requires a local file "
-                f"(strategy: local_tiff) but no 'source' path is set."
+            # Check if all requested variables have per-variable source overrides
+            requested_var_specs = [
+                registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
+            ]
+            all_vars_have_source = all(
+                isinstance(vs, VariableSpec) and vs.source_override is not None
+                for vs in requested_var_specs
             )
-            if entry.download:
-                if entry.download.files:
-                    msg += (
-                        f"\n\nThis dataset has {len(entry.download.files)} "
-                        f"downloadable files. Run:\n"
-                        f"  hydro-param datasets info {ds_req.name}"
-                    )
-                elif entry.download.url_template:
-                    start, end = entry.download.year_range
-                    n_vars = len(entry.download.variables_available)
-                    msg += (
-                        f"\n\nThis dataset has templated downloads "
-                        f"({end - start + 1} years x {n_vars} variables). Run:\n"
-                        f"  hydro-param datasets info {ds_req.name}"
-                    )
-                elif entry.download.url:
-                    msg += f"\n\nDownload from: {entry.download.url}"
-                    if entry.download.size_gb:
-                        msg += f"\nExpected size: ~{entry.download.size_gb} GB"
-                    if entry.download.format:
-                        msg += f"\nFormat: {entry.download.format}"
-                    if entry.download.notes:
-                        msg += f"\n{entry.download.notes.strip()}"
-            msg += (
-                f"\n\nThen set 'source' in your pipeline config:\n"
-                f"  datasets:\n"
-                f"    - name: {ds_req.name}\n"
-                f"      source: /path/to/downloaded/file.tif"
-            )
-            raise ValueError(msg)
+            if not all_vars_have_source:
+                msg = (
+                    f"Dataset '{ds_req.name}' requires a local file "
+                    f"(strategy: local_tiff) but no 'source' path is set."
+                )
+                if entry.download:
+                    if entry.download.files:
+                        msg += (
+                            f"\n\nThis dataset has {len(entry.download.files)} "
+                            f"downloadable files. Run:\n"
+                            f"  hydro-param datasets info {ds_req.name}"
+                        )
+                    elif entry.download.url_template:
+                        start, end = entry.download.year_range
+                        n_vars = len(entry.download.variables_available)
+                        msg += (
+                            f"\n\nThis dataset has templated downloads "
+                            f"({end - start + 1} years x {n_vars} variables). Run:\n"
+                            f"  hydro-param datasets info {ds_req.name}"
+                        )
+                    elif entry.download.url:
+                        msg += f"\n\nDownload from: {entry.download.url}"
+                        if entry.download.size_gb:
+                            msg += f"\nExpected size: ~{entry.download.size_gb} GB"
+                        if entry.download.format:
+                            msg += f"\nFormat: {entry.download.format}"
+                        if entry.download.notes:
+                            msg += f"\n{entry.download.notes.strip()}"
+                msg += (
+                    f"\n\nThen set 'source' in your pipeline config:\n"
+                    f"  datasets:\n"
+                    f"    - name: {ds_req.name}\n"
+                    f"      source: /path/to/downloaded/file.tif"
+                )
+                raise ValueError(msg)
 
         # Validate: temporal datasets require time_period
         if entry.temporal and ds_req.time_period is None:
@@ -289,12 +299,22 @@ def _process_batch(
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
 
-    def _fetch(dataset_entry: DatasetEntry, fetch_bbox: list[float]) -> xr.DataArray:
+    def _fetch(
+        dataset_entry: DatasetEntry,
+        fetch_bbox: list[float],
+        *,
+        variable_source: str | None = None,
+    ) -> xr.DataArray:
         """Dispatch to the correct fetch function based on strategy."""
         if dataset_entry.strategy == "stac_cog":
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
-            return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
+            return fetch_local_tiff(
+                dataset_entry,
+                fetch_bbox,
+                dataset_name=ds_req.name,
+                variable_source=variable_source,
+            )
         if dataset_entry.strategy == "nhgf_stac":
             raise NotImplementedError(
                 "Temporal nhgf_stac datasets are not yet supported in the pipeline. "
@@ -320,8 +340,8 @@ def _process_batch(
             )
         else:
             # Raw variable: fetch directly
-            # TODO: Pass var_spec.band to fetch routine for multi-band datasets
-            da = _fetch(entry, bbox)
+            # Per-variable source (e.g. POLARIS VRTs) overrides dataset-level source
+            da = _fetch(entry, bbox, variable_source=var_spec.source_override)
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
 
@@ -591,6 +611,37 @@ def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, objec
     }
 
 
+def _save_manifest_to_disk(
+    manifest: _manifest_mod.PipelineManifest,
+    output_dir: Path,
+) -> None:
+    """Save manifest to disk, logging errors instead of crashing the pipeline."""
+    try:
+        manifest.save(output_dir)
+    except OSError as exc:
+        logger.error(
+            "Failed to save manifest to %s: %s. "
+            "Resume support may not work on next run, but outputs are intact.",
+            output_dir,
+            exc,
+        )
+
+
+def _save_manifest(
+    manifest: _manifest_mod.PipelineManifest,
+    ds_name: str,
+    ds_fp: str,
+    static_files: dict[str, Path],
+    temporal_files: dict[str, Path],
+    output_dir: Path,
+) -> None:
+    """Update a manifest entry and save to disk."""
+    manifest.entries[ds_name] = _manifest_mod.make_manifest_entry(
+        ds_fp, static_files, temporal_files, output_dir
+    )
+    _save_manifest_to_disk(manifest, output_dir)
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
@@ -628,6 +679,23 @@ def stage4_process(
     # Ensure output directory exists for incremental writes
     config.output.path.mkdir(parents=True, exist_ok=True)
 
+    # Resume support: load manifest if resume is enabled
+    manifest: _manifest_mod.PipelineManifest | None = None
+    fab_fp: str = ""
+    if config.processing.resume:
+        manifest = _manifest_mod.load_manifest(config.output.path)
+        fab_fp = _manifest_mod.fabric_fingerprint(config)
+        if manifest is not None and not manifest.is_fabric_current(fab_fp):
+            # Fabric changed: discard stale manifest and start fresh
+            logger.warning(
+                "Fabric fingerprint changed — reprocessing all datasets (old=%s, new=%s)",
+                manifest.fabric_fingerprint,
+                fab_fp,
+            )
+            manifest = None
+        if manifest is None:
+            manifest = _manifest_mod.PipelineManifest(fabric_fingerprint=fab_fp)
+
     static_files: dict[str, Path] = {}
     temporal_files: dict[str, Path] = {}
     categories: dict[str, str] = {}
@@ -635,6 +703,27 @@ def stage4_process(
     for ds_idx, (entry, ds_req, var_specs) in enumerate(resolved, 1):
         category = entry.category or "uncategorized"
         var_names = [v.name for v in var_specs]
+
+        # Compute dataset fingerprint unconditionally (cheap hash)
+        ds_fp = _manifest_mod.dataset_fingerprint(ds_req, entry, var_specs, config.processing)
+
+        # Resume: check if this dataset can be skipped
+        if manifest is not None:
+            if manifest.is_dataset_current(ds_req.name, ds_fp, config.output.path):
+                cached = manifest.entries[ds_req.name]
+                for k, rel in cached.static_files.items():
+                    static_files[k] = config.output.path / rel
+                    categories[k] = category
+                for k, rel in cached.temporal_files.items():
+                    temporal_files[k] = config.output.path / rel
+                    categories[k] = category
+                logger.info(
+                    "Dataset %d/%d: %s — skipped (outputs current)",
+                    ds_idx,
+                    len(resolved),
+                    ds_req.name,
+                )
+                continue
 
         if entry.temporal:
             # Split temporal processing by year to keep files manageable
@@ -650,6 +739,9 @@ def stage4_process(
                 len(year_chunks),
             )
             t_ds = time.perf_counter()
+
+            # Track this dataset's temporal files explicitly
+            ds_temporal_files: dict[str, Path] = {}
 
             for chunk_period in year_chunks:
                 chunk_year = chunk_period[0][:4]
@@ -668,8 +760,16 @@ def stage4_process(
                 )
                 # Write temporal file immediately after each year chunk
                 temporal_files[result_key] = _write_temporal_file(result_key, ds, category, config)
+                ds_temporal_files[result_key] = temporal_files[result_key]
 
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
+
+            # Update manifest after temporal dataset completes
+            if manifest is not None:
+                _save_manifest(
+                    manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path
+                )
+
             continue
 
         # Expand years: list → iterate, bare int → [int], None → [None]
@@ -744,6 +844,15 @@ def stage4_process(
             logger.info("  Merged %s: %d total features", var_key, len(merged_df))
 
         logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
+
+        # Update manifest after static dataset completes
+        if manifest is not None:
+            ds_static: dict[str, Path] = {k: static_files[k] for k in ds_batch_results}
+            _save_manifest(manifest, ds_req.name, ds_fp, ds_static, {}, config.output.path)
+
+    # Final save: persists any entries added during the last dataset iteration
+    if manifest is not None:
+        _save_manifest_to_disk(manifest, config.output.path)
 
     return Stage4Results(
         static_files=static_files, temporal_files=temporal_files, categories=categories

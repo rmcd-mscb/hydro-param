@@ -1,9 +1,14 @@
 """Tests for data_access module helpers."""
 
+from unittest.mock import MagicMock, patch
+
+import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
-from hydro_param.data_access import build_climr_cat_dict
+from hydro_param.data_access import _is_remote_url, build_climr_cat_dict, fetch_local_tiff
+from hydro_param.dataset_registry import DatasetEntry
 
 
 @pytest.fixture()
@@ -46,3 +51,114 @@ def test_build_climr_cat_dict_missing_var(mock_catalog: pd.DataFrame):
 def test_build_climr_cat_dict_missing_catalog_id(mock_catalog: pd.DataFrame):
     with pytest.raises(ValueError, match="not found in ClimateR catalog"):
         build_climr_cat_dict(mock_catalog, "unknown_dataset", ["pr"])
+
+
+# ---------------------------------------------------------------------------
+# _is_remote_url tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("http://example.com/data.vrt", True),
+        ("https://example.com/data.tif", True),
+        ("/data/local/file.tif", False),
+        ("data/file.tif", False),
+        ("s3://bucket/key.tif", False),
+    ],
+)
+def test_is_remote_url(source: str, expected: bool):
+    assert _is_remote_url(source) is expected
+
+
+# ---------------------------------------------------------------------------
+# fetch_local_tiff remote URL + variable_source tests
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_da() -> MagicMock:
+    """Create a mock object that behaves like rioxarray.open_rasterio output."""
+    squeezed = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+    )
+    # Build mock chain: open_rasterio() -> .squeeze() -> .rio.clip_box()
+    mock_da = MagicMock()
+    mock_squeezed = MagicMock()
+    mock_da.squeeze.return_value = mock_squeezed
+    mock_squeezed.rio.crs = "EPSG:4326"
+    mock_squeezed.rio.clip_box.return_value = squeezed
+    mock_squeezed.size = 16
+    return mock_da
+
+
+def test_fetch_local_tiff_remote_url():
+    """HTTP URLs skip Path.exists() check and open correctly."""
+    rioxarray = pytest.importorskip("rioxarray")
+
+    mock_da = _make_mock_da()
+    vrt_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
+
+    entry = DatasetEntry(strategy="local_tiff", source=vrt_url)
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with patch.object(rioxarray, "open_rasterio", return_value=mock_da) as mock_open:
+        result = fetch_local_tiff(entry, bbox, dataset_name="polaris_30m")
+
+    mock_open.assert_called_once_with(vrt_url, masked=True)
+    assert result is not None
+
+
+def test_fetch_local_tiff_variable_source_override():
+    """variable_source takes precedence over entry.source."""
+    rioxarray = pytest.importorskip("rioxarray")
+
+    mock_da = _make_mock_da()
+    var_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/clay_mean_0_5.vrt"
+
+    entry = DatasetEntry(strategy="local_tiff", source="/some/default/path.tif")
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with patch.object(rioxarray, "open_rasterio", return_value=mock_da) as mock_open:
+        result = fetch_local_tiff(entry, bbox, dataset_name="polaris_30m", variable_source=var_url)
+
+    # Should use the variable_source URL, not the entry.source path
+    mock_open.assert_called_once_with(var_url, masked=True)
+    assert result is not None
+
+
+def test_fetch_local_tiff_no_source_raises():
+    """Raises ValueError when neither variable_source nor entry.source is set."""
+    pytest.importorskip("rioxarray")
+
+    entry = DatasetEntry(strategy="local_tiff")
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with pytest.raises(ValueError, match="requires a source path or URL"):
+        fetch_local_tiff(entry, bbox, dataset_name="test_dataset")
+
+
+def test_fetch_local_tiff_variable_source_local_path_not_found():
+    """variable_source with a non-existent local path raises FileNotFoundError."""
+    pytest.importorskip("rioxarray")
+
+    entry = DatasetEntry(strategy="local_tiff", source="/valid/default.tif")
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with pytest.raises(FileNotFoundError, match="/nonexistent/override.tif"):
+        fetch_local_tiff(entry, bbox, variable_source="/nonexistent/override.tif")
+
+
+def test_fetch_local_tiff_remote_open_failure():
+    """Remote open failure wraps error with dataset context."""
+    rioxarray = pytest.importorskip("rioxarray")
+
+    vrt_url = "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bad.vrt"
+    entry = DatasetEntry(strategy="local_tiff", source=vrt_url)
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with patch.object(rioxarray, "open_rasterio", side_effect=Exception("GDAL error")):
+        with pytest.raises(RuntimeError, match="Failed to open remote raster.*polaris"):
+            fetch_local_tiff(entry, bbox, dataset_name="polaris_30m")
