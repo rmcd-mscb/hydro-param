@@ -513,8 +513,15 @@ def _write_variable_file(
     rename_map = {col: (var_name if col == "mean" else f"{var_name}_{col}") for col in df.columns}
     out_df = df.rename(columns=rename_map)
 
-    # Ensure index is id_field
+    # Warn if index name doesn't match id_field (may indicate upstream bug)
     if not (hasattr(out_df.index, "name") and out_df.index.name == id_field):
+        logger.warning(
+            "Index name mismatch for variable '%s': expected '%s', got '%s'. "
+            "Renaming index — this may indicate a bug in zonal statistics output.",
+            var_name,
+            id_field,
+            getattr(out_df.index, "name", None),
+        )
         out_df.index.name = id_field
 
     # Reindex to full feature set (NaN for missing) and sort
@@ -560,6 +567,11 @@ def _write_temporal_file(
     elif config.output.format == "parquet":
         temporal_path = var_dir / f"{ds_name}_temporal.parquet"
         ds.to_dataframe().to_parquet(temporal_path)
+    else:
+        raise ValueError(
+            f"Unsupported output format '{config.output.format}' for temporal "
+            f"dataset '{ds_name}'. Supported formats: 'netcdf', 'parquet'."
+        )
     logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
     return temporal_path
 

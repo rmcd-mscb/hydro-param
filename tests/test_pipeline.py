@@ -23,6 +23,7 @@ from hydro_param.pipeline import (
     _buffered_bbox,
     _process_temporal,
     _split_time_period_by_year,
+    _write_temporal_file,
     _write_variable_file,
     resolve_bbox,
     stage1_resolve_fabric,
@@ -375,12 +376,129 @@ def test_load_sir_merges_variable_files(config_yaml: Path, fabric_gpkg: Path):
     assert sir.sizes[id_field] == 4
 
 
+def test_load_sir_multi_statistic_round_trip(config_yaml: Path, fabric_gpkg: Path):
+    """Multi-statistic columns survive the write→load_sir() round trip."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
+
+    df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0], "min": [90.0, 180.0, 270.0, 360.0]},
+        index=pd.Index([1, 2, 3, 4], name="featureid"),
+    )
+
+    path = _write_variable_file("elevation", df, "topo", config, feature_ids)
+    result = PipelineResult(
+        output_dir=config.output.path,
+        static_files={"elevation": path},
+    )
+    sir = result.load_sir()
+
+    assert "elevation" in sir.data_vars  # "mean" renamed to var_name
+    assert "elevation_min" in sir.data_vars  # "min" renamed to var_name_min
+    assert sir["elevation"].values.tolist() == [100.0, 200.0, 300.0, 400.0]
+    assert sir["elevation_min"].values.tolist() == [90.0, 180.0, 270.0, 360.0]
+
+
+def test_write_variable_file_warns_on_index_mismatch(
+    config_yaml: Path, fabric_gpkg: Path, caplog: pytest.LogCaptureFixture
+):
+    """_write_variable_file warns when index name doesn't match id_field."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
+
+    # DataFrame with unnamed index (not "featureid")
+    df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0]},
+        index=pd.Index([1, 2, 3, 4]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
+        _write_variable_file("elevation", df, "topo", config, feature_ids)
+
+    assert "Index name mismatch" in caplog.text
+    assert "featureid" in caplog.text
+
+
 def test_load_sir_empty_returns_empty_dataset():
     """load_sir() returns empty Dataset when no files exist."""
     result = PipelineResult(output_dir=Path("/tmp"), static_files={})
     sir = result.load_sir()
     assert isinstance(sir, xr.Dataset)
     assert len(sir.data_vars) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-variable file: reindex with partial features
+# ---------------------------------------------------------------------------
+
+
+def test_write_variable_file_reindexes_partial_features(config_yaml: Path, fabric_gpkg: Path):
+    """Missing features are filled with NaN and output is sorted."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values  # [1, 2, 3, 4]
+
+    # Only features 1 and 3 present (simulates a single batch)
+    df = pd.DataFrame(
+        {"mean": [100.0, 300.0]},
+        index=pd.Index([1, 3], name="featureid"),
+    )
+
+    path = _write_variable_file("elevation", df, "topo", config, feature_ids)
+    result = pd.read_csv(path, index_col=0)
+
+    assert len(result) == 4
+    assert result.loc[1, "elevation"] == 100.0
+    assert result.loc[3, "elevation"] == 300.0
+    assert pd.isna(result.loc[2, "elevation"])
+    assert pd.isna(result.loc[4, "elevation"])
+    # Sorted by index
+    assert list(result.index) == sorted(result.index)
+
+
+# ---------------------------------------------------------------------------
+# Temporal file writes
+# ---------------------------------------------------------------------------
+
+
+def test_write_temporal_file_netcdf(tmp_path: Path):
+    """_write_temporal_file writes a valid NetCDF file."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output"), "format": "netcdf"},
+    )
+
+    ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0], [3.0, 4.0]])})
+    path = _write_temporal_file("snodas_2020", ds, "climate", config)
+
+    assert path.exists()
+    assert path.suffix == ".nc"
+    loaded = xr.open_dataset(path)
+    assert "SWE" in loaded.data_vars
+    assert loaded["SWE"].shape == (2, 2)
+    loaded.close()
+
+
+def test_write_temporal_file_parquet(tmp_path: Path):
+    """_write_temporal_file writes a valid Parquet file."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output"), "format": "parquet"},
+    )
+
+    ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0]])})
+    path = _write_temporal_file("snodas_2020", ds, "climate", config)
+
+    assert path.exists()
+    assert path.suffix == ".parquet"
+    result = pd.read_parquet(path)
+    assert "SWE" in result.columns
 
 
 # ---------------------------------------------------------------------------
