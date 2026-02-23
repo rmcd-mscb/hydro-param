@@ -56,14 +56,10 @@ flowchart TB
         MERGE --> VW["Write per-variable file"]
     end
 
-    VW --> S5A
-    TW --> S5A
+    VW --> RESULT(["PipelineResult (file paths)"])
+    TW --> RESULT
 
-    subgraph Stage5["Stage 5: Format Output - Combined SIR"]
-        S5A["Assemble SIR xr.Dataset"] --> S5B["Write combined SIR .nc"]
-    end
-
-    S5B --> RESULT(["PipelineResult"])
+    RESULT -.->|"on demand"| LOAD["load_sir() → xr.Dataset"]
 ```
 
 ## Data Flow Summary
@@ -73,8 +69,7 @@ flowchart TB
 | 1 | GeoPackage path + bbox | GeoDataFrame with `batch_id` | `pipeline.py`, `batching.py` |
 | 2 | Dataset names from config | `(DatasetEntry, DatasetRequest, [VarSpec])` tuples | `dataset_registry.py` |
 | 3 | *(internal to gdptools)* | Spatial weights | gdptools |
-| 4 | Fabric + resolved datasets | `Stage4Results` + per-variable/temporal files written to disk | `processing.py`, `data_access.py`, `pipeline.py` |
-| 5 | Stage4Results + config | Combined SIR `.nc` → `PipelineResult` | `pipeline.py` |
+| 4 | Fabric + resolved datasets | `PipelineResult` with per-variable/temporal file paths | `processing.py`, `data_access.py`, `pipeline.py` |
 
 ## Processing Strategy Matrix
 
