@@ -289,12 +289,22 @@ def _process_batch(
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
 
-    def _fetch(dataset_entry: DatasetEntry, fetch_bbox: list[float]) -> xr.DataArray:
+    def _fetch(
+        dataset_entry: DatasetEntry,
+        fetch_bbox: list[float],
+        *,
+        variable_source: str | None = None,
+    ) -> xr.DataArray:
         """Dispatch to the correct fetch function based on strategy."""
         if dataset_entry.strategy == "stac_cog":
             return fetch_stac_cog(dataset_entry, fetch_bbox)
         if dataset_entry.strategy == "local_tiff":
-            return fetch_local_tiff(dataset_entry, fetch_bbox, dataset_name=ds_req.name)
+            return fetch_local_tiff(
+                dataset_entry,
+                fetch_bbox,
+                dataset_name=ds_req.name,
+                variable_source=variable_source,
+            )
         if dataset_entry.strategy == "nhgf_stac":
             raise NotImplementedError(
                 "Temporal nhgf_stac datasets are not yet supported in the pipeline. "
@@ -321,7 +331,7 @@ def _process_batch(
         else:
             # Raw variable: fetch directly
             # TODO: Pass var_spec.band to fetch routine for multi-band datasets
-            da = _fetch(entry, bbox)
+            da = _fetch(entry, bbox, variable_source=var_spec.source)
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
 

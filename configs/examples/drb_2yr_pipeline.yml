@@ -29,6 +29,11 @@ datasets:
     statistics: [categorical]
     year: [2020, 2021]
 
+  # POLARIS soil texture properties, 30m (remote VRT, no download needed)
+  - name: polaris_30m
+    variables: [sand, silt, clay, theta_s, ksat]
+    statistics: [mean]
+
   # gridMET daily climate (OPeNDAP via ClimateR catalog)
   - name: gridmet
     variables: [pr, tmmx, tmmn]

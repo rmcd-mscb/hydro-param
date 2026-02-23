@@ -837,7 +837,7 @@ function DatasetCard({ ds }) {
       </div>
       <p style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", margin: "4px 0 2px" }}>{ds.desc}</p>
       <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.3)" }}>
-        <span style={{ color: "#48c9b0" }}>accessor:</span> {ds.accessor} &nbsp;|&nbsp; 
+        <span style={{ color: "#48c9b0" }}>accessor:</span> {ds.accessor} &nbsp;|&nbsp;
         <span style={{ color: "#48c9b0" }}>format:</span> {ds.format}
       </div>
     </div>

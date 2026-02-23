@@ -268,27 +268,36 @@ def fetch_stac_cog(
 # ---------------------------------------------------------------------------
 
 
+def _is_remote_url(source: str) -> bool:
+    """Check if a source string is a remote HTTP(S) URL."""
+    return source.startswith("http://") or source.startswith("https://")
+
+
 def fetch_local_tiff(
     entry: DatasetEntry,
     bbox: list[float],
     *,
     dataset_name: str = "unknown",
+    variable_source: str | None = None,
 ) -> xr.DataArray:
-    """Load a local GeoTIFF clipped to the bounding box.
+    """Load a local GeoTIFF (or remote VRT/COG) clipped to the bounding box.
 
-    Reads the file referenced by ``entry.source`` and clips to the
-    bounding box.  The bbox is in EPSG:4326; rioxarray handles
-    reprojection to the raster's native CRS internally.
+    Reads the file referenced by ``variable_source`` (per-variable override),
+    ``entry.source`` (dataset-level), or raises an error if neither is set.
+    Remote HTTP(S) URLs are opened directly via GDAL vsicurl — no local
+    file existence check is performed.
 
     Parameters
     ----------
     entry : DatasetEntry
-        Registry entry with ``strategy="local_tiff"`` and a ``source``
-        path pointing to a GeoTIFF file.
+        Registry entry with ``strategy="local_tiff"``.
     bbox : list[float]
         ``[west, south, east, north]`` in EPSG:4326.
     dataset_name : str
         Dataset name for use in error messages.
+    variable_source : str or None
+        Per-variable source path or URL. Takes precedence over
+        ``entry.source`` when set.
 
     Returns
     -------
@@ -298,16 +307,19 @@ def fetch_local_tiff(
     Raises
     ------
     ValueError
-        If ``entry.source`` is None.
+        If no source is available (neither variable_source nor entry.source).
     FileNotFoundError
-        If the source file does not exist.
+        If the source is a local path that does not exist.
     RuntimeError
         If no data remains after clipping to the bounding box.
     """
     import rioxarray  # noqa: F401
     from rioxarray.exceptions import NoDataInBounds
 
-    if entry.source is None:
+    # Resolve source: per-variable override > dataset-level
+    source = variable_source or entry.source
+
+    if source is None:
         msg = (
             f"Dataset '{dataset_name}' requires a local file "
             f"(strategy: local_tiff) but no 'source' path set."
@@ -341,13 +353,15 @@ def fetch_local_tiff(
             )
         raise ValueError(msg)
 
-    source_path = Path(entry.source)
-    if not source_path.exists():
-        raise FileNotFoundError(f"Local GeoTIFF not found: {source_path}")
+    if _is_remote_url(source):
+        logger.info("Loading remote raster: %s bbox=%s", source, bbox)
+    else:
+        source_path = Path(source)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Local GeoTIFF not found: {source_path}")
+        logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
 
-    logger.info("Loading local GeoTIFF: %s bbox=%s", source_path, bbox)
-
-    da = cast(xr.DataArray, rioxarray.open_rasterio(source_path, masked=True))
+    da = cast(xr.DataArray, rioxarray.open_rasterio(source, masked=True))
     da = da.squeeze("band", drop=True)
 
     try:
