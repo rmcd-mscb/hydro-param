@@ -1,11 +1,14 @@
-"""Pipeline orchestrator: config-driven parameterization stages 1-5.
+"""Pipeline orchestrator: config-driven parameterization stages 1-4.
 
-Implements the 5-stage pipeline from design.md section 4:
+Implements the 4-stage pipeline from design.md section 4:
   1. Resolve Target Fabric
   2. Resolve Source Datasets
   3. Compute/Load Weights (handled internally by gdptools)
-  4. Process Datasets (batch loop)
-  5. Format Output (SIR → NetCDF/Parquet)
+  4. Process Datasets (batch loop) + incremental file writes
+
+Per-variable and temporal output files are written incrementally during
+Stage 4. A lazy ``PipelineResult.load_sir()`` method assembles a combined
+xr.Dataset on demand for consumers that need it.
 
 See design.md section 11 for MVP implementation details.
 """
@@ -49,20 +52,35 @@ DEFAULT_REGISTRY = Path("configs/datasets")
 
 @dataclass
 class Stage4Results:
-    """Results from stage 4 processing, separating static and temporal outputs."""
+    """Results from stage 4 processing: file paths for static and temporal outputs."""
 
-    static: dict[str, pd.DataFrame] = field(default_factory=dict)
-    temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+    static_files: dict[str, Path] = field(default_factory=dict)
+    temporal_files: dict[str, Path] = field(default_factory=dict)
     categories: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class PipelineResult:
-    """Full pipeline result including static SIR, temporal data, and fabric."""
+    """Full pipeline result with file paths and lazy SIR loading.
 
-    sir: xr.Dataset
-    temporal: dict[str, xr.Dataset] = field(default_factory=dict)
+    Per-variable and temporal files are written incrementally during
+    Stage 4. Use ``load_sir()`` to assemble a combined xr.Dataset
+    on demand.
+    """
+
+    output_dir: Path
+    static_files: dict[str, Path] = field(default_factory=dict)
+    temporal_files: dict[str, Path] = field(default_factory=dict)
+    categories: dict[str, str] = field(default_factory=dict)
     fabric: gpd.GeoDataFrame | None = None
+
+    def load_sir(self) -> xr.Dataset:
+        """Lazily load all static per-variable CSV files into a combined xr.Dataset."""
+        if not self.static_files:
+            return xr.Dataset()
+        dfs = [pd.read_csv(p, index_col=0) for p in self.static_files.values()]
+        combined = pd.concat(dfs, axis=1)
+        return xr.Dataset.from_dataframe(combined)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +472,125 @@ def _split_time_period_by_year(time_period: list[str]) -> list[list[str]]:
     return chunks
 
 
+def _write_variable_file(
+    var_name: str,
+    df: pd.DataFrame,
+    category: str,
+    config: PipelineConfig,
+    feature_ids: object,
+) -> Path:
+    """Write a single per-variable CSV file.
+
+    Renames columns using ``var_name_{col}`` (or just ``var_name`` when the
+    only statistic is ``"mean"``), reindexes to the full set of feature IDs,
+    sorts by ``id_field``, and writes a CSV with ``id_field`` as the first
+    column.
+
+    Parameters
+    ----------
+    var_name : str
+        Variable name (used as filename stem).
+    df : pd.DataFrame
+        Merged zonal statistics for this variable.
+    category : str
+        Dataset category (used as subdirectory).
+    config : PipelineConfig
+        Pipeline configuration.
+    feature_ids : array-like
+        Feature IDs from the target fabric.
+
+    Returns
+    -------
+    Path
+        Path to the written CSV file.
+    """
+    id_field = config.target_fabric.id_field
+    output_dir = config.output.path
+    var_dir = output_dir / category
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    # Rename columns: "mean" → var_name, others → var_name_{col}
+    rename_map = {col: (var_name if col == "mean" else f"{var_name}_{col}") for col in df.columns}
+    out_df = df.rename(columns=rename_map)
+
+    # Warn if index name doesn't match id_field (may indicate upstream bug)
+    if not (hasattr(out_df.index, "name") and out_df.index.name == id_field):
+        logger.warning(
+            "Index name mismatch for variable '%s': expected '%s', got '%s'. "
+            "Renaming index — this may indicate a bug in zonal statistics output.",
+            var_name,
+            id_field,
+            getattr(out_df.index, "name", None),
+        )
+        out_df.index.name = id_field
+
+    # Reindex to full feature set (NaN for missing) and sort
+    out_df = out_df.reindex(feature_ids).sort_index()
+
+    out_path = var_dir / f"{var_name}.csv"
+    out_df.to_csv(out_path, index=True)
+    logger.info("Wrote %s → %s", var_name, out_path)
+    return out_path
+
+
+def _write_temporal_file(
+    ds_name: str,
+    ds: xr.Dataset,
+    category: str,
+    config: PipelineConfig,
+) -> Path:
+    """Write a single temporal output file.
+
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name (used as filename stem).
+    ds : xr.Dataset
+        Temporal dataset with ``(time, features)`` dimensions.
+    category : str
+        Dataset category (used as subdirectory).
+    config : PipelineConfig
+        Pipeline configuration.
+
+    Returns
+    -------
+    Path
+        Path to the written output file.
+    """
+    output_dir = config.output.path
+    var_dir = output_dir / category
+    var_dir.mkdir(parents=True, exist_ok=True)
+
+    if config.output.format == "netcdf":
+        temporal_path = var_dir / f"{ds_name}_temporal.nc"
+        ds.to_netcdf(temporal_path)
+    elif config.output.format == "parquet":
+        temporal_path = var_dir / f"{ds_name}_temporal.parquet"
+        ds.to_dataframe().to_parquet(temporal_path)
+    else:
+        raise ValueError(
+            f"Unsupported output format '{config.output.format}' for temporal "
+            f"dataset '{ds_name}'. Supported formats: 'netcdf', 'parquet'."
+        )
+    logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
+    return temporal_path
+
+
+def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, object]:
+    """Build CF-1.8 metadata attributes for SIR output."""
+    return {
+        "title": f"Hydrologic parameters: {config.output.sir_name}",
+        "institution": "hydro-param",
+        "source": "hydro-param pipeline",
+        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
+        "Conventions": "CF-1.8",
+        "target_fabric": str(config.target_fabric.path),
+        "target_fabric_id_field": config.target_fabric.id_field,
+        "n_features": n_features,
+        "processing_engine": config.processing.engine,
+    }
+
+
 def stage4_process(
     fabric: gpd.GeoDataFrame,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
@@ -464,6 +601,9 @@ def stage4_process(
     Temporal datasets skip batching and are processed full-fabric via
     ``WeightGen`` + ``AggGen``. Static datasets use the existing batch
     loop with ``ZonalGen``.
+
+    Per-variable and temporal output files are written incrementally
+    as each dataset completes, reducing peak memory usage.
 
     Parameters
     ----------
@@ -482,8 +622,14 @@ def stage4_process(
     batch_ids = sorted(fabric["batch_id"].unique())
     logger.info("Stage 4: Processing %d datasets across %d batches", len(resolved), len(batch_ids))
 
-    all_results: dict[str, list[pd.DataFrame]] = {}
-    temporal_results: dict[str, xr.Dataset] = {}
+    id_field = config.target_fabric.id_field
+    feature_ids = fabric[id_field].values
+
+    # Ensure output directory exists for incremental writes
+    config.output.path.mkdir(parents=True, exist_ok=True)
+
+    static_files: dict[str, Path] = {}
+    temporal_files: dict[str, Path] = {}
     categories: dict[str, str] = {}
 
     for ds_idx, (entry, ds_req, var_specs) in enumerate(resolved, 1):
@@ -511,7 +657,6 @@ def stage4_process(
                 chunk_req = ds_req.model_copy(update={"time_period": chunk_period})
                 ds = _process_temporal(fabric, entry, chunk_req, var_specs, config)
                 result_key = f"{ds_req.name}_{chunk_year}"
-                temporal_results[result_key] = ds
                 categories[result_key] = category
                 logger.info(
                     "  %s year %s: %d vars, %d time steps (%.1fs)",
@@ -521,6 +666,8 @@ def stage4_process(
                     ds.sizes.get("time", 0),
                     time.perf_counter() - t_chunk,
                 )
+                # Write temporal file immediately after each year chunk
+                temporal_files[result_key] = _write_temporal_file(result_key, ds, category, config)
 
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
             continue
@@ -544,6 +691,9 @@ def stage4_process(
             year_label,
         )
         t_ds = time.perf_counter()
+
+        # Collect batch results for this dataset only
+        ds_batch_results: dict[str, list[pd.DataFrame]] = {}
 
         for year in years:
             # Create single-year request for _process_batch
@@ -571,152 +721,33 @@ def stage4_process(
                 for var_name, df in batch_results.items():
                     # Year-suffix result keys when multiple years are specified
                     result_key = f"{var_name}_{year}" if year is not None else var_name
-                    all_results.setdefault(result_key, []).append(df)
+                    ds_batch_results.setdefault(result_key, []).append(df)
 
             # Track categories with year-suffixed keys
             for var_spec in var_specs:
                 result_key = f"{var_spec.name}_{year}" if year is not None else var_spec.name
                 categories[result_key] = category
 
+        # Merge and write per-variable files immediately after this dataset completes
+        for var_key, dfs in ds_batch_results.items():
+            if var_key in static_files:
+                raise ValueError(
+                    f"Duplicate static result key '{var_key}' from dataset "
+                    f"'{ds_req.name}'. Overlapping variable names across "
+                    f"datasets or years; adjust your configuration to avoid collisions."
+                )
+            merged_df = pd.concat(dfs)
+            category = categories.get(var_key, "uncategorized")
+            static_files[var_key] = _write_variable_file(
+                var_key, merged_df, category, config, feature_ids
+            )
+            logger.info("  Merged %s: %d total features", var_key, len(merged_df))
+
         logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
-    # Merge batch results per variable
-    merged: dict[str, pd.DataFrame] = {}
-    for var_name, dfs in all_results.items():
-        merged[var_name] = pd.concat(dfs)
-        logger.info("  Merged %s: %d total features", var_name, len(merged[var_name]))
-
-    return Stage4Results(static=merged, temporal=temporal_results, categories=categories)
-
-
-def stage5_format_output(
-    results: dict[str, pd.DataFrame] | Stage4Results,
-    config: PipelineConfig,
-    fabric: gpd.GeoDataFrame,
-) -> xr.Dataset:
-    """Stage 5: Assemble results into SIR and write output.
-
-    Parameters
-    ----------
-    results : dict[str, pd.DataFrame] or Stage4Results
-        Static zonal statistics (legacy dict) or full Stage4Results
-        containing both static and temporal outputs.
-    config : PipelineConfig
-        Pipeline configuration.
-    fabric : gpd.GeoDataFrame
-        Target fabric.
-
-    Returns
-    -------
-    xr.Dataset
-        The Standardized Internal Representation (CF-1.8 compliant).
-        Temporal results are written as separate files.
-    """
-    logger.info("Stage 5: Assembling SIR output")
-    id_field = config.target_fabric.id_field
-    feature_ids = fabric[id_field].values
-
-    # Support both legacy dict and Stage4Results
-    if isinstance(results, Stage4Results):
-        static_results = results.static
-        temporal_results = results.temporal
-        categories = results.categories
-    else:
-        static_results = results
-        temporal_results = {}
-        categories = {}
-
-    sir_attrs = {
-        "title": f"Hydrologic parameters: {config.output.sir_name}",
-        "institution": "hydro-param",
-        "source": "hydro-param pipeline",
-        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
-        "Conventions": "CF-1.8",
-        "target_fabric": str(config.target_fabric.path),
-        "target_fabric_id_field": id_field,
-        "n_features": len(feature_ids),
-        "processing_engine": config.processing.engine,
-    }
-
-    data_vars: dict[str, tuple] = {}
-    for var_name, df in static_results.items():
-        for col in df.columns:
-            sir_name = f"{var_name}_{col}" if col != "mean" else var_name
-            # Reindex to ensure alignment with full fabric
-            if hasattr(df.index, "name") and df.index.name == id_field:
-                values = df[col].reindex(feature_ids).values
-            else:
-                values = df[col].values
-            data_vars[sir_name] = (id_field, values)
-
-    sir = xr.Dataset(
-        data_vars,
-        coords={id_field: feature_ids},
-        attrs=sir_attrs,
+    return Stage4Results(
+        static_files=static_files, temporal_files=temporal_files, categories=categories
     )
-
-    # Write output
-    output_dir = config.output.path
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write combined SIR (used by pywatershed plugin and PipelineResult)
-    if not data_vars:
-        logger.warning("No static results to write; skipping static SIR file.")
-    if data_vars:
-        if config.output.format == "netcdf":
-            sir_path = output_dir / f"{config.output.sir_name}.nc"
-            sir.to_netcdf(sir_path)
-            logger.info("Wrote SIR → %s", sir_path)
-        elif config.output.format == "parquet":
-            sir_path = output_dir / f"{config.output.sir_name}.parquet"
-            sir.to_dataframe().to_parquet(sir_path)
-            logger.info("Wrote SIR → %s", sir_path)
-
-    # Write per-variable files organized by category
-    for var_name, df in static_results.items():
-        category = categories.get(var_name, "uncategorized")
-        var_dir = output_dir / category
-        var_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build single-variable xr.Dataset
-        var_data_vars: dict[str, tuple] = {}
-        for col in df.columns:
-            col_name = f"{var_name}_{col}" if col != "mean" else var_name
-            if hasattr(df.index, "name") and df.index.name == id_field:
-                values = df[col].reindex(feature_ids).values
-            else:
-                values = df[col].values
-            var_data_vars[col_name] = (id_field, values)
-
-        var_ds = xr.Dataset(
-            var_data_vars,
-            coords={id_field: feature_ids},
-            attrs=sir_attrs,
-        )
-
-        if config.output.format == "netcdf":
-            out_path = var_dir / f"{var_name}.nc"
-            var_ds.to_netcdf(out_path)
-        elif config.output.format == "parquet":
-            out_path = var_dir / f"{var_name}.parquet"
-            var_ds.to_dataframe().to_parquet(out_path)
-        logger.info("Wrote %s → %s", var_name, out_path)
-
-    # Write temporal results as per-dataset files in category directories
-    for ds_name, ds in temporal_results.items():
-        category = categories.get(ds_name, "climate")
-        var_dir = output_dir / category
-        var_dir.mkdir(parents=True, exist_ok=True)
-
-        if config.output.format == "netcdf":
-            temporal_path = var_dir / f"{ds_name}_temporal.nc"
-            ds.to_netcdf(temporal_path)
-        elif config.output.format == "parquet":
-            temporal_path = var_dir / f"{ds_name}_temporal.parquet"
-            ds.to_dataframe().to_parquet(temporal_path)
-        logger.info("Wrote temporal %s → %s", ds_name, temporal_path)
-
-    return sir
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +771,7 @@ def run_pipeline_from_config(
     Returns
     -------
     PipelineResult
-        Full results including static SIR, temporal data, and fabric.
+        File paths for static/temporal outputs, plus fabric.
     """
     t0 = time.perf_counter()
 
@@ -784,44 +815,40 @@ def run_pipeline_from_config(
     # Stage 3: Weights (handled internally by gdptools ZonalGen)
     logger.info("Stage 3: Weights computed internally by gdptools")
 
-    # Stage 4: Process datasets
+    # Stage 4: Process datasets + incremental writes
     t4 = time.perf_counter()
     results = stage4_process(fabric, resolved, config)
     logger.info(
         "Stage 4 complete: %d static vars, %d temporal datasets (%.1fs)",
-        len(results.static),
-        len(results.temporal),
+        len(results.static_files),
+        len(results.temporal_files),
         time.perf_counter() - t4,
-    )
-
-    # Stage 5: Format output
-    t5 = time.perf_counter()
-    sir = stage5_format_output(results, config, fabric)
-    logger.info(
-        "Stage 5 complete: SIR has %d variables, %d features (%.1fs)",
-        len(sir.data_vars),
-        sir.sizes.get(config.target_fabric.id_field, 0),
-        time.perf_counter() - t5,
     )
 
     elapsed = time.perf_counter() - t0
     logger.info("=" * 60)
     logger.info(
         "Pipeline complete: %d static + %d temporal datasets, %d features, %.1f seconds",
-        len(results.static),
-        len(results.temporal),
+        len(results.static_files),
+        len(results.temporal_files),
         len(fabric),
         elapsed,
     )
     logger.info("=" * 60)
 
-    return PipelineResult(sir=sir, temporal=results.temporal, fabric=fabric)
+    return PipelineResult(
+        output_dir=config.output.path,
+        static_files=results.static_files,
+        temporal_files=results.temporal_files,
+        categories=results.categories,
+        fabric=fabric,
+    )
 
 
 def run_pipeline(
     config_path: str | Path,
     registry_path: str | Path | None = None,
-) -> xr.Dataset:
+) -> PipelineResult:
     """Execute the full parameterization pipeline.
 
     Parameters
@@ -834,16 +861,16 @@ def run_pipeline(
 
     Returns
     -------
-    xr.Dataset
-        The Standardized Internal Representation of computed parameters.
+    PipelineResult
+        File paths for static/temporal outputs. Use ``load_sir()``
+        to assemble a combined xr.Dataset on demand.
     """
     config = load_config(config_path)
     if registry_path is None:
         registry_path = DEFAULT_REGISTRY
     registry = load_registry(registry_path)
 
-    result = run_pipeline_from_config(config, registry)
-    return result.sir
+    return run_pipeline_from_config(config, registry)
 
 
 def main() -> int:

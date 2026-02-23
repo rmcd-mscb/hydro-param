@@ -18,14 +18,16 @@ from shapely.geometry import Point, box
 from hydro_param.config import PipelineConfig, load_config
 from hydro_param.dataset_registry import load_registry
 from hydro_param.pipeline import (
+    PipelineResult,
     Stage4Results,
     _buffered_bbox,
     _process_temporal,
     _split_time_period_by_year,
+    _write_temporal_file,
+    _write_variable_file,
     resolve_bbox,
     stage1_resolve_fabric,
     stage2_resolve_datasets,
-    stage5_format_output,
 )
 from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
 
@@ -317,26 +319,54 @@ def test_stage2_rejects_unknown_dataset(config_yaml: Path, tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Stage 5: SIR assembly
+# Per-variable file writes + load_sir
 # ---------------------------------------------------------------------------
 
 
-def test_stage5_produces_sir(config_yaml: Path, fabric_gpkg: Path):
+def test_write_variable_file_returns_path(config_yaml: Path, fabric_gpkg: Path):
+    """_write_variable_file returns the written CSV file path."""
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
 
-    results = {
-        "elevation": pd.DataFrame(
-            {"mean": [100.0, 200.0, 300.0, 400.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-        "slope": pd.DataFrame(
-            {"mean": [5.0, 10.0, 15.0, 20.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-    }
+    df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0]},
+        index=pd.Index([1, 2, 3, 4], name="featureid"),
+    )
 
-    sir = stage5_format_output(results, config, fabric)
+    path = _write_variable_file("elevation", df, "topography", config, feature_ids)
+    assert path.exists()
+    assert path.suffix == ".csv"
+
+    result = pd.read_csv(path, index_col=0)
+    assert "elevation" in result.columns
+    assert len(result) == 4
+    assert result.index.name == "featureid"
+
+
+def test_load_sir_merges_variable_files(config_yaml: Path, fabric_gpkg: Path):
+    """PipelineResult.load_sir() merges per-variable CSV files into one Dataset."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
+
+    elev_df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0]},
+        index=pd.Index([1, 2, 3, 4], name="featureid"),
+    )
+    slope_df = pd.DataFrame(
+        {"mean": [5.0, 10.0, 15.0, 20.0]},
+        index=pd.Index([1, 2, 3, 4], name="featureid"),
+    )
+
+    elev_path = _write_variable_file("elevation", elev_df, "topo", config, feature_ids)
+    slope_path = _write_variable_file("slope", slope_df, "topo", config, feature_ids)
+
+    result = PipelineResult(
+        output_dir=config.output.path,
+        static_files={"elevation": elev_path, "slope": slope_path},
+    )
+    sir = result.load_sir()
 
     assert isinstance(sir, xr.Dataset)
     assert "elevation" in sir.data_vars
@@ -344,47 +374,131 @@ def test_stage5_produces_sir(config_yaml: Path, fabric_gpkg: Path):
     id_field = config.target_fabric.id_field
     assert id_field in sir.dims
     assert sir.sizes[id_field] == 4
-    assert "hru_id" not in sir.dims  # verify no hardcoded fallback
 
 
-def test_sir_has_cf_metadata(config_yaml: Path, fabric_gpkg: Path):
+def test_load_sir_multi_statistic_round_trip(config_yaml: Path, fabric_gpkg: Path):
+    """Multi-statistic columns survive the write→load_sir() round trip."""
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
 
-    results = {
-        "elevation": pd.DataFrame(
-            {"mean": [100.0, 200.0, 300.0, 400.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-    }
+    df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0], "min": [90.0, 180.0, 270.0, 360.0]},
+        index=pd.Index([1, 2, 3, 4], name="featureid"),
+    )
 
-    sir = stage5_format_output(results, config, fabric)
+    path = _write_variable_file("elevation", df, "topo", config, feature_ids)
+    result = PipelineResult(
+        output_dir=config.output.path,
+        static_files={"elevation": path},
+    )
+    sir = result.load_sir()
 
-    assert sir.attrs["Conventions"] == "CF-1.8"
-    assert "hydro-param" in sir.attrs["source"]
-    assert sir.attrs["n_features"] == 4
-    assert sir.attrs["target_fabric_id_field"] == "featureid"
+    assert "elevation" in sir.data_vars  # "mean" renamed to var_name
+    assert "elevation_min" in sir.data_vars  # "min" renamed to var_name_min
+    assert sir["elevation"].values.tolist() == [100.0, 200.0, 300.0, 400.0]
+    assert sir["elevation_min"].values.tolist() == [90.0, 180.0, 270.0, 360.0]
 
 
-def test_sir_writes_netcdf(config_yaml: Path, fabric_gpkg: Path, tmp_path: Path):
+def test_write_variable_file_warns_on_index_mismatch(
+    config_yaml: Path, fabric_gpkg: Path, caplog: pytest.LogCaptureFixture
+):
+    """_write_variable_file warns when index name doesn't match id_field."""
     config = load_config(config_yaml)
     fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values
 
-    results = {
-        "elevation": pd.DataFrame(
-            {"mean": [100.0, 200.0, 300.0, 400.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-    }
+    # DataFrame with unnamed index (not "featureid")
+    df = pd.DataFrame(
+        {"mean": [100.0, 200.0, 300.0, 400.0]},
+        index=pd.Index([1, 2, 3, 4]),
+    )
 
-    stage5_format_output(results, config, fabric)
+    with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
+        _write_variable_file("elevation", df, "topo", config, feature_ids)
 
-    out_path = Path(config.output.path) / f"{config.output.sir_name}.nc"
-    assert out_path.exists()
+    assert "Index name mismatch" in caplog.text
+    assert "featureid" in caplog.text
 
-    loaded = xr.open_dataset(out_path)
-    assert "elevation" in loaded.data_vars
+
+def test_load_sir_empty_returns_empty_dataset():
+    """load_sir() returns empty Dataset when no files exist."""
+    result = PipelineResult(output_dir=Path("/tmp"), static_files={})
+    sir = result.load_sir()
+    assert isinstance(sir, xr.Dataset)
+    assert len(sir.data_vars) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-variable file: reindex with partial features
+# ---------------------------------------------------------------------------
+
+
+def test_write_variable_file_reindexes_partial_features(config_yaml: Path, fabric_gpkg: Path):
+    """Missing features are filled with NaN and output is sorted."""
+    config = load_config(config_yaml)
+    fabric = gpd.read_file(fabric_gpkg)
+    feature_ids = fabric["featureid"].values  # [1, 2, 3, 4]
+
+    # Only features 1 and 3 present (simulates a single batch)
+    df = pd.DataFrame(
+        {"mean": [100.0, 300.0]},
+        index=pd.Index([1, 3], name="featureid"),
+    )
+
+    path = _write_variable_file("elevation", df, "topo", config, feature_ids)
+    result = pd.read_csv(path, index_col=0)
+
+    assert len(result) == 4
+    assert result.loc[1, "elevation"] == 100.0
+    assert result.loc[3, "elevation"] == 300.0
+    assert pd.isna(result.loc[2, "elevation"])
+    assert pd.isna(result.loc[4, "elevation"])
+    # Sorted by index
+    assert list(result.index) == sorted(result.index)
+
+
+# ---------------------------------------------------------------------------
+# Temporal file writes
+# ---------------------------------------------------------------------------
+
+
+def test_write_temporal_file_netcdf(tmp_path: Path):
+    """_write_temporal_file writes a valid NetCDF file."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output"), "format": "netcdf"},
+    )
+
+    ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0], [3.0, 4.0]])})
+    path = _write_temporal_file("snodas_2020", ds, "climate", config)
+
+    assert path.exists()
+    assert path.suffix == ".nc"
+    loaded = xr.open_dataset(path)
+    assert "SWE" in loaded.data_vars
+    assert loaded["SWE"].shape == (2, 2)
     loaded.close()
+
+
+def test_write_temporal_file_parquet(tmp_path: Path):
+    """_write_temporal_file writes a valid Parquet file."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output"), "format": "parquet"},
+    )
+
+    ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0]])})
+    path = _write_temporal_file("snodas_2020", ds, "climate", config)
+
+    assert path.exists()
+    assert path.suffix == ".parquet"
+    result = pd.read_parquet(path)
+    assert "SWE" in result.columns
 
 
 # ---------------------------------------------------------------------------
@@ -782,75 +896,19 @@ def test_temporal_processor_has_climr_cat_method():
     assert callable(proc.process_climr_cat)
 
 
-def test_stage4_results_dataclass():
+def test_stage4_results_dataclass(tmp_path: Path):
     r = Stage4Results()
-    assert r.static == {}
-    assert r.temporal == {}
+    assert r.static_files == {}
+    assert r.temporal_files == {}
 
+    elev_path = tmp_path / "elevation.nc"
+    snodas_path = tmp_path / "snodas_temporal.nc"
     r2 = Stage4Results(
-        static={"elev": pd.DataFrame({"mean": [1.0]})},
-        temporal={"snodas": xr.Dataset({"SWE": (["time", "hru_id"], [[1.0]])})},
+        static_files={"elev": elev_path},
+        temporal_files={"snodas": snodas_path},
     )
-    assert "elev" in r2.static
-    assert "snodas" in r2.temporal
-
-
-def test_stage5_handles_stage4_results(config_yaml: Path, fabric_gpkg: Path):
-    """stage5 accepts Stage4Results and writes temporal files separately."""
-    config = load_config(config_yaml)
-    fabric = gpd.read_file(fabric_gpkg)
-
-    static = {
-        "elevation": pd.DataFrame(
-            {"mean": [100.0, 200.0, 300.0, 400.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-    }
-    temporal = {
-        "snodas": xr.Dataset(
-            {"SWE": (["time", "hru_id"], [[1.0, 2.0, 3.0, 4.0]])},
-            coords={
-                "time": pd.date_range("2020-01-01", periods=1),
-                "hru_id": [1, 2, 3, 4],
-            },
-        ),
-    }
-
-    results = Stage4Results(static=static, temporal=temporal)
-    sir = stage5_format_output(results, config, fabric)
-
-    assert isinstance(sir, xr.Dataset)
-    assert "elevation" in sir.data_vars
-
-    # Check temporal file was written in category directory
-    output_dir = config.output.path
-    temporal_path = output_dir / "climate" / "snodas_temporal.nc"
-    assert temporal_path.exists()
-
-    loaded = xr.open_dataset(temporal_path)
-    assert "SWE" in loaded.data_vars
-    loaded.close()
-
-    # Check per-variable static file was written in category directory
-    static_path = output_dir / "uncategorized" / "elevation.nc"
-    assert static_path.exists()
-
-
-def test_stage5_backward_compat_dict(config_yaml: Path, fabric_gpkg: Path):
-    """stage5 still accepts a plain dict for backward compatibility."""
-    config = load_config(config_yaml)
-    fabric = gpd.read_file(fabric_gpkg)
-
-    results = {
-        "elevation": pd.DataFrame(
-            {"mean": [100.0, 200.0, 300.0, 400.0]},
-            index=pd.Index([1, 2, 3, 4], name="featureid"),
-        ),
-    }
-
-    sir = stage5_format_output(results, config, fabric)
-    assert isinstance(sir, xr.Dataset)
-    assert "elevation" in sir.data_vars
+    assert "elev" in r2.static_files
+    assert "snodas" in r2.temporal_files
 
 
 def test_temporal_requires_time_period(tmp_path: Path):
@@ -1077,7 +1135,7 @@ def test_split_time_period_same_day():
     assert result == [["2020-06-15", "2020-06-15"]]
 
 
-def test_stage4_multi_year_produces_suffixed_keys():
+def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path):
     """Multi-year datasets produce year-suffixed result keys in stage4."""
     from unittest.mock import patch
 
@@ -1110,6 +1168,7 @@ def test_stage4_multi_year_produces_suffixed_keys():
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
         datasets=[],
+        output={"path": str(tmp_path / "output")},
     )
 
     mock_df = pd.DataFrame({"categorical": [11, 21]}, index=["a", "b"])
@@ -1117,14 +1176,14 @@ def test_stage4_multi_year_produces_suffixed_keys():
     with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
         results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
 
-    assert "LndCov_2020" in results.static
-    assert "LndCov_2021" in results.static
-    assert "LndCov" not in results.static
+    assert "LndCov_2020" in results.static_files
+    assert "LndCov_2021" in results.static_files
+    assert "LndCov" not in results.static_files
     assert results.categories["LndCov_2020"] == "land_cover"
     assert results.categories["LndCov_2021"] == "land_cover"
 
 
-def test_stage4_single_year_produces_suffixed_key():
+def test_stage4_single_year_produces_suffixed_key(tmp_path: Path):
     """A single-int year still produces a year-suffixed result key."""
     from unittest.mock import patch
 
@@ -1156,6 +1215,7 @@ def test_stage4_single_year_produces_suffixed_key():
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
+        output={"path": str(tmp_path / "output")},
     )
 
     mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
@@ -1163,11 +1223,11 @@ def test_stage4_single_year_produces_suffixed_key():
     with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
         results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
 
-    assert "LndCov_2021" in results.static
-    assert "LndCov" not in results.static
+    assert "LndCov_2021" in results.static_files
+    assert "LndCov" not in results.static_files
 
 
-def test_stage4_no_year_produces_unsuffixed_key():
+def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
     """When year=None, result keys have no year suffix."""
     from unittest.mock import patch
 
@@ -1197,6 +1257,7 @@ def test_stage4_no_year_produces_unsuffixed_key():
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
+        output={"path": str(tmp_path / "output")},
     )
 
     mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
@@ -1204,8 +1265,51 @@ def test_stage4_no_year_produces_unsuffixed_key():
     with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
         results = stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
 
-    assert "LndCov" in results.static
-    assert not any("LndCov_" in k for k in results.static)
+    assert "LndCov" in results.static_files
+    assert not any("LndCov_" in k for k in results.static_files)
+
+
+def test_stage4_duplicate_var_key_raises(tmp_path: Path):
+    """stage4_process raises ValueError when two datasets produce the same var_key."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req1 = DatasetRequest(name="dataset_a", variables=["LndCov"], statistics=["categorical"])
+    ds_req2 = DatasetRequest(name="dataset_b", variables=["LndCov"], statistics=["categorical"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with (
+        patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df),
+        pytest.raises(ValueError, match="Duplicate static result key 'LndCov'"),
+    ):
+        stage4_process(
+            fabric,
+            [(entry, ds_req1, [var_spec]), (entry, ds_req2, [var_spec])],
+            config,
+        )
 
 
 def test_process_temporal_empty_statistics_raises():
@@ -1287,33 +1391,9 @@ def test_process_temporal_multi_statistics_warns(caplog: pytest.LogCaptureFixtur
     assert "only 'mean' will be used" in caplog.text
 
 
-def test_stage5_skips_empty_static_sir(config_yaml: Path, fabric_gpkg: Path, caplog):
-    """stage5 skips writing static SIR when there are no static results."""
-    config = load_config(config_yaml)
-    fabric = gpd.read_file(fabric_gpkg)
-
-    temporal = {
-        "snodas": xr.Dataset(
-            {"SWE": (["time", "hru_id"], [[1.0, 2.0, 3.0, 4.0]])},
-            coords={
-                "time": pd.date_range("2020-01-01", periods=1),
-                "hru_id": [1, 2, 3, 4],
-            },
-        ),
-    }
-
-    results = Stage4Results(static={}, temporal=temporal)
-
-    with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
-        sir = stage5_format_output(results, config, fabric)
-
-    assert len(sir.data_vars) == 0
-    assert "No static results" in caplog.text
-
-    # Static SIR file should NOT exist
-    static_path = config.output.path / f"{config.output.sir_name}.nc"
-    assert not static_path.exists()
-
-    # Temporal file SHOULD exist in category directory
-    temporal_path = config.output.path / "climate" / "snodas_temporal.nc"
-    assert temporal_path.exists()
+def test_stage4_results_empty_has_no_files():
+    """Empty Stage4Results has no file paths."""
+    results = Stage4Results()
+    assert len(results.static_files) == 0
+    assert len(results.temporal_files) == 0
+    assert len(results.categories) == 0

@@ -535,6 +535,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     )
 
     import geopandas as gpd
+    import xarray as xr
 
     from hydro_param.derivations.pywatershed import (
         PywatershedDerivation,
@@ -569,7 +570,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("Phase 2: pywatershed derivation + formatting")
 
     plugin = PywatershedDerivation()
-    sir_renamed = plugin.rename_sir_variables(result.sir)
+    sir_renamed = plugin.rename_sir_variables(result.load_sir())
 
     segments = None
     if pws_config.domain.segment_path is not None:
@@ -590,10 +591,11 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         segment_id_field=pws_config.domain.segment_id_field,
     )
 
-    # Merge temporal data with model-specific renames + unit conversions
+    # Load temporal data from per-file paths and merge with model-specific transforms
+    temporal = {name: xr.open_dataset(path) for name, path in result.temporal_files.items()}
     derived = merge_temporal_into_derived(
         derived,
-        result.temporal,
+        temporal,
         renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
         conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
     )
