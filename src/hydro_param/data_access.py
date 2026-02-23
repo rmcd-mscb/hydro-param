@@ -373,12 +373,12 @@ def fetch_local_tiff(
             crs="EPSG:4326",
         )
     except (NoDataInBounds, ValueError) as exc:
-        raise RuntimeError(f"No data in bbox={bbox} for {source_path}") from exc
+        raise RuntimeError(f"No data in bbox={bbox} for {source}") from exc
 
     if da.size == 0:
         raise RuntimeError(f"Empty raster after clipping to bbox={bbox}")
 
-    logger.info("Loaded local raster: shape=%s, crs=%s", da.shape, da.rio.crs)
+    logger.info("Loaded raster: shape=%s, crs=%s", da.shape, da.rio.crs)
     return da
 
 
