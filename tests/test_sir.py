@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from hydro_param.dataset_registry import (
     DatasetEntry,
     DerivedVariableSpec,
@@ -386,7 +388,6 @@ class TestApplyConversion:
     """Tests for SIR unit conversion application."""
 
     def test_no_conversion(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -396,7 +397,6 @@ class TestApplyConversion:
         assert_allclose(result, values)
 
     def test_log10_to_linear(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -406,7 +406,6 @@ class TestApplyConversion:
         assert_allclose(result, [1.0, 10.0, 100.0])
 
     def test_log10_to_linear_with_nan(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -418,7 +417,6 @@ class TestApplyConversion:
         assert_allclose(result[2], 100.0)
 
     def test_k_to_c(self) -> None:
-        import numpy as np
 
         from hydro_param.sir import apply_conversion
 
@@ -427,7 +425,6 @@ class TestApplyConversion:
         np.testing.assert_allclose(result, [0.0, 10.0, 20.0])
 
     def test_k_to_c_with_nan(self) -> None:
-        import numpy as np
 
         from hydro_param.sir import apply_conversion
 
@@ -438,7 +435,6 @@ class TestApplyConversion:
         np.testing.assert_allclose(result[2], 20.0)
 
     def test_unknown_conversion_raises(self) -> None:
-        import numpy as np
         import pytest
 
         from hydro_param.sir import apply_conversion
@@ -625,7 +621,6 @@ class TestNormalizeSIR:
 
     def test_nan_values_preserved(self, tmp_path: Path) -> None:
         """NaN values pass through normalization unchanged."""
-        import numpy as np
         import pandas as pd
 
         from hydro_param.sir import SIRVariableSchema, normalize_sir
@@ -695,7 +690,6 @@ class TestValidateSIR:
         assert warnings == []
 
     def test_all_nan_warns(self, tmp_path: Path) -> None:
-        import numpy as np
 
         from hydro_param.sir import SIRVariableSchema, validate_sir
 
@@ -718,7 +712,6 @@ class TestValidateSIR:
 
     def test_partial_nan_no_warning(self, tmp_path: Path) -> None:
         """Partial NaN coverage is expected (e.g., gridMET edge coverage)."""
-        import numpy as np
 
         from hydro_param.sir import SIRVariableSchema, validate_sir
 
@@ -758,7 +751,6 @@ class TestValidateSIR:
         assert any(w.check_type == "range" for w in warnings)
 
     def test_strict_mode_raises(self, tmp_path: Path) -> None:
-        import numpy as np
         import pytest
 
         from hydro_param.sir import SIRValidationError, SIRVariableSchema, validate_sir
@@ -833,3 +825,145 @@ class TestValidateSIR:
         # count column values [1000, 2000] should NOT produce range warnings
         range_warnings = [w for w in warnings if w.check_type == "range"]
         assert len(range_warnings) == 0
+
+
+class TestNormalizeSIRTemporal:
+    """Tests for normalize_sir_temporal()."""
+
+    def test_renames_variables_and_converts_units(self, tmp_path: Path) -> None:
+        """Temporal normalization renames long names to canonical and converts K to °C."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        # Create a synthetic temporal NetCDF with gdptools-style long names
+        ds = xr.Dataset(
+            {
+                "daily_maximum_temperature": (
+                    ["time", "nhm_id"],
+                    np.array([[300.0, 310.0], [305.0, 315.0]]),
+                ),
+                "precipitation_amount": (
+                    ["time", "nhm_id"],
+                    np.array([[5.0, 10.0], [3.0, 7.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=2),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "gridmet_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        temporal_files = {"gridmet_2020": nc_path}
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
+                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["tmmx", "pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Should have produced 2 files (one per variable)
+        assert len(result) == 2
+
+        # Check temperature was converted K -> °C
+        tmmx_keys = [k for k in result if "tmmx" in k]
+        assert len(tmmx_keys) == 1
+        tmmx_ds = xr.open_dataset(result[tmmx_keys[0]])
+        tmmx_var = [v for v in tmmx_ds.data_vars][0]
+        np.testing.assert_allclose(tmmx_ds[tmmx_var].values[0], [300.0 - 273.15, 310.0 - 273.15])
+        tmmx_ds.close()
+
+        # Check precipitation passthrough (no conversion)
+        pr_keys = [k for k in result if "pr" in k]
+        assert len(pr_keys) == 1
+        pr_ds = xr.open_dataset(result[pr_keys[0]])
+        pr_var = [v for v in pr_ds.data_vars][0]
+        np.testing.assert_allclose(pr_ds[pr_var].values[0], [5.0, 10.0])
+        pr_ds.close()
+
+    def test_skips_unknown_variables(self, tmp_path: Path) -> None:
+        """Variables not in schema are skipped with a warning."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        ds = xr.Dataset(
+            {
+                "unknown_variable": (
+                    ["time", "nhm_id"],
+                    np.array([[1.0, 2.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "gridmet_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        temporal_files = {"gridmet_2020": nc_path}
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Unknown variable should be skipped — no output files
+        assert len(result) == 0

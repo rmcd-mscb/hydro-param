@@ -386,6 +386,88 @@ def normalize_sir(
     return sir_files
 
 
+def normalize_sir_temporal(
+    temporal_files: dict[str, Path],
+    schema: list[SIRVariableSchema],
+    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    output_dir: Path,
+) -> dict[str, Path]:
+    """Normalize temporal NetCDF files to canonical SIR format.
+
+    Reads raw temporal NetCDFs from stage 4, renames variables from gdptools
+    long names to canonical SIR names, applies unit conversions, and writes
+    normalized per-variable NetCDFs.
+
+    Parameters
+    ----------
+    temporal_files
+        Mapping of dataset key (e.g. ``"gridmet_2020"``) to raw NetCDF path.
+    schema
+        SIR variable schema entries (from ``build_sir_schema()``).
+    resolved
+        Resolved dataset entries from stage 2.
+    output_dir
+        Directory to write normalized NetCDF files.
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping of canonical name to normalized NetCDF file path.
+    """
+    import xarray as xr
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sir_files: dict[str, Path] = {}
+
+    # Build reverse lookup: gdptools long_name -> (var_spec, schema_entries)
+    # Only for temporal datasets.
+    long_name_lookup: dict[str, tuple[VariableSpec, list[SIRVariableSchema]]] = {}
+    for entry_obj, _ds_req, var_specs in resolved:
+        if not (hasattr(entry_obj, "temporal") and entry_obj.temporal):
+            continue
+        for vs in var_specs:
+            if isinstance(vs, VariableSpec) and vs.long_name:
+                matching = [s for s in schema if s.source_name == vs.name and s.temporal]
+                if matching:
+                    long_name_lookup[vs.long_name] = (vs, matching)
+
+    for file_key, nc_path in temporal_files.items():
+        ds = xr.open_dataset(nc_path)
+
+        for data_var in list(ds.data_vars):
+            lookup = long_name_lookup.get(str(data_var))
+            if lookup is None:
+                logger.warning(
+                    "No SIR schema match for temporal variable '%s' in %s — skipping",
+                    data_var,
+                    nc_path.name,
+                )
+                continue
+
+            var_spec, schema_entries = lookup
+            schema_entry = schema_entries[0]
+
+            # Apply unit conversion
+            values = ds[data_var].values.astype(np.float64)
+            if schema_entry.conversion is not None:
+                values = apply_conversion(values, schema_entry.conversion)
+
+            cname = schema_entry.canonical_name
+
+            out_ds = xr.Dataset(
+                {cname: (ds[data_var].dims, values)},
+                coords=ds.coords,
+            )
+            out_path = output_dir / f"{cname}.nc"
+            out_ds.to_netcdf(out_path)
+            sir_files[cname] = out_path
+            logger.info("SIR temporal normalized: %s/%s → %s", file_key, data_var, out_path.name)
+
+        ds.close()
+
+    return sir_files
+
+
 @dataclass
 class SIRValidationWarning:
     """A single SIR validation warning."""
