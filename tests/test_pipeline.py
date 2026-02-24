@@ -1536,6 +1536,114 @@ def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
     assert "sand" in results
 
 
+def test_process_batch_stac_cog_passes_asset_key(tmp_path: Path):
+    """_process_batch passes var_spec.asset_key to fetch_stac_cog for gNATSGO-style datasets."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="gnatsgo-rasters",
+        crs="EPSG:5070",
+    )
+    var_spec = VariableSpec(name="aws0_100", band=1, asset_key="aws0_100")
+    ds_req = DatasetRequest(name="gnatsgo_rasters", variables=["aws0_100"], statistics=["mean"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"mean": [1.0, 2.0]}, index=["a", "b"])
+
+    with (
+        patch("hydro_param.pipeline.fetch_stac_cog") as mock_fetch,
+        patch("hydro_param.pipeline.save_to_geotiff"),
+        patch.object(ZonalProcessor, "process", return_value=mock_df),
+    ):
+        import numpy as np
+
+        mock_fetch.return_value = xr.DataArray(
+            np.ones((4, 4)),
+            dims=["y", "x"],
+            coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        )
+
+        results = _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+
+        # Verify asset_key was passed through
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs.kwargs["asset_key"] == "aws0_100"
+
+    assert "aws0_100" in results
+
+
+def test_process_batch_stac_cog_no_asset_key_passes_none(tmp_path: Path):
+    """_process_batch passes asset_key=None when VarSpec has no asset_key (e.g. 3DEP)."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import _process_batch
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="3dep-seamless",
+        crs="EPSG:4269",
+    )
+    var_spec = VariableSpec(name="elevation", band=1)
+    ds_req = DatasetRequest(name="dem_3dep_10m", variables=["elevation"], statistics=["mean"])
+
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets=[],
+    )
+
+    mock_df = pd.DataFrame({"mean": [100.0, 200.0]}, index=["a", "b"])
+
+    with (
+        patch("hydro_param.pipeline.fetch_stac_cog") as mock_fetch,
+        patch("hydro_param.pipeline.save_to_geotiff"),
+        patch.object(ZonalProcessor, "process", return_value=mock_df),
+    ):
+        import numpy as np
+
+        mock_fetch.return_value = xr.DataArray(
+            np.ones((4, 4)),
+            dims=["y", "x"],
+            coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        )
+
+        results = _process_batch(fabric, entry, ds_req, [var_spec], config, tmp_path)
+
+        # Verify asset_key=None when not specified (uses dataset-level default)
+        mock_fetch.assert_called_once()
+        call_kwargs = mock_fetch.call_args
+        assert call_kwargs.kwargs["asset_key"] is None
+
+    assert "elevation" in results
+
+
 # ---------------------------------------------------------------------------
 # Resume (manifest-based skip)
 # ---------------------------------------------------------------------------

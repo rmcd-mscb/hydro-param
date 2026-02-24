@@ -7,7 +7,11 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from hydro_param.data_access import _is_remote_url, build_climr_cat_dict, fetch_local_tiff
+from hydro_param.data_access import (
+    _is_remote_url,
+    build_climr_cat_dict,
+    fetch_local_tiff,
+)
 from hydro_param.dataset_registry import DatasetEntry
 
 
@@ -162,3 +166,108 @@ def test_fetch_local_tiff_remote_open_failure():
     with patch.object(rioxarray, "open_rasterio", side_effect=Exception("GDAL error")):
         with pytest.raises(RuntimeError, match="Failed to open remote raster.*polaris"):
             fetch_local_tiff(entry, bbox, dataset_name="polaris_30m")
+
+
+# ---------------------------------------------------------------------------
+# fetch_stac_cog: per-variable asset_key
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_stac_cog_uses_per_variable_asset_key():
+    """fetch_stac_cog uses asset_key parameter instead of entry.asset_key when provided."""
+    from hydro_param.data_access import fetch_stac_cog
+
+    rioxarray = pytest.importorskip("rioxarray")
+
+    squeezed = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+    )
+    mock_da = MagicMock()
+    mock_squeezed = MagicMock()
+    mock_da.squeeze.return_value = mock_squeezed
+    mock_squeezed.rio.crs = "EPSG:5070"
+    mock_squeezed.rio.clip_box.return_value = squeezed
+    mock_squeezed.size = 16
+
+    # Build a mock STAC item with per-variable assets (no 'data' key)
+    mock_asset = MagicMock()
+    mock_asset.href = "https://soils.blob.core.windows.net/gnatsgo/aws0_100.tif"
+    mock_item = MagicMock()
+    mock_item.id = "test_tile"
+    mock_item.properties = {}
+    mock_item.assets = {"aws0_100": mock_asset, "rootznemc": MagicMock()}
+
+    mock_search = MagicMock()
+    mock_search.item_collection.return_value = [mock_item]
+
+    mock_client = MagicMock()
+    mock_client.search.return_value = mock_search
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="gnatsgo-rasters",
+        crs="EPSG:5070",
+        asset_key="data",  # dataset-level default that would fail
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with (
+        patch("pystac_client.Client.open", return_value=mock_client),
+        patch.object(rioxarray, "open_rasterio", return_value=mock_da),
+    ):
+        # With per-variable asset_key, should succeed even though 'data' doesn't exist
+        result = fetch_stac_cog(entry, bbox, asset_key="aws0_100")
+
+    assert result is not None
+
+
+def test_fetch_stac_cog_falls_back_to_entry_asset_key():
+    """fetch_stac_cog uses entry.asset_key when asset_key parameter is None."""
+    from hydro_param.data_access import fetch_stac_cog
+
+    rioxarray = pytest.importorskip("rioxarray")
+
+    squeezed = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+    )
+    mock_da = MagicMock()
+    mock_squeezed = MagicMock()
+    mock_da.squeeze.return_value = mock_squeezed
+    mock_squeezed.rio.crs = "EPSG:4269"
+    mock_squeezed.rio.clip_box.return_value = squeezed
+    mock_squeezed.size = 16
+
+    mock_asset = MagicMock()
+    mock_asset.href = "https://example.com/dem.tif"
+    mock_item = MagicMock()
+    mock_item.id = "test_tile"
+    mock_item.properties = {}
+    mock_item.assets = {"data": mock_asset}
+
+    mock_search = MagicMock()
+    mock_search.item_collection.return_value = [mock_item]
+
+    mock_client = MagicMock()
+    mock_client.search.return_value = mock_search
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="3dep-seamless",
+        crs="EPSG:4269",
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with (
+        patch("pystac_client.Client.open", return_value=mock_client),
+        patch.object(rioxarray, "open_rasterio", return_value=mock_da),
+    ):
+        # No asset_key param, should use entry.asset_key ("data")
+        result = fetch_stac_cog(entry, bbox)
+
+    assert result is not None

@@ -172,6 +172,8 @@ DERIVATION_FUNCTIONS = {
 def fetch_stac_cog(
     entry: DatasetEntry,
     bbox: list[float],
+    *,
+    asset_key: str | None = None,
 ) -> xr.DataArray:
     """Query a STAC catalog and load COG(s) clipped to the bounding box.
 
@@ -184,6 +186,10 @@ def fetch_stac_cog(
         Registry entry with ``strategy="stac_cog"``.
     bbox : list[float]
         ``[west, south, east, north]`` in the dataset's CRS.
+    asset_key : str or None
+        Per-variable STAC asset key override. When provided, this is used
+        instead of ``entry.asset_key``. Required for collections like
+        ``gnatsgo-rasters`` where each variable is a separate asset.
 
     Returns
     -------
@@ -232,9 +238,10 @@ def fetch_stac_cog(
     logger.info("Found %d STAC items for bbox", len(items))
 
     # Load and mosaic tiles
+    resolved_key = asset_key or entry.asset_key
     arrays = []
     for item in items:
-        asset = item.assets[entry.asset_key]
+        asset = item.assets[resolved_key]
         da = cast(xr.DataArray, rioxarray.open_rasterio(asset.href, masked=True))
         da = da.squeeze("band", drop=True)
         try:
