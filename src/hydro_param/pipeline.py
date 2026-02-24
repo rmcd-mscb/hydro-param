@@ -137,6 +137,11 @@ def resolve_bbox(config: PipelineConfig) -> list[float]:
     list[float]
         ``[west, south, east, north]``.
     """
+    if config.domain is None:
+        raise ValueError(
+            "No domain configured. When domain is omitted, the pipeline uses "
+            "the fabric bounding box automatically."
+        )
     if config.domain.type == "bbox":
         return config.domain.bbox  # type: ignore[return-value]
     raise NotImplementedError(
@@ -162,8 +167,12 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
         fabric.crs,
     )
 
-    # Apply domain filter to spatially subset fabric
-    if config.domain.type == "bbox" and config.domain.bbox is not None:
+    # Apply domain filter to spatially subset fabric (optional)
+    if (
+        config.domain is not None
+        and config.domain.type == "bbox"
+        and config.domain.bbox is not None
+    ):
         from shapely.geometry import box
 
         # Config bbox is assumed EPSG:4326; reproject if fabric CRS differs.

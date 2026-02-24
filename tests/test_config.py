@@ -124,6 +124,18 @@ def test_target_fabric_requires_path_and_id():
         TargetFabricConfig(path="test.gpkg")  # missing id_field
 
 
+def test_domain_optional(tmp_path: Path):
+    """Pipeline config without domain uses full fabric extent."""
+    raw = {
+        "target_fabric": {"path": "data/catchments.gpkg", "id_field": "featureid"},
+        "datasets": [{"name": "dem_3dep_10m", "variables": ["elevation"]}],
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+    config = load_config(str(path))
+    assert config.domain is None
+
+
 def test_domain_bbox_requires_bbox_field():
     with pytest.raises(ValueError, match="bbox domain requires"):
         DomainConfig(type="bbox")

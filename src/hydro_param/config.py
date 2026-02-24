@@ -104,7 +104,7 @@ class PipelineConfig(BaseModel):
     """Top-level pipeline configuration."""
 
     target_fabric: TargetFabricConfig
-    domain: DomainConfig
+    domain: DomainConfig | None = None
     datasets: list[DatasetRequest]
     output: OutputConfig = OutputConfig()
     processing: ProcessingConfig = ProcessingConfig()

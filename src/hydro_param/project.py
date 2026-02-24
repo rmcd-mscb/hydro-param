@@ -116,12 +116,12 @@ target_fabric:
   id_field: "featureid"                  # Unique ID column in the fabric
   crs: "EPSG:4326"                       # CRS of the fabric file
 
-# --- Domain ---
-# Spatial extent for the analysis.
-# Supported types: bbox, huc2, huc4, gage.
-domain:
-  type: bbox
-  bbox: [-76.5, 38.5, -74.0, 42.6]      # [west, south, east, north] in EPSG:4326
+# --- Domain (optional) ---
+# By default, the pipeline uses the full extent of the target fabric.
+# Uncomment to restrict processing to a spatial subset:
+# domain:
+#   type: bbox
+#   bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] in EPSG:4326
 
 # --- Datasets ---
 # Each entry references a dataset from the registry by name.
