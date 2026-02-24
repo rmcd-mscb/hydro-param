@@ -53,6 +53,7 @@ from hydro_param.sir import (
     SIRVariableSchema,
     build_sir_schema,
     normalize_sir,
+    normalize_sir_temporal,
     validate_sir,
 )
 
@@ -943,6 +944,17 @@ def stage5_normalize_sir(
         id_field=config.target_fabric.id_field,
     )
     logger.info("  Normalized %d SIR files → %s", len(sir_files), sir_dir)
+
+    # Normalize temporal files
+    if stage4.temporal_files:
+        temporal_sir = normalize_sir_temporal(
+            temporal_files=stage4.temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=sir_dir,
+        )
+        sir_files.update(temporal_sir)
+        logger.info("  Normalized %d temporal SIR files", len(temporal_sir))
 
     strict = config.processing.sir_validation == "strict"
     warnings = validate_sir(sir_files, schema, strict=strict)
