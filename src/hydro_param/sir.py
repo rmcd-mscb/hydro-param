@@ -451,6 +451,10 @@ def validate_sir(
         matching = [s for s in schema if s.canonical_name == cname]
 
         for col in df.columns:
+            # For categorical entries, only validate fraction columns
+            if matching and matching[0].categorical and "_frac_" not in col:
+                continue
+
             values = df[col].values.astype(np.float64)
 
             # NaN coverage: warn only if 100% NaN

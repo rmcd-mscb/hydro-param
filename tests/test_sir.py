@@ -797,3 +797,39 @@ class TestValidateSIR:
         ]
         warnings = validate_sir({}, schema)
         assert any(w.check_type == "missing" for w in warnings)
+
+    def test_categorical_count_column_not_range_checked(self, tmp_path: Path) -> None:
+        """Count columns in categorical CSVs should not trigger range warnings."""
+        import pandas as pd
+
+        from hydro_param.sir import SIRVariableSchema, validate_sir
+
+        # Simulate NLCD categorical output with fraction + count columns
+        df = pd.DataFrame(
+            {
+                "lndcov_frac_11": [0.3, 0.5],
+                "lndcov_frac_21": [0.7, 0.5],
+                "count": [1000, 2000],  # pixel counts — NOT fractions
+            },
+            index=pd.Index([1, 2], name="nhm_id"),
+        )
+        path = tmp_path / "lndcov_frac.csv"
+        df.to_csv(path)
+
+        schema = [
+            SIRVariableSchema(
+                canonical_name="lndcov_frac",
+                source_name="LndCov",
+                source_units="",
+                canonical_units="",
+                long_name="Land Cover",
+                categorical=True,
+                valid_range=(0.0, 1.0),
+                conversion=None,
+            )
+        ]
+
+        warnings = validate_sir({"lndcov_frac": path}, schema)
+        # count column values [1000, 2000] should NOT produce range warnings
+        range_warnings = [w for w in warnings if w.check_type == "range"]
+        assert len(range_warnings) == 0
