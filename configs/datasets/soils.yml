@@ -165,7 +165,9 @@ datasets:
     strategy: stac_cog
     catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
     collection: "gnatsgo-rasters"
-    gsd: 30
+    # Note: gsd omitted — gNATSGO STAC items don't expose gsd in properties
+    # Note: no dataset-level asset_key — gNATSGO has no 'data' asset.
+    # Each variable MUST set its own asset_key.
     crs: "EPSG:5070"
     x_coord: "x"
     y_coord: "y"

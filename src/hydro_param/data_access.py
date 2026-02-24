@@ -172,6 +172,8 @@ DERIVATION_FUNCTIONS = {
 def fetch_stac_cog(
     entry: DatasetEntry,
     bbox: list[float],
+    *,
+    asset_key: str | None = None,
 ) -> xr.DataArray:
     """Query a STAC catalog and load COG(s) clipped to the bounding box.
 
@@ -184,6 +186,11 @@ def fetch_stac_cog(
         Registry entry with ``strategy="stac_cog"``.
     bbox : list[float]
         ``[west, south, east, north]`` in the dataset's CRS.
+    asset_key : str or None
+        Per-variable STAC asset key override. When not ``None``, this is
+        used instead of ``entry.asset_key``. Necessary for collections
+        like ``gnatsgo-rasters`` where each variable is a separate named
+        asset (i.e., there is no single ``data`` asset).
 
     Returns
     -------
@@ -232,9 +239,25 @@ def fetch_stac_cog(
     logger.info("Found %d STAC items for bbox", len(items))
 
     # Load and mosaic tiles
+    resolved_key = asset_key if asset_key is not None else entry.asset_key
+    logger.debug(
+        "Using asset key '%s' (override=%s, default=%s)",
+        resolved_key,
+        asset_key,
+        entry.asset_key,
+    )
     arrays = []
     for item in items:
-        asset = item.assets[entry.asset_key]
+        try:
+            asset = item.assets[resolved_key]
+        except KeyError:
+            available = sorted(k for k, a in item.assets.items() if a.roles and "data" in a.roles)
+            raise KeyError(
+                f"Asset key '{resolved_key}' not found in STAC item '{item.id}' "
+                f"(collection='{entry.collection}'). "
+                f"Available data assets: {available}. "
+                f"Check the 'asset_key' field in your dataset registry."
+            ) from None
         da = cast(xr.DataArray, rioxarray.open_rasterio(asset.href, masked=True))
         da = da.squeeze("band", drop=True)
         try:

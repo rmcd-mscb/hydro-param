@@ -304,10 +304,11 @@ def _process_batch(
         fetch_bbox: list[float],
         *,
         variable_source: str | None = None,
+        asset_key: str | None = None,
     ) -> xr.DataArray:
         """Dispatch to the correct fetch function based on strategy."""
         if dataset_entry.strategy == "stac_cog":
-            return fetch_stac_cog(dataset_entry, fetch_bbox)
+            return fetch_stac_cog(dataset_entry, fetch_bbox, asset_key=asset_key)
         if dataset_entry.strategy == "local_tiff":
             return fetch_local_tiff(
                 dataset_entry,
@@ -324,7 +325,11 @@ def _process_batch(
 
     for i, var_spec in enumerate(var_specs):
         if isinstance(var_spec, DerivedVariableSpec):
-            # Load source once, then derive
+            # Load source once, then derive.
+            # Note: asset_key is not passed here — derived variables currently
+            # only exist on single-asset datasets (e.g. 3DEP slope/aspect from
+            # elevation). If derived vars are added to per-asset datasets like
+            # gNATSGO, the source VarSpec's asset_key will need to be resolved.
             if var_spec.source not in source_cache:
                 source_cache[var_spec.source] = _fetch(entry, bbox)
 
@@ -341,7 +346,13 @@ def _process_batch(
         else:
             # Raw variable: fetch directly
             # Per-variable source (e.g. POLARIS VRTs) overrides dataset-level source
-            da = _fetch(entry, bbox, variable_source=var_spec.source_override)
+            # Per-variable asset_key (e.g. gNATSGO) overrides dataset-level asset_key
+            da = _fetch(
+                entry,
+                bbox,
+                variable_source=var_spec.source_override,
+                asset_key=var_spec.asset_key,
+            )
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
 
