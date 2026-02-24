@@ -58,6 +58,21 @@ class TestUnitAbbreviation:
     def test_empty_dimensionless(self) -> None:
         assert unit_abbreviation("") == ""
 
+    def test_kelvin(self) -> None:
+        assert unit_abbreviation("K") == "C"
+
+    def test_millimeters(self) -> None:
+        assert unit_abbreviation("mm") == "mm"
+
+    def test_watts_per_m2(self) -> None:
+        assert unit_abbreviation("W/m2") == "W_m2"
+
+    def test_kg_per_kg(self) -> None:
+        assert unit_abbreviation("kg/kg") == "kg_kg"
+
+    def test_meters_per_second(self) -> None:
+        assert unit_abbreviation("m/s") == "m_s"
+
     def test_unknown_unit_passthrough(self) -> None:
         # Unknown units: slugify (replace / with _, strip special chars)
         assert unit_abbreviation("kg/m2") == "kg_m2"
@@ -88,6 +103,9 @@ class TestCanonicalName:
 
     def test_uppercase_base_lowered(self) -> None:
         assert canonical_name("FctImp", "%", "mean") == "fctimp_pct_mean"
+
+    def test_temperature_kelvin_converts_to_celsius(self) -> None:
+        assert canonical_name("tmmx", "K", "mean") == "tmmx_C_mean"
 
     def test_categorical_stat(self) -> None:
         assert canonical_name("LndCov", "", "majority") == "lndcov_majority"
@@ -325,6 +343,26 @@ class TestApplyConversion:
         assert_allclose(result[0], 10.0)
         assert np.isnan(result[1])
         assert_allclose(result[2], 100.0)
+
+    def test_k_to_c(self) -> None:
+        import numpy as np
+
+        from hydro_param.sir import apply_conversion
+
+        values = np.array([273.15, 283.15, 293.15])
+        result = apply_conversion(values, "K_to_C")
+        np.testing.assert_allclose(result, [0.0, 10.0, 20.0])
+
+    def test_k_to_c_with_nan(self) -> None:
+        import numpy as np
+
+        from hydro_param.sir import apply_conversion
+
+        values = np.array([273.15, np.nan, 293.15])
+        result = apply_conversion(values, "K_to_C")
+        np.testing.assert_allclose(result[0], 0.0)
+        assert np.isnan(result[1])
+        np.testing.assert_allclose(result[2], 20.0)
 
     def test_unknown_conversion_raises(self) -> None:
         import numpy as np

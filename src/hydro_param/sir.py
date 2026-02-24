@@ -39,6 +39,11 @@ _UNIT_TABLE: dict[str, tuple[str, str, str | None]] = {
     "log10(%)": ("pct", "%", "log10_to_linear"),
     "log10(kPa^-1)": ("kPa_inv", "kPa^-1", "log10_to_linear"),
     "day_of_year": ("doy", "day_of_year", None),
+    "K": ("C", "°C", "K_to_C"),
+    "mm": ("mm", "mm", None),
+    "W/m2": ("W_m2", "W/m2", None),
+    "kg/kg": ("kg_kg", "kg/kg", None),
+    "m/s": ("m_s", "m/s", None),
 }
 
 
@@ -215,6 +220,8 @@ def apply_conversion(
         return values
     if conversion == "log10_to_linear":
         return np.power(10.0, values)
+    if conversion == "K_to_C":
+        return values - 273.15
     raise ValueError(f"Unknown conversion: {conversion!r}")
 
 
