@@ -121,6 +121,7 @@ class SIRVariableSchema:
     categorical: bool
     valid_range: tuple[float, float] | None
     conversion: str | None
+    temporal: bool = False
 
 
 def build_sir_schema(
@@ -140,7 +141,9 @@ def build_sir_schema(
         One schema entry per expected SIR output column.
     """
     schema: list[SIRVariableSchema] = []
-    for _entry, ds_req, var_specs in resolved:
+    for entry, ds_req, var_specs in resolved:
+        is_temporal = hasattr(entry, "temporal") and entry.temporal
+
         # Determine years for multi-year key suffixes
         if isinstance(ds_req.year, list):
             years: list[int | None] = list(ds_req.year)
@@ -173,6 +176,7 @@ def build_sir_schema(
                             categorical=True,
                             valid_range=(0.0, 1.0),
                             conversion=conversion,
+                            temporal=is_temporal,
                         )
                     )
             else:
@@ -192,6 +196,7 @@ def build_sir_schema(
                                 categorical=False,
                                 valid_range=None,
                                 conversion=conversion,
+                                temporal=is_temporal,
                             )
                         )
     return schema

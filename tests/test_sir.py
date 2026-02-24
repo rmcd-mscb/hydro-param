@@ -130,6 +130,37 @@ class TestSIRVariableSchema:
         assert schema.canonical_name == "elevation_m_mean"
         assert schema.conversion is None
 
+    def test_temporal_field_default_false(self) -> None:
+        from hydro_param.sir import SIRVariableSchema
+
+        s = SIRVariableSchema(
+            canonical_name="test",
+            source_name="test",
+            source_units="m",
+            canonical_units="m",
+            long_name="Test",
+            categorical=False,
+            valid_range=None,
+            conversion=None,
+        )
+        assert s.temporal is False
+
+    def test_temporal_field_explicit(self) -> None:
+        from hydro_param.sir import SIRVariableSchema
+
+        s = SIRVariableSchema(
+            canonical_name="test",
+            source_name="test",
+            source_units="m",
+            canonical_units="m",
+            long_name="Test",
+            categorical=False,
+            valid_range=None,
+            conversion=None,
+            temporal=True,
+        )
+        assert s.temporal is True
+
     def test_log_transform_schema(self) -> None:
         from hydro_param.sir import SIRVariableSchema
 
@@ -289,6 +320,48 @@ class TestBuildSIRSchema:
         schema = build_sir_schema([(entry, ds_req, var_specs)])
         names = {s.canonical_name for s in schema}
         assert names == {"elevation_m_mean_2020", "elevation_m_mean_2021"}
+
+    def test_temporal_dataset_marked(self) -> None:
+        """Schema entries from temporal datasets have temporal=True."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[VariableSpec(name="pr", units="mm", long_name="Precipitation")],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs = [VariableSpec(name="pr", units="mm", long_name="Precipitation")]
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+        assert len(schema) == 1
+        assert schema[0].temporal is True
+
+    def test_static_dataset_not_temporal(self) -> None:
+        """Schema entries from static datasets have temporal=False."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = self._make_entry(
+            variables=[VariableSpec(name="elevation", units="m", long_name="Elevation")]
+        )
+        ds_req = DatasetRequest(name="test", variables=["elevation"], statistics=["mean"])
+        var_specs = [VariableSpec(name="elevation", units="m", long_name="Elevation")]
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+        assert len(schema) == 1
+        assert schema[0].temporal is False
 
     def test_dimensionless_variable(self) -> None:
         from hydro_param.config import DatasetRequest
