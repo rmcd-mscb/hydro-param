@@ -55,6 +55,7 @@ from hydro_param.sir import (
     SIRVariableSchema,
     build_sir_schema,
     normalize_sir,
+    normalize_sir_temporal,
     validate_sir,
 )
 
@@ -138,6 +139,11 @@ def resolve_bbox(config: PipelineConfig) -> list[float]:
     list[float]
         ``[west, south, east, north]``.
     """
+    if config.domain is None:
+        raise ValueError(
+            "No domain configured. When domain is omitted, the pipeline uses "
+            "the fabric bounding box automatically."
+        )
     if config.domain.type == "bbox":
         return config.domain.bbox  # type: ignore[return-value]
     raise NotImplementedError(
@@ -163,8 +169,12 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
         fabric.crs,
     )
 
-    # Apply domain filter to spatially subset fabric
-    if config.domain.type == "bbox" and config.domain.bbox is not None:
+    # Apply domain filter to spatially subset fabric (optional)
+    if (
+        config.domain is not None
+        and config.domain.type == "bbox"
+        and config.domain.bbox is not None
+    ):
         from shapely.geometry import box
 
         # Config bbox is assumed EPSG:4326; reproject if fabric CRS differs.
@@ -966,6 +976,17 @@ def stage5_normalize_sir(
         id_field=config.target_fabric.id_field,
     )
     logger.info("  Normalized %d SIR files → %s", len(sir_files), sir_dir)
+
+    # Normalize temporal files
+    if stage4.temporal_files:
+        temporal_sir = normalize_sir_temporal(
+            temporal_files=stage4.temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=sir_dir,
+        )
+        sir_files.update(temporal_sir)
+        logger.info("  Normalized %d temporal SIR files", len(temporal_sir))
 
     strict = config.processing.sir_validation == "strict"
     warnings = validate_sir(sir_files, schema, strict=strict)

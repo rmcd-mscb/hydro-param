@@ -8,10 +8,6 @@ target_fabric:
   path: data/pywatershed_gis/drb_2yr/nhru.gpkg
   id_field: nhm_id
 
-domain:
-  type: bbox
-  bbox: [-75.8, 39.6, -74.4, 42.5]
-
 datasets:
   # 3DEP 10m DEM — elevation, slope, aspect
   - name: dem_3dep_10m

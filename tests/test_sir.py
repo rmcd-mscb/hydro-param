@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from hydro_param.dataset_registry import (
     DatasetEntry,
     DerivedVariableSpec,
@@ -58,6 +60,21 @@ class TestUnitAbbreviation:
     def test_empty_dimensionless(self) -> None:
         assert unit_abbreviation("") == ""
 
+    def test_kelvin(self) -> None:
+        assert unit_abbreviation("K") == "C"
+
+    def test_millimeters(self) -> None:
+        assert unit_abbreviation("mm") == "mm"
+
+    def test_watts_per_m2(self) -> None:
+        assert unit_abbreviation("W/m2") == "W_m2"
+
+    def test_kg_per_kg(self) -> None:
+        assert unit_abbreviation("kg/kg") == "kg_kg"
+
+    def test_meters_per_second(self) -> None:
+        assert unit_abbreviation("m/s") == "m_s"
+
     def test_unknown_unit_passthrough(self) -> None:
         # Unknown units: slugify (replace / with _, strip special chars)
         assert unit_abbreviation("kg/m2") == "kg_m2"
@@ -89,6 +106,9 @@ class TestCanonicalName:
     def test_uppercase_base_lowered(self) -> None:
         assert canonical_name("FctImp", "%", "mean") == "fctimp_pct_mean"
 
+    def test_temperature_kelvin_converts_to_celsius(self) -> None:
+        assert canonical_name("tmmx", "K", "mean") == "tmmx_C_mean"
+
     def test_categorical_stat(self) -> None:
         assert canonical_name("LndCov", "", "majority") == "lndcov_majority"
 
@@ -111,6 +131,37 @@ class TestSIRVariableSchema:
         )
         assert schema.canonical_name == "elevation_m_mean"
         assert schema.conversion is None
+
+    def test_temporal_field_default_false(self) -> None:
+        from hydro_param.sir import SIRVariableSchema
+
+        s = SIRVariableSchema(
+            canonical_name="test",
+            source_name="test",
+            source_units="m",
+            canonical_units="m",
+            long_name="Test",
+            categorical=False,
+            valid_range=None,
+            conversion=None,
+        )
+        assert s.temporal is False
+
+    def test_temporal_field_explicit(self) -> None:
+        from hydro_param.sir import SIRVariableSchema
+
+        s = SIRVariableSchema(
+            canonical_name="test",
+            source_name="test",
+            source_units="m",
+            canonical_units="m",
+            long_name="Test",
+            categorical=False,
+            valid_range=None,
+            conversion=None,
+            temporal=True,
+        )
+        assert s.temporal is True
 
     def test_log_transform_schema(self) -> None:
         from hydro_param.sir import SIRVariableSchema
@@ -272,6 +323,48 @@ class TestBuildSIRSchema:
         names = {s.canonical_name for s in schema}
         assert names == {"elevation_m_mean_2020", "elevation_m_mean_2021"}
 
+    def test_temporal_dataset_marked(self) -> None:
+        """Schema entries from temporal datasets have temporal=True."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[VariableSpec(name="pr", units="mm", long_name="Precipitation")],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs = [VariableSpec(name="pr", units="mm", long_name="Precipitation")]
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+        assert len(schema) == 1
+        assert schema[0].temporal is True
+
+    def test_static_dataset_not_temporal(self) -> None:
+        """Schema entries from static datasets have temporal=False."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = self._make_entry(
+            variables=[VariableSpec(name="elevation", units="m", long_name="Elevation")]
+        )
+        ds_req = DatasetRequest(name="test", variables=["elevation"], statistics=["mean"])
+        var_specs = [VariableSpec(name="elevation", units="m", long_name="Elevation")]
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+        assert len(schema) == 1
+        assert schema[0].temporal is False
+
     def test_dimensionless_variable(self) -> None:
         from hydro_param.config import DatasetRequest
         from hydro_param.dataset_registry import VariableSpec
@@ -295,7 +388,6 @@ class TestApplyConversion:
     """Tests for SIR unit conversion application."""
 
     def test_no_conversion(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -305,7 +397,6 @@ class TestApplyConversion:
         assert_allclose(result, values)
 
     def test_log10_to_linear(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -315,7 +406,6 @@ class TestApplyConversion:
         assert_allclose(result, [1.0, 10.0, 100.0])
 
     def test_log10_to_linear_with_nan(self) -> None:
-        import numpy as np
         from numpy.testing import assert_allclose
 
         from hydro_param.sir import apply_conversion
@@ -326,8 +416,23 @@ class TestApplyConversion:
         assert np.isnan(result[1])
         assert_allclose(result[2], 100.0)
 
+    def test_k_to_c(self) -> None:
+        from hydro_param.sir import apply_conversion
+
+        values = np.array([273.15, 283.15, 293.15])
+        result = apply_conversion(values, "K_to_C")
+        np.testing.assert_allclose(result, [0.0, 10.0, 20.0])
+
+    def test_k_to_c_with_nan(self) -> None:
+        from hydro_param.sir import apply_conversion
+
+        values = np.array([273.15, np.nan, 293.15])
+        result = apply_conversion(values, "K_to_C")
+        np.testing.assert_allclose(result[0], 0.0)
+        assert np.isnan(result[1])
+        np.testing.assert_allclose(result[2], 20.0)
+
     def test_unknown_conversion_raises(self) -> None:
-        import numpy as np
         import pytest
 
         from hydro_param.sir import apply_conversion
@@ -514,7 +619,6 @@ class TestNormalizeSIR:
 
     def test_nan_values_preserved(self, tmp_path: Path) -> None:
         """NaN values pass through normalization unchanged."""
-        import numpy as np
         import pandas as pd
 
         from hydro_param.sir import SIRVariableSchema, normalize_sir
@@ -584,8 +688,6 @@ class TestValidateSIR:
         assert warnings == []
 
     def test_all_nan_warns(self, tmp_path: Path) -> None:
-        import numpy as np
-
         from hydro_param.sir import SIRVariableSchema, validate_sir
 
         path = self._write_csv(tmp_path, "elevation_m_mean", [np.nan, np.nan], [1, 2])
@@ -607,7 +709,6 @@ class TestValidateSIR:
 
     def test_partial_nan_no_warning(self, tmp_path: Path) -> None:
         """Partial NaN coverage is expected (e.g., gridMET edge coverage)."""
-        import numpy as np
 
         from hydro_param.sir import SIRVariableSchema, validate_sir
 
@@ -647,7 +748,6 @@ class TestValidateSIR:
         assert any(w.check_type == "range" for w in warnings)
 
     def test_strict_mode_raises(self, tmp_path: Path) -> None:
-        import numpy as np
         import pytest
 
         from hydro_param.sir import SIRValidationError, SIRVariableSchema, validate_sir
@@ -686,3 +786,277 @@ class TestValidateSIR:
         ]
         warnings = validate_sir({}, schema)
         assert any(w.check_type == "missing" for w in warnings)
+
+    def test_netcdf_files_skipped(self, tmp_path: Path) -> None:
+        """Temporal NetCDF files are skipped by CSV-only validation."""
+        import xarray as xr
+
+        from hydro_param.sir import SIRVariableSchema, validate_sir
+
+        # Write a NetCDF that would crash pd.read_csv if not skipped
+        ds = xr.Dataset({"tmmx_C_mean": (["time", "nhm_id"], [[26.85, 36.85]])})
+        nc_path = tmp_path / "tmmx_C_mean_2020.nc"
+        ds.to_netcdf(nc_path)
+
+        schema = [
+            SIRVariableSchema(
+                canonical_name="tmmx_C_mean",
+                source_name="tmmx",
+                source_units="K",
+                canonical_units="°C",
+                long_name="daily_maximum_temperature",
+                categorical=False,
+                valid_range=None,
+                conversion="K_to_C",
+                temporal=True,
+            )
+        ]
+        # Should not crash — .nc files are skipped
+        warnings = validate_sir({"tmmx_C_mean_2020": nc_path}, schema)
+        # The only warning should be "missing" since schema expects "tmmx_C_mean"
+        # but sir_files has "tmmx_C_mean_2020"
+        assert all(w.check_type == "missing" for w in warnings)
+
+    def test_categorical_count_column_not_range_checked(self, tmp_path: Path) -> None:
+        """Count columns in categorical CSVs should not trigger range warnings."""
+        import pandas as pd
+
+        from hydro_param.sir import SIRVariableSchema, validate_sir
+
+        # Simulate NLCD categorical output with fraction + count columns
+        df = pd.DataFrame(
+            {
+                "lndcov_frac_11": [0.3, 0.5],
+                "lndcov_frac_21": [0.7, 0.5],
+                "count": [1000, 2000],  # pixel counts — NOT fractions
+            },
+            index=pd.Index([1, 2], name="nhm_id"),
+        )
+        path = tmp_path / "lndcov_frac.csv"
+        df.to_csv(path)
+
+        schema = [
+            SIRVariableSchema(
+                canonical_name="lndcov_frac",
+                source_name="LndCov",
+                source_units="",
+                canonical_units="",
+                long_name="Land Cover",
+                categorical=True,
+                valid_range=(0.0, 1.0),
+                conversion=None,
+            )
+        ]
+
+        warnings = validate_sir({"lndcov_frac": path}, schema)
+        # count column values [1000, 2000] should NOT produce range warnings
+        range_warnings = [w for w in warnings if w.check_type == "range"]
+        assert len(range_warnings) == 0
+
+
+class TestNormalizeSIRTemporal:
+    """Tests for normalize_sir_temporal()."""
+
+    def test_renames_variables_and_converts_units(self, tmp_path: Path) -> None:
+        """Temporal normalization renames long names to canonical and converts K to °C."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        # Create a synthetic temporal NetCDF with gdptools-style long names
+        ds = xr.Dataset(
+            {
+                "daily_maximum_temperature": (
+                    ["time", "nhm_id"],
+                    np.array([[300.0, 310.0], [305.0, 315.0]]),
+                ),
+                "precipitation_amount": (
+                    ["time", "nhm_id"],
+                    np.array([[5.0, 10.0], [3.0, 7.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=2),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "gridmet_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        temporal_files = {"gridmet_2020": nc_path}
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
+                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["tmmx", "pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Should have produced 2 files (one per variable)
+        assert len(result) == 2
+
+        # Check temperature was converted K -> °C
+        tmmx_keys = [k for k in result if "tmmx" in k]
+        assert len(tmmx_keys) == 1
+        tmmx_ds = xr.open_dataset(result[tmmx_keys[0]])
+        tmmx_var = [v for v in tmmx_ds.data_vars][0]
+        np.testing.assert_allclose(tmmx_ds[tmmx_var].values[0], [300.0 - 273.15, 310.0 - 273.15])
+        tmmx_ds.close()
+
+        # Check precipitation passthrough (no conversion)
+        pr_keys = [k for k in result if "pr" in k]
+        assert len(pr_keys) == 1
+        pr_ds = xr.open_dataset(result[pr_keys[0]])
+        pr_var = [v for v in pr_ds.data_vars][0]
+        np.testing.assert_allclose(pr_ds[pr_var].values[0], [5.0, 10.0])
+        pr_ds.close()
+
+    def test_multi_year_produces_separate_files(self, tmp_path: Path) -> None:
+        """Multi-year temporal files produce year-suffixed output keys."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+
+        # Create 2 year files with the same variable
+        for year in [2020, 2021]:
+            ds = xr.Dataset(
+                {
+                    "daily_maximum_temperature": (
+                        ["time", "nhm_id"],
+                        np.array([[300.0 + year - 2020, 310.0]]),
+                    ),
+                },
+                coords={
+                    "time": pd.date_range(f"{year}-01-01", periods=1),
+                    "nhm_id": [1, 2],
+                },
+            )
+            ds.to_netcdf(input_dir / f"gridmet_{year}.nc")
+
+        temporal_files = {
+            "gridmet_2020": input_dir / "gridmet_2020.nc",
+            "gridmet_2021": input_dir / "gridmet_2021.nc",
+        }
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["tmmx"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2021-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Should have 2 separate output keys with year suffixes
+        assert "tmmx_C_mean_2020" in result
+        assert "tmmx_C_mean_2021" in result
+        assert result["tmmx_C_mean_2020"] != result["tmmx_C_mean_2021"]
+
+    def test_skips_unknown_variables(self, tmp_path: Path) -> None:
+        """Variables not in schema are skipped with a warning."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        ds = xr.Dataset(
+            {
+                "unknown_variable": (
+                    ["time", "nhm_id"],
+                    np.array([[1.0, 2.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "gridmet_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        temporal_files = {"gridmet_2020": nc_path}
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Unknown variable should be skipped — no output files
+        assert len(result) == 0

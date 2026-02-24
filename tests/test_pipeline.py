@@ -523,6 +523,17 @@ def test_resolve_bbox_unsupported_type():
         resolve_bbox(config)
 
 
+def test_resolve_bbox_no_domain():
+    """resolve_bbox raises ValueError when domain is None."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets=[],
+    )
+    assert config.domain is None
+    with pytest.raises(ValueError, match="No domain configured"):
+        resolve_bbox(config)
+
+
 # ---------------------------------------------------------------------------
 # _buffered_bbox
 # ---------------------------------------------------------------------------
@@ -1957,6 +1968,105 @@ class TestPipelineResultSIR:
         )
         raw = result.load_raw_sir()
         assert "elevation" in raw.data_vars
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: temporal SIR normalization integration
+# ---------------------------------------------------------------------------
+
+
+def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
+    """stage5_normalize_sir calls normalize_sir_temporal for temporal files."""
+    from unittest.mock import MagicMock, patch
+
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.pipeline import stage5_normalize_sir
+
+    # Create minimal config mock
+    config = MagicMock()
+    config.output.path = tmp_path
+    config.target_fabric.id_field = "nhm_id"
+    config.processing.sir_validation = "tolerant"
+
+    # Create stage4 results with a temporal file
+    temporal_path = tmp_path / "climate" / "gridmet_2020_temporal.nc"
+    temporal_path.parent.mkdir(parents=True)
+    temporal_path.touch()
+
+    stage4 = Stage4Results(
+        static_files={},
+        temporal_files={"gridmet_2020": temporal_path},
+    )
+
+    # Minimal resolved
+    entry = DatasetEntry(
+        strategy="climr_cat",
+        catalog_id="gridmet",
+        temporal=True,
+        t_coord="day",
+        variables=[VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature")],
+        category="climate",
+    )
+    ds_req = DatasetRequest(
+        name="gridmet",
+        variables=["tmmx"],
+        statistics=["mean"],
+        time_period=["2020-01-01", "2020-12-31"],
+    )
+    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec]]] = [
+        (entry, ds_req, list(entry.variables))
+    ]
+
+    # Mock normalize_sir_temporal to return a known result
+    mock_temporal_result = {"tmmx_C_mean": tmp_path / "sir" / "tmmx_C_mean.nc"}
+
+    with (
+        patch("hydro_param.pipeline.normalize_sir") as mock_static,
+        patch("hydro_param.pipeline.normalize_sir_temporal") as mock_temporal,
+        patch("hydro_param.pipeline.validate_sir") as mock_validate,
+    ):
+        mock_static.return_value = {}
+        mock_temporal.return_value = mock_temporal_result
+        mock_validate.return_value = []
+
+        sir_files, _schema, _warnings = stage5_normalize_sir(
+            stage4,
+            resolved,
+            config,  # type: ignore[arg-type]
+        )
+
+        # normalize_sir_temporal was called
+        mock_temporal.assert_called_once()
+
+        # Result includes temporal files
+        assert "tmmx_C_mean" in sir_files
+
+
+def test_stage5_skips_temporal_when_no_temporal_files(tmp_path: Path) -> None:
+    """stage5_normalize_sir does not call normalize_sir_temporal when empty."""
+    from unittest.mock import MagicMock, patch
+
+    from hydro_param.pipeline import stage5_normalize_sir
+
+    config = MagicMock()
+    config.output.path = tmp_path
+    config.target_fabric.id_field = "nhm_id"
+    config.processing.sir_validation = "tolerant"
+
+    stage4 = Stage4Results(static_files={}, temporal_files={})
+
+    with (
+        patch("hydro_param.pipeline.normalize_sir") as mock_static,
+        patch("hydro_param.pipeline.normalize_sir_temporal") as mock_temporal,
+        patch("hydro_param.pipeline.validate_sir") as mock_validate,
+    ):
+        mock_static.return_value = {}
+        mock_validate.return_value = []
+
+        stage5_normalize_sir(stage4, [], config)  # type: ignore[arg-type]
+
+        mock_temporal.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

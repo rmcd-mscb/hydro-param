@@ -141,7 +141,6 @@ class TestGeneratePipelineTemplate:
         parsed = yaml.safe_load(content)
         assert parsed is not None
         assert "target_fabric" in parsed
-        assert "domain" in parsed
         assert "datasets" in parsed
         assert "output" in parsed
         assert "processing" in parsed
