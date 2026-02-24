@@ -1,7 +1,7 @@
 """SIR normalization: canonical naming, unit conversion, and schema validation.
 
 The Standardized Internal Representation (SIR) normalizes raw gdptools output
-into self-documenting variable names with canonical SI units. See
+into self-documenting variable names with canonical units. See
 docs/plans/2026-02-23-sir-normalization-design.md for the full design.
 """
 
@@ -251,6 +251,7 @@ def normalize_sir(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     sir_files: dict[str, Path] = {}
+    skipped_variables: list[str] = []
 
     # Index schema by source_name for lookup
     schema_by_source: dict[str, list[SIRVariableSchema]] = {}
@@ -275,6 +276,7 @@ def normalize_sir(
         entries = schema_by_source.get(base_source, [])
         if not entries:
             logger.warning("No SIR schema entry for raw variable '%s' — skipping", raw_key)
+            skipped_variables.append(raw_key)
             continue
 
         for entry in entries:
@@ -296,7 +298,15 @@ def normalize_sir(
                 if rename_map:
                     out_df = raw_df[list(rename_map.keys())].rename(columns=rename_map)
                 else:
-                    out_df = raw_df.copy()
+                    logger.warning(
+                        "No fraction columns matching prefix '%s_' found in %s "
+                        "(available: %s) — skipping categorical variable",
+                        prefix,
+                        raw_path.name,
+                        list(raw_df.columns),
+                    )
+                    skipped_variables.append(entry.canonical_name)
+                    continue
                 out_path = output_dir / f"{entry.canonical_name}.csv"
                 out_df.to_csv(out_path)
                 sir_files[entry.canonical_name] = out_path
@@ -321,6 +331,12 @@ def normalize_sir(
                     # Try without year suffix
                     alt_col = f"{base_source}_{stat}" if stat != "mean" else base_source
                     if alt_col in raw_df.columns:
+                        logger.debug(
+                            "Column '%s' not found in %s, using fallback '%s'",
+                            source_col,
+                            raw_path.name,
+                            alt_col,
+                        )
                         source_col = alt_col
                     else:
                         logger.warning(
@@ -329,6 +345,7 @@ def normalize_sir(
                             raw_path.name,
                             list(raw_df.columns),
                         )
+                        skipped_variables.append(cname)
                         continue
 
                 values = raw_df[source_col].values.astype(np.float64)
@@ -346,6 +363,13 @@ def normalize_sir(
                 out_df.to_csv(out_path)
                 sir_files[cname] = out_path
                 logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
+
+    if skipped_variables:
+        logger.warning(
+            "SIR normalization skipped %d variable(s): %s",
+            len(skipped_variables),
+            skipped_variables,
+        )
 
     return sir_files
 

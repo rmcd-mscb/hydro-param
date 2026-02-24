@@ -552,13 +552,13 @@ class PywatershedDerivation:
         Supports three input modes:
 
         1. **Categorical fractions** (preferred): SIR contains columns
-           like ``LndCov_11``, ``LndCov_21``, etc. from gdptools
-           ``ZonalGen(categorical=True)``.  The majority class is
+           like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
+           normalized categorical output.  The majority class is
            computed via argmax.
         2. **Single majority value**: ``land_cover`` or
            ``land_cover_majority`` containing the dominant NLCD class.
-        3. **Impervious/canopy**: ``impervious`` (0-100%) and
-           ``tree_canopy`` (0-100%).
+        3. **Impervious/canopy**: ``fctimp_pct_mean`` (0-100%) and
+           ``tree_canopy_pct_mean`` (0-100%).
         """
         # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
         lc_var = None
