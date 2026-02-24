@@ -455,3 +455,68 @@ def test_save_to_geotiff_does_not_copy_array(tmp_path: Path):
     assert da.attrs["_FillValue"] == -9999.0
     assert da.attrs["units"] == "meters"
     assert out_path.exists()
+
+
+def test_fetch_nhgf_stac_cog_basic():
+    """fetch_nhgf_stac_cog fetches a COG and returns a DataArray."""
+    from unittest.mock import MagicMock, patch
+
+    import numpy as np
+    import xarray as xr
+
+    from hydro_param.data_access import fetch_nhgf_stac_cog
+
+    mock_collection = MagicMock(name="pystac.Collection")
+    mock_da = xr.DataArray(
+        np.ones((3, 3)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0]},
+    )
+    mock_nhgf = MagicMock(name="NHGFStacTiffData")
+    mock_nhgf.ds = mock_da
+
+    with (
+        patch("gdptools.helpers.get_stac_collection", return_value=mock_collection),
+        patch("gdptools.NHGFStacTiffData", return_value=mock_nhgf) as p_nhgf,
+    ):
+        result = fetch_nhgf_stac_cog(
+            collection_id="nlcd-LndCov",
+            variable_name="LndCov",
+            year=2021,
+        )
+
+    assert isinstance(result, xr.DataArray)
+    assert result.shape == (3, 3)
+    # Verify year was passed as time_period
+    nhgf_kwargs = p_nhgf.call_args.kwargs
+    assert nhgf_kwargs["source_time_period"] == ["2021-01-01", "2021-12-31"]
+
+
+def test_fetch_nhgf_stac_cog_no_year():
+    """fetch_nhgf_stac_cog works without a year."""
+    from unittest.mock import MagicMock, patch
+
+    import numpy as np
+    import xarray as xr
+
+    from hydro_param.data_access import fetch_nhgf_stac_cog
+
+    mock_collection = MagicMock()
+    mock_da = xr.DataArray(np.ones((2, 2)), dims=["y", "x"])
+    mock_nhgf = MagicMock()
+    mock_nhgf.ds = mock_da
+
+    with (
+        patch("gdptools.helpers.get_stac_collection", return_value=mock_collection),
+        patch("gdptools.NHGFStacTiffData", return_value=mock_nhgf) as p_nhgf,
+    ):
+        result = fetch_nhgf_stac_cog(
+            collection_id="nlcd-LndCov",
+            variable_name="LndCov",
+            year=None,
+        )
+
+    assert isinstance(result, xr.DataArray)
+    # source_time_period should NOT be in kwargs when year is None
+    nhgf_kwargs = p_nhgf.call_args.kwargs
+    assert "source_time_period" not in nhgf_kwargs

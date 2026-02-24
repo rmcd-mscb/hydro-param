@@ -493,6 +493,65 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# NHGF STAC COG pre-fetch (one-shot download for batch loop)
+# ---------------------------------------------------------------------------
+
+
+def fetch_nhgf_stac_cog(
+    collection_id: str,
+    variable_name: str,
+    *,
+    year: int | None = None,
+    band: int = 1,
+) -> xr.DataArray:
+    """Fetch a COG from the NHGF STAC catalog and return as a DataArray.
+
+    Uses ``gdptools.NHGFStacTiffData`` to fetch the raster once. This is
+    intended to be called once per dataset+year at the pipeline level, and
+    the result saved as a local GeoTIFF for the batch loop.
+
+    Parameters
+    ----------
+    collection_id : str
+        NHGF STAC collection ID (e.g. ``"nlcd-LndCov"``).
+    variable_name : str
+        Variable name within the collection.
+    year : int or None
+        Year filter. When ``None``, no time period is applied.
+    band : int
+        Band number (default 1).
+
+    Returns
+    -------
+    xr.DataArray
+        The fetched raster.
+    """
+    import gdptools
+
+    logger.info(
+        "Fetching NHGF STAC COG: collection=%s var=%s year=%s",
+        collection_id,
+        variable_name,
+        year,
+    )
+
+    collection = gdptools.helpers.get_stac_collection(collection_id)
+
+    kwargs: dict[str, Any] = {
+        "source_collection": collection,
+        "source_var": variable_name,
+        "band": band,
+    }
+    if year is not None:
+        kwargs["source_time_period"] = [f"{year}-01-01", f"{year}-12-31"]
+
+    nhgf_data = gdptools.NHGFStacTiffData(**kwargs)
+
+    logger.info("NHGF STAC COG fetched: shape=%s", nhgf_data.ds.shape)
+    return nhgf_data.ds
+
+
+# ---------------------------------------------------------------------------
 # ClimateR-Catalog helpers
 # ---------------------------------------------------------------------------
 
