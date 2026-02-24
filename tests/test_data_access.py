@@ -436,7 +436,7 @@ def test_fetch_stac_cog_with_prequeried_items():
 
 def test_save_to_geotiff_does_not_copy_array(tmp_path: Path):
     """save_to_geotiff should not create a full copy of the DataArray."""
-    rioxarray = pytest.importorskip("rioxarray")
+    pytest.importorskip("rioxarray")
 
     da = xr.DataArray(
         np.ones((4, 4)),
