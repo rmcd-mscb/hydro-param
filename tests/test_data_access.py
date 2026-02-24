@@ -352,6 +352,84 @@ def test_fetch_stac_cog_missing_asset_key_lists_available():
 
 
 # ---------------------------------------------------------------------------
+# query_stac_items
+# ---------------------------------------------------------------------------
+
+
+def test_query_stac_items_returns_items():
+    """query_stac_items returns a list of STAC items."""
+    from hydro_param.data_access import query_stac_items
+
+    mock_item = MagicMock()
+    mock_item.properties = {"gsd": 10}
+
+    mock_search = MagicMock()
+    mock_search.item_collection.return_value = [mock_item]
+
+    mock_client = MagicMock()
+    mock_client.search.return_value = mock_search
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="3dep-seamless",
+        crs="EPSG:4269",
+        gsd=10,
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with patch("pystac_client.Client.open", return_value=mock_client):
+        items = query_stac_items(entry, bbox)
+
+    assert len(items) == 1
+    assert items[0] is mock_item
+
+
+def test_fetch_stac_cog_with_prequeried_items():
+    """fetch_stac_cog skips STAC query when items are provided."""
+    from hydro_param.data_access import fetch_stac_cog
+
+    rioxarray = pytest.importorskip("rioxarray")
+
+    squeezed = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+    )
+    mock_da = MagicMock()
+    mock_squeezed = MagicMock()
+    mock_da.squeeze.return_value = mock_squeezed
+    mock_squeezed.rio.crs = "EPSG:4269"
+    mock_squeezed.rio.clip_box.return_value = squeezed
+    mock_squeezed.size = 16
+
+    mock_asset = MagicMock()
+    mock_asset.href = "https://example.com/dem.tif"
+    mock_item = MagicMock()
+    mock_item.id = "test_tile"
+    mock_item.properties = {}
+    mock_item.assets = {"data": mock_asset}
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="3dep-seamless",
+        crs="EPSG:4269",
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with (
+        patch("pystac_client.Client.open") as mock_open,
+        patch.object(rioxarray, "open_rasterio", return_value=mock_da),
+    ):
+        result = fetch_stac_cog(entry, bbox, items=[mock_item])
+
+    # STAC client should NOT have been called
+    mock_open.assert_not_called()
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
 # save_to_geotiff: copy-free save
 # ---------------------------------------------------------------------------
 
