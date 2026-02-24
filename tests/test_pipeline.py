@@ -1170,8 +1170,11 @@ def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path):
         year=[2020, 2021],
     )
 
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1217,8 +1220,11 @@ def test_stage4_single_year_produces_suffixed_key(tmp_path: Path):
         year=2021,
     )
 
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1259,8 +1265,11 @@ def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
         statistics=["categorical"],
     )
 
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1298,8 +1307,11 @@ def test_stage4_duplicate_var_key_raises(tmp_path: Path):
     ds_req1 = DatasetRequest(name="dataset_a", variables=["LndCov"], statistics=["categorical"])
     ds_req2 = DatasetRequest(name="dataset_b", variables=["LndCov"], statistics=["categorical"])
 
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1822,8 +1834,11 @@ def test_stage4_resume_disabled_by_default(tmp_path: Path):
         statistics=["categorical"],
     )
 
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1905,6 +1920,123 @@ def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
         mock_method.assert_called_once()
 
     assert "LndCov" in results.static_files  # noqa: E501
+
+
+def test_stage4_always_writes_manifest(tmp_path: Path):
+    """Manifest is written even when resume=False."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import load_manifest
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+        processing={"resume": False},
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
+        stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+
+    manifest = load_manifest(config.output.path)
+    assert manifest is not None
+    assert "nlcd_osn_lndcov" in manifest.entries
+
+
+def test_stage4_resume_false_does_not_skip(tmp_path: Path):
+    """With resume=False, stage4 does NOT skip even if manifest is current."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import (
+        ManifestEntry,
+        PipelineManifest,
+        dataset_fingerprint,
+        fabric_fingerprint,
+    )
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    output_dir = tmp_path / "output"
+    lc_dir = output_dir / "land_cover"
+    lc_dir.mkdir(parents=True)
+    (lc_dir / "LndCov.csv").write_text("hru_id,LndCov\na,11\n")
+
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": False},
+    )
+
+    ds_fp = dataset_fingerprint(ds_req, entry, [var_spec], config.processing)
+    fab_fp = fabric_fingerprint(config)
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint=ds_fp,
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
+
 
 
 # ---------------------------------------------------------------------------
