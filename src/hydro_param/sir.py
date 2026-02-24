@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -214,3 +215,242 @@ def apply_conversion(
     if conversion == "log10_to_linear":
         return np.power(10.0, values)
     raise ValueError(f"Unknown conversion: {conversion!r}")
+
+
+def normalize_sir(
+    raw_files: dict[str, Path],
+    schema: list[SIRVariableSchema],
+    output_dir: Path,
+    id_field: str,
+) -> dict[str, Path]:
+    """Normalize raw per-variable files to canonical SIR format.
+
+    Reads raw CSVs from stage 4, renames columns to canonical names,
+    applies unit conversions, and writes normalized per-variable CSVs
+    to ``output_dir/``.
+
+    Parameters
+    ----------
+    raw_files
+        Mapping of source variable key to raw CSV file path
+        (output of stage 4).
+    schema
+        SIR variable schema entries (output of ``build_sir_schema()``).
+    output_dir
+        Directory to write normalized CSV files.
+    id_field
+        Feature ID column name (used as CSV index).
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping of canonical name to normalized CSV file path.
+    """
+    import pandas as pd
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sir_files: dict[str, Path] = {}
+
+    # Index schema by source_name for lookup
+    schema_by_source: dict[str, list[SIRVariableSchema]] = {}
+    for entry in schema:
+        schema_by_source.setdefault(entry.source_name, []).append(entry)
+
+    for raw_key, raw_path in raw_files.items():
+        raw_df = pd.read_csv(raw_path, index_col=0)
+
+        # Determine the base source name: strip year suffix if present
+        # (e.g., "elevation_2020" -> "elevation")
+        base_source = raw_key
+        year_suffix = ""
+        for s in schema:
+            if raw_key.startswith(s.source_name) and raw_key != s.source_name:
+                candidate_suffix = raw_key[len(s.source_name) :]
+                if re.match(r"^_\d{4}$", candidate_suffix):
+                    base_source = s.source_name
+                    year_suffix = candidate_suffix
+                    break
+
+        entries = schema_by_source.get(base_source, [])
+        if not entries:
+            logger.warning("No SIR schema entry for raw variable '%s' — skipping", raw_key)
+            continue
+
+        for entry in entries:
+            # Check if this schema entry matches the year suffix
+            if year_suffix and not entry.canonical_name.endswith(year_suffix):
+                continue
+            if not year_suffix and re.search(r"_\d{4}$", entry.canonical_name):
+                continue
+
+            if entry.categorical:
+                # Categorical: rename fraction columns
+                rename_map = {}
+                prefix = entry.source_name
+                for col in raw_df.columns:
+                    if col.startswith(f"{prefix}_"):
+                        class_code = col[len(prefix) + 1 :]
+                        new_col = f"{prefix.lower()}_frac_{class_code}"
+                        rename_map[col] = new_col
+                if rename_map:
+                    out_df = raw_df[list(rename_map.keys())].rename(columns=rename_map)
+                else:
+                    out_df = raw_df.copy()
+                out_path = output_dir / f"{entry.canonical_name}.csv"
+                out_df.to_csv(out_path)
+                sir_files[entry.canonical_name] = out_path
+                logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
+            else:
+                # Continuous: find the matching column and rename
+                cname = entry.canonical_name
+                # Extract stat from canonical name (last segment after removing year)
+                cname_no_year = re.sub(r"_\d{4}$", "", cname)
+                parts = cname_no_year.rsplit("_", 1)
+                stat = parts[-1] if len(parts) > 1 else "mean"
+
+                # Find source column name
+                if stat == "mean":
+                    source_col = base_source
+                    if year_suffix:
+                        source_col = raw_key
+                else:
+                    source_col = f"{raw_key}_{stat}"
+
+                if source_col not in raw_df.columns:
+                    # Try without year suffix
+                    alt_col = f"{base_source}_{stat}" if stat != "mean" else base_source
+                    if alt_col in raw_df.columns:
+                        source_col = alt_col
+                    else:
+                        logger.warning(
+                            "Column '%s' not found in %s (available: %s) — skipping",
+                            source_col,
+                            raw_path.name,
+                            list(raw_df.columns),
+                        )
+                        continue
+
+                values = raw_df[source_col].values.astype(np.float64)
+
+                # Apply unit conversion
+                if entry.conversion is not None:
+                    values = apply_conversion(values, entry.conversion)
+
+                out_df = pd.DataFrame(
+                    {cname: values},
+                    index=raw_df.index,
+                )
+                out_df.index.name = id_field
+                out_path = output_dir / f"{cname}.csv"
+                out_df.to_csv(out_path)
+                sir_files[cname] = out_path
+                logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
+
+    return sir_files
+
+
+@dataclass
+class SIRValidationWarning:
+    """A single SIR validation warning."""
+
+    variable: str
+    check_type: str
+    message: str
+
+
+class SIRValidationError(Exception):
+    """Raised when SIR validation fails in strict mode."""
+
+    def __init__(self, warnings: list[SIRValidationWarning]) -> None:
+        self.warnings = warnings
+        messages = [f"  [{w.check_type}] {w.variable}: {w.message}" for w in warnings]
+        super().__init__(
+            f"SIR validation failed with {len(warnings)} warnings:\n" + "\n".join(messages)
+        )
+
+
+def validate_sir(
+    sir_files: dict[str, Path],
+    schema: list[SIRVariableSchema],
+    *,
+    strict: bool = False,
+) -> list[SIRValidationWarning]:
+    """Validate normalized SIR files against schema.
+
+    Parameters
+    ----------
+    sir_files
+        Mapping of canonical name to normalized CSV file path.
+    schema
+        SIR variable schema entries.
+    strict
+        If ``True``, raise ``SIRValidationError`` on any warnings.
+
+    Returns
+    -------
+    list[SIRValidationWarning]
+        Validation warnings (empty list = valid).
+    """
+    import pandas as pd
+
+    warnings: list[SIRValidationWarning] = []
+
+    # Check completeness: schema variables present in files
+    for entry in schema:
+        if entry.canonical_name not in sir_files:
+            warnings.append(
+                SIRValidationWarning(
+                    variable=entry.canonical_name,
+                    check_type="missing",
+                    message=f"Expected variable '{entry.canonical_name}' not found in SIR output",
+                )
+            )
+
+    # Check each file
+    for cname, path in sir_files.items():
+        df = pd.read_csv(path, index_col=0)
+
+        # Find matching schema entry
+        matching = [s for s in schema if s.canonical_name == cname]
+
+        for col in df.columns:
+            values = df[col].values.astype(np.float64)
+
+            # NaN coverage: warn only if 100% NaN
+            if np.all(np.isnan(values)):
+                warnings.append(
+                    SIRValidationWarning(
+                        variable=col,
+                        check_type="nan_coverage",
+                        message=f"Variable '{col}' is 100% NaN — possible processing failure",
+                    )
+                )
+
+            # Value range checks
+            if matching:
+                entry = matching[0]
+                if entry.valid_range is not None:
+                    vmin, vmax = entry.valid_range
+                    non_nan = values[~np.isnan(values)]
+                    if len(non_nan) > 0:
+                        if np.any(non_nan < vmin) or np.any(non_nan > vmax):
+                            actual_min = float(np.nanmin(non_nan))
+                            actual_max = float(np.nanmax(non_nan))
+                            warnings.append(
+                                SIRValidationWarning(
+                                    variable=col,
+                                    check_type="range",
+                                    message=(
+                                        f"Values [{actual_min:.2f}, {actual_max:.2f}] "
+                                        f"outside expected range [{vmin}, {vmax}]"
+                                    ),
+                                )
+                            )
+
+    for w in warnings:
+        logger.warning("SIR validation: [%s] %s: %s", w.check_type, w.variable, w.message)
+
+    if strict and warnings:
+        raise SIRValidationError(warnings)
+
+    return warnings

@@ -270,3 +270,19 @@ def test_dataset_request_time_period_from_yaml(tmp_path: Path):
 
     config = load_config(str(path))
     assert config.datasets[0].time_period == ["2020-01-01", "2020-12-31"]
+
+
+# ---------------------------------------------------------------------------
+# sir_validation field
+# ---------------------------------------------------------------------------
+
+
+def test_sir_validation_default() -> None:
+    """ProcessingConfig defaults sir_validation to 'tolerant'."""
+    config = ProcessingConfig()
+    assert config.sir_validation == "tolerant"
+
+
+def test_sir_validation_strict() -> None:
+    config = ProcessingConfig(sir_validation="strict")
+    assert config.sir_validation == "strict"

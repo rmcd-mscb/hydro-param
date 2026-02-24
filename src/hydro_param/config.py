@@ -97,6 +97,7 @@ class ProcessingConfig(BaseModel):
     failure_mode: Literal["strict", "tolerant"] = "strict"
     batch_size: int = Field(default=500, gt=0)
     resume: bool = False
+    sir_validation: Literal["tolerant", "strict"] = "tolerant"
 
 
 class PipelineConfig(BaseModel):
