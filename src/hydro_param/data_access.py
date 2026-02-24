@@ -240,6 +240,12 @@ def fetch_stac_cog(
 
     # Load and mosaic tiles
     resolved_key = asset_key if asset_key is not None else entry.asset_key
+    logger.debug(
+        "Using asset key '%s' (override=%s, default=%s)",
+        resolved_key,
+        asset_key,
+        entry.asset_key,
+    )
     arrays = []
     for item in items:
         try:
