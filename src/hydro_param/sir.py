@@ -448,7 +448,7 @@ def normalize_sir_temporal(
             schema_entry = schema_entries[0]
 
             # Apply unit conversion
-            values = ds[data_var].values.astype(np.float64)
+            values: NDArray[np.floating] = ds[data_var].values.astype(np.float64)
             if schema_entry.conversion is not None:
                 values = apply_conversion(values, schema_entry.conversion)
 
