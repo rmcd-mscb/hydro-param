@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,7 +119,7 @@ class SIRVariableSchema:
 
 
 def build_sir_schema(
-    resolved: list[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
 ) -> list[SIRVariableSchema]:
     """Auto-generate SIR schema from stage 2 resolved datasets.
 

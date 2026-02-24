@@ -170,32 +170,29 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Rename SIR variables for derivation compatibility.
 
-        Applies a mapping from pipeline SIR names to the names expected
-        by this derivation plugin.  If no explicit renames are provided,
-        applies the default mapping for common NHGF STAC / gdptools
-        variable names.
+        .. deprecated::
+            SIR normalization (Stage 5) now produces canonical variable
+            names directly. This method is retained for backward
+            compatibility but performs no default renames. Pass explicit
+            ``renames`` if needed.
 
         Parameters
         ----------
         sir
             Input SIR dataset.
         renames
-            Explicit variable name mapping ``{old: new}``.  Merged with
-            (and overrides) the built-in defaults.
+            Explicit variable name mapping ``{old: new}``.
 
         Returns
         -------
         xr.Dataset
-            SIR with renamed variables.
+            SIR with renamed variables (unchanged if no renames given).
         """
-        defaults: dict[str, str] = {
-            "FctImp_mean": "impervious",
-        }
-        mapping = {**defaults, **(renames or {})}
-        actual = {old: new for old, new in mapping.items() if old in sir}
-        if actual:
-            sir = sir.rename(actual)
-            logger.info("SIR variable renames: %s", actual)
+        if renames:
+            actual = {old: new for old, new in renames.items() if old in sir}
+            if actual:
+                sir = sir.rename(actual)
+                logger.info("SIR variable renames: %s", actual)
         return sir
 
     def derive(
@@ -214,7 +211,8 @@ class PywatershedDerivation:
         ----------
         sir
             Standardized Internal Representation with physical properties
-            (e.g., ``elevation``, ``slope``, ``aspect``, ``land_cover``).
+            using canonical SIR names (e.g., ``elevation_m_mean``,
+            ``slope_deg_mean``, ``aspect_deg_mean``, ``lndcov_frac_*``).
         config
             Optional derivation configuration.  Supports key:
             ``parameter_overrides`` (dict).
@@ -519,25 +517,25 @@ class PywatershedDerivation:
 
     def _derive_topography(self, sir: xr.Dataset, ds: xr.Dataset) -> xr.Dataset:
         """Step 3: Convert DEM zonal statistics to PRMS parameters."""
-        if "elevation" in sir:
+        if "elevation_m_mean" in sir:
             ds["hru_elev"] = xr.DataArray(
-                convert(sir["elevation"].values, "m", "ft"),
+                convert(sir["elevation_m_mean"].values, "m", "ft"),
                 dims="nhru",
                 attrs={"units": "feet", "long_name": "Mean HRU elevation"},
             )
 
-        if "slope" in sir:
+        if "slope_deg_mean" in sir:
             # SIR slope is in degrees; PRMS wants decimal fraction (rise/run)
-            slope_rad = convert(sir["slope"].values, "deg", "rad")
+            slope_rad = convert(sir["slope_deg_mean"].values, "deg", "rad")
             ds["hru_slope"] = xr.DataArray(
                 np.tan(slope_rad),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "Mean HRU slope"},
             )
 
-        if "aspect" in sir:
+        if "aspect_deg_mean" in sir:
             ds["hru_aspect"] = xr.DataArray(
-                sir["aspect"].values.astype(np.float64),
+                sir["aspect_deg_mean"].values.astype(np.float64),
                 dims="nhru",
                 attrs={"units": "degrees", "long_name": "Mean HRU aspect"},
             )
@@ -591,10 +589,10 @@ class PywatershedDerivation:
                 attrs={"units": "integer", "long_name": "Vegetation cover type"},
             )
 
-        if "tree_canopy" in sir:
+        if "tree_canopy_pct_mean" in sir:
             # Continuous canopy cover (0-100%) → fraction (0-1)
             ds["covden_sum"] = xr.DataArray(
-                np.clip(sir["tree_canopy"].values / 100.0, 0.0, 1.0),
+                np.clip(sir["tree_canopy_pct_mean"].values / 100.0, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
@@ -608,10 +606,10 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
 
-        if "impervious" in sir:
+        if "fctimp_pct_mean" in sir:
             # Percent (0-100) → fraction (0-1)
             ds["hru_percent_imperv"] = xr.DataArray(
-                np.clip(sir["impervious"].values / 100.0, 0.0, 1.0),
+                np.clip(sir["fctimp_pct_mean"].values / 100.0, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "HRU impervious fraction"},
             )
@@ -621,12 +619,12 @@ class PywatershedDerivation:
     @staticmethod
     def _compute_majority_from_fractions(
         sir: xr.Dataset,
-        prefixes: tuple[str, ...] = ("LndCov_", "land_cover_"),
+        prefixes: tuple[str, ...] = ("lndcov_frac_",),
     ) -> np.ndarray | None:
         """Compute majority NLCD class from categorical fraction columns.
 
         Scans SIR variables for columns matching ``{prefix}{class_code}``
-        (e.g., ``LndCov_11``, ``LndCov_41``).  For each HRU, returns the
+        (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU, returns the
         class code with the highest fraction.
 
         Parameters

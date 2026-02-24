@@ -578,7 +578,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("Phase 2: pywatershed derivation + formatting")
 
     plugin = PywatershedDerivation()
-    sir_renamed = plugin.rename_sir_variables(result.load_sir())
+    sir = result.load_sir()
 
     segments = None
     if pws_config.domain.segment_path is not None:
@@ -591,7 +591,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         }
 
     derived = plugin.derive(
-        sir_renamed,
+        sir,
         config=derivation_config,
         fabric=result.fabric,
         segments=segments,

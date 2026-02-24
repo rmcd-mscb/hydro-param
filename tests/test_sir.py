@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hydro_param.dataset_registry import (
+    DatasetEntry,
     DerivedVariableSpec,
     VariableSpec,
 )
@@ -139,8 +140,6 @@ class TestBuildSIRSchema:
         category: str = "topography",
     ) -> DatasetEntry:
         """Helper to create a DatasetEntry for testing."""
-        from hydro_param.dataset_registry import DatasetEntry
-
         return DatasetEntry(
             strategy=strategy,
             catalog_url="https://example.com/stac" if strategy == "stac_cog" else None,

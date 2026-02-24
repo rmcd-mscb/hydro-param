@@ -23,12 +23,12 @@ def derivation() -> PywatershedDerivation:
 
 @pytest.fixture()
 def sir_topography() -> xr.Dataset:
-    """Synthetic SIR with topographic data (metric units)."""
+    """Synthetic SIR with topographic data (canonical SIR names)."""
     return xr.Dataset(
         {
-            "elevation": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
-            "slope": ("nhm_id", np.array([5.0, 15.0, 30.0])),  # degrees
-            "aspect": ("nhm_id", np.array([0.0, 90.0, 270.0])),  # degrees
+            "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+            "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),  # degrees
+            "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),  # degrees
         },
         coords={"nhm_id": [1, 2, 3]},
     )
@@ -36,12 +36,12 @@ def sir_topography() -> xr.Dataset:
 
 @pytest.fixture()
 def sir_landcover() -> xr.Dataset:
-    """Synthetic SIR with land cover data."""
+    """Synthetic SIR with land cover data (canonical SIR names)."""
     return xr.Dataset(
         {
             "land_cover": ("nhm_id", np.array([42, 71, 52])),  # Evergreen, Grass, Shrub
-            "impervious": ("nhm_id", np.array([5.0, 20.0, 0.0])),  # percent
-            "tree_canopy": ("nhm_id", np.array([80.0, 10.0, 30.0])),  # percent
+            "fctimp_pct_mean": ("nhm_id", np.array([5.0, 20.0, 0.0])),  # percent
+            "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0, 30.0])),  # percent
         },
         coords={"nhm_id": [1, 2, 3]},
     )
@@ -208,7 +208,7 @@ class TestApplyDefaults:
     def test_defaults_not_overwritten(self, derivation: PywatershedDerivation) -> None:
         """If a default param is already derived from data, it's preserved."""
         sir = xr.Dataset(
-            {"elevation": ("nhm_id", np.array([100.0]))},
+            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
             coords={"nhm_id": [1]},
         )
         ds = derivation.derive(sir)
@@ -756,16 +756,16 @@ class TestDeriveGeometryFromFabric:
 
 
 class TestSirVariableRenaming:
-    """Tests for SIR variable renaming."""
+    """Tests for SIR variable renaming (deprecated, now a no-op by default)."""
 
-    def test_default_rename(self, derivation: PywatershedDerivation) -> None:
+    def test_no_default_renames(self, derivation: PywatershedDerivation) -> None:
+        """Without explicit renames, rename_sir_variables is a no-op."""
         sir = xr.Dataset(
-            {"FctImp_mean": ("nhm_id", np.array([5.0, 20.0]))},
+            {"fctimp_pct_mean": ("nhm_id", np.array([5.0, 20.0]))},
             coords={"nhm_id": [1, 2]},
         )
         renamed = derivation.rename_sir_variables(sir)
-        assert "impervious" in renamed
-        assert "FctImp_mean" not in renamed
+        assert "fctimp_pct_mean" in renamed
 
     def test_custom_rename(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
@@ -777,11 +777,11 @@ class TestSirVariableRenaming:
 
     def test_rename_noop_when_not_present(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(
-            {"elevation": ("nhm_id", np.array([100.0]))},
+            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
             coords={"nhm_id": [1]},
         )
         renamed = derivation.rename_sir_variables(sir)
-        assert "elevation" in renamed
+        assert "elevation_m_mean" in renamed
 
 
 # ------------------------------------------------------------------
@@ -793,13 +793,13 @@ class TestCategoricalFractionMajority:
     """Tests for computing majority class from categorical fractions."""
 
     def test_majority_from_lndcov_fractions(self, derivation: PywatershedDerivation) -> None:
-        """Majority class extracted from LndCov_ fraction columns."""
+        """Majority class extracted from lndcov_frac_ fraction columns."""
         sir = xr.Dataset(
             {
-                "LndCov_11": ("nhm_id", np.array([0.1, 0.0, 0.0])),
-                "LndCov_41": ("nhm_id", np.array([0.8, 0.1, 0.2])),
-                "LndCov_42": ("nhm_id", np.array([0.05, 0.0, 0.7])),
-                "LndCov_71": ("nhm_id", np.array([0.05, 0.9, 0.1])),
+                "lndcov_frac_11": ("nhm_id", np.array([0.1, 0.0, 0.0])),
+                "lndcov_frac_41": ("nhm_id", np.array([0.8, 0.1, 0.2])),
+                "lndcov_frac_42": ("nhm_id", np.array([0.05, 0.0, 0.7])),
+                "lndcov_frac_71": ("nhm_id", np.array([0.05, 0.9, 0.1])),
             },
             coords={"nhm_id": [1, 2, 3]},
         )

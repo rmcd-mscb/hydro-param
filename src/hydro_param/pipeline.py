@@ -1,13 +1,16 @@
-"""Pipeline orchestrator: config-driven parameterization stages 1-4.
+"""Pipeline orchestrator: config-driven parameterization stages 1-5.
 
-Implements the 4-stage pipeline from design.md section 4:
+Implements the 5-stage pipeline from design.md section 4:
   1. Resolve Target Fabric
   2. Resolve Source Datasets
   3. Compute/Load Weights (handled internally by gdptools)
   4. Process Datasets (batch loop) + incremental file writes
+  5. Normalize SIR (canonical naming, unit conversion, validation)
 
 Per-variable and temporal output files are written incrementally during
-Stage 4. A lazy ``PipelineResult.load_sir()`` method assembles a combined
+Stage 4. Stage 5 normalizes raw output into the Standardized Internal
+Representation (SIR) with canonical variable names and units.
+A lazy ``PipelineResult.load_sir()`` method assembles a combined
 xr.Dataset on demand for consumers that need it.
 
 See design.md section 11 for MVP implementation details.
@@ -47,6 +50,9 @@ from hydro_param.dataset_registry import (
 from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
 from hydro_param.sir import (
     SIRVariableSchema,
+    build_sir_schema,
+    normalize_sir,
+    validate_sir,
 )
 
 logger = logging.getLogger(__name__)
