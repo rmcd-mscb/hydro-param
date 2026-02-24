@@ -1900,3 +1900,66 @@ def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
         mock_method.assert_called_once()
 
     assert "LndCov" in results.static_files  # noqa: E501
+
+
+# ---------------------------------------------------------------------------
+# PipelineResult with SIR normalization
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineResultSIR:
+    """Tests for PipelineResult with SIR normalization."""
+
+    def test_sir_fields_default_empty(self) -> None:
+        result = PipelineResult(output_dir=Path("/tmp"))
+        assert result.sir_files == {}
+        assert result.sir_schema == []
+
+    def test_load_sir_from_sir_files(self, tmp_path: Path) -> None:
+        """load_sir() reads from sir_files (normalized) when available."""
+        df = pd.DataFrame(
+            {"elevation_m_mean": [100.0, 200.0]},
+            index=pd.Index([1, 2], name="nhm_id"),
+        )
+        sir_path = tmp_path / "elevation_m_mean.csv"
+        df.to_csv(sir_path)
+
+        result = PipelineResult(
+            output_dir=tmp_path,
+            sir_files={"elevation_m_mean": sir_path},
+        )
+        sir = result.load_sir()
+        assert "elevation_m_mean" in sir.data_vars
+
+    def test_load_sir_falls_back_to_static(self, tmp_path: Path) -> None:
+        """load_sir() falls back to static_files when no sir_files."""
+        df = pd.DataFrame(
+            {"elevation": [100.0]},
+            index=pd.Index([1], name="nhm_id"),
+        )
+        path = tmp_path / "elevation.csv"
+        df.to_csv(path)
+
+        result = PipelineResult(
+            output_dir=tmp_path,
+            static_files={"elevation": path},
+        )
+        sir = result.load_sir()
+        assert "elevation" in sir.data_vars
+
+    def test_load_raw_sir(self, tmp_path: Path) -> None:
+        """load_raw_sir() always reads from static_files."""
+        df = pd.DataFrame(
+            {"elevation": [100.0]},
+            index=pd.Index([1], name="nhm_id"),
+        )
+        path = tmp_path / "elevation.csv"
+        df.to_csv(path)
+
+        result = PipelineResult(
+            output_dir=tmp_path,
+            static_files={"elevation": path},
+            sir_files={"elevation_m_mean": path},  # even with sir_files present
+        )
+        raw = result.load_raw_sir()
+        assert "elevation" in raw.data_vars

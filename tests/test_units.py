@@ -102,3 +102,27 @@ class TestListConversions:
         assert ("C", "F") in pairs
         assert ("mm", "in") in pairs
         assert ("m2", "acres") in pairs
+
+
+class TestLog10Conversions:
+    """Tests for log10 unit conversions registered for SIR normalization."""
+
+    def test_log10_cm_hr_to_cm_hr(self) -> None:
+        values = np.array([0.0, 1.0, 2.0])
+        result = convert(values, "log10(cm/hr)", "cm/hr")
+        np.testing.assert_allclose(result, [1.0, 10.0, 100.0])
+
+    def test_log10_kpa_to_kpa(self) -> None:
+        values = np.array([0.0, 1.0, 2.0])
+        result = convert(values, "log10(kPa)", "kPa")
+        np.testing.assert_allclose(result, [1.0, 10.0, 100.0])
+
+    def test_log10_pct_to_pct(self) -> None:
+        values = np.array([0.0, 1.0, 2.0])
+        result = convert(values, "log10(%)", "%")
+        np.testing.assert_allclose(result, [1.0, 10.0, 100.0])
+
+    def test_log10_kpa_inv_to_kpa_inv(self) -> None:
+        values = np.array([0.0, -1.0, 1.0])
+        result = convert(values, "log10(kPa^-1)", "kPa^-1")
+        np.testing.assert_allclose(result, [1.0, 0.1, 10.0])

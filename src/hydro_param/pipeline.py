@@ -1,13 +1,16 @@
-"""Pipeline orchestrator: config-driven parameterization stages 1-4.
+"""Pipeline orchestrator: config-driven parameterization stages 1-5.
 
-Implements the 4-stage pipeline from design.md section 4:
+Implements the 5-stage pipeline from design.md section 4:
   1. Resolve Target Fabric
   2. Resolve Source Datasets
   3. Compute/Load Weights (handled internally by gdptools)
   4. Process Datasets (batch loop) + incremental file writes
+  5. Normalize SIR (canonical naming, unit conversion, validation)
 
 Per-variable and temporal output files are written incrementally during
-Stage 4. A lazy ``PipelineResult.load_sir()`` method assembles a combined
+Stage 4. Stage 5 normalizes raw output into the Standardized Internal
+Representation (SIR) with canonical variable names and units.
+A lazy ``PipelineResult.load_sir()`` method assembles a combined
 xr.Dataset on demand for consumers that need it.
 
 See design.md section 11 for MVP implementation details.
@@ -45,6 +48,13 @@ from hydro_param.dataset_registry import (
     load_registry,
 )
 from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
+from hydro_param.sir import (
+    SIRValidationWarning,
+    SIRVariableSchema,
+    build_sir_schema,
+    normalize_sir,
+    validate_sir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +84,33 @@ class PipelineResult:
     temporal_files: dict[str, Path] = field(default_factory=dict)
     categories: dict[str, str] = field(default_factory=dict)
     fabric: gpd.GeoDataFrame | None = None
+    sir_files: dict[str, Path] = field(default_factory=dict)
+    sir_schema: list[SIRVariableSchema] = field(default_factory=list)
+    sir_warnings: list[SIRValidationWarning] = field(default_factory=list)
 
     def load_sir(self) -> xr.Dataset:
-        """Lazily load all static per-variable CSV files into a combined xr.Dataset."""
+        """Load normalized SIR files into a combined xr.Dataset.
+
+        Uses ``sir_files`` (normalized) when available, falling back
+        to ``static_files`` (raw) for backward compatibility.
+        """
+        if self.sir_files:
+            files = self.sir_files
+        elif self.static_files:
+            logger.warning(
+                "No normalized SIR files available; falling back to raw static files. "
+                "Variable names will use source conventions, not canonical SIR names."
+            )
+            files = self.static_files
+        else:
+            logger.warning("No SIR or static files available — returning empty dataset")
+            return xr.Dataset()
+        dfs = [pd.read_csv(p, index_col=0) for p in files.values()]
+        combined = pd.concat(dfs, axis=1)
+        return xr.Dataset.from_dataframe(combined)
+
+    def load_raw_sir(self) -> xr.Dataset:
+        """Load raw (pre-normalization) static files into a combined xr.Dataset."""
         if not self.static_files:
             return xr.Dataset()
         dfs = [pd.read_csv(p, index_col=0) for p in self.static_files.values()]
@@ -870,6 +904,58 @@ def stage4_process(
     )
 
 
+def stage5_normalize_sir(
+    stage4: Stage4Results,
+    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    config: PipelineConfig,
+) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]:
+    """Stage 5: Normalize raw stage 4 output to canonical SIR format.
+
+    Parameters
+    ----------
+    stage4
+        Stage 4 results with raw per-variable file paths.
+    resolved
+        Resolved dataset entries from stage 2.
+    config
+        Pipeline configuration.
+
+    Returns
+    -------
+    tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]
+        Normalized SIR file paths, the schema used, and validation warnings.
+
+    Raises
+    ------
+    SIRValidationError
+        If ``config.processing.sir_validation == "strict"`` and any
+        validation warnings are found.
+    """
+    logger.info("Stage 5: SIR normalization")
+    schema = build_sir_schema(resolved)
+    logger.info("  SIR schema: %d variables", len(schema))
+
+    sir_dir = config.output.path / "sir"
+    sir_files = normalize_sir(
+        raw_files=stage4.static_files,
+        schema=schema,
+        output_dir=sir_dir,
+        id_field=config.target_fabric.id_field,
+    )
+    logger.info("  Normalized %d SIR files → %s", len(sir_files), sir_dir)
+
+    strict = config.processing.sir_validation == "strict"
+    warnings = validate_sir(sir_files, schema, strict=strict)
+    if warnings:
+        logger.warning("  SIR validation: %d warnings", len(warnings))
+        for w in warnings:
+            logger.warning("    [%s] %s: %s", w.check_type, w.variable, w.message)
+    else:
+        logger.info("  SIR validation: passed")
+
+    return sir_files, schema, warnings
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -945,6 +1031,11 @@ def run_pipeline_from_config(
         time.perf_counter() - t4,
     )
 
+    # Stage 5: Normalize SIR
+    t5 = time.perf_counter()
+    sir_files, sir_schema, sir_warnings = stage5_normalize_sir(results, resolved, config)
+    logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)
+
     elapsed = time.perf_counter() - t0
     logger.info("=" * 60)
     logger.info(
@@ -962,6 +1053,9 @@ def run_pipeline_from_config(
         temporal_files=results.temporal_files,
         categories=results.categories,
         fabric=fabric,
+        sir_files=sir_files,
+        sir_schema=sir_schema,
+        sir_warnings=sir_warnings,
     )
 
 
