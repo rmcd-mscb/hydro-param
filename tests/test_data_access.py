@@ -1,5 +1,6 @@
 """Tests for data_access module helpers."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -11,6 +12,7 @@ from hydro_param.data_access import (
     _is_remote_url,
     build_climr_cat_dict,
     fetch_local_tiff,
+    save_to_geotiff,
 )
 from hydro_param.dataset_registry import DatasetEntry
 
@@ -347,3 +349,31 @@ def test_fetch_stac_cog_missing_asset_key_lists_available():
         pytest.raises(KeyError, match="aws0_100.*rootznemc"),
     ):
         fetch_stac_cog(entry, bbox, asset_key="nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# save_to_geotiff: copy-free save
+# ---------------------------------------------------------------------------
+
+
+def test_save_to_geotiff_does_not_copy_array(tmp_path: Path):
+    """save_to_geotiff should not create a full copy of the DataArray."""
+    rioxarray = pytest.importorskip("rioxarray")
+
+    da = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        attrs={"_FillValue": -9999.0, "units": "meters"},
+    )
+    da = da.rio.set_crs("EPSG:4326")
+    da = da.rio.set_spatial_dims(x_dim="x", y_dim="y")
+
+    out_path = tmp_path / "test.tif"
+    save_to_geotiff(da, out_path)
+
+    # Original attrs must be preserved (not mutated)
+    assert "_FillValue" in da.attrs
+    assert da.attrs["_FillValue"] == -9999.0
+    assert da.attrs["units"] == "meters"
+    assert out_path.exists()

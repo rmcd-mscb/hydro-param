@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SENTINEL = object()
+
 CLIMR_CATALOG_URL = (
     "https://github.com/mikejohnson51/climateR-catalogs/releases/download/June-2024/catalog.parquet"
 )
@@ -439,11 +441,17 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
     """
     import rioxarray  # noqa: F401
 
-    # Remove _FillValue from attrs to avoid conflict with encoding
-    clean = da.copy()
-    clean.attrs = {k: v for k, v in da.attrs.items() if k != "_FillValue"}
-    clean.encoding = {k: v for k, v in da.encoding.items() if k != "_FillValue"}
-    clean.rio.to_raster(path)
+    # Temporarily remove _FillValue to avoid conflict with encoding,
+    # then restore — avoids a full .copy() of the DataArray.
+    fill_in_attrs = da.attrs.pop("_FillValue", _SENTINEL)
+    fill_in_encoding = da.encoding.pop("_FillValue", _SENTINEL)
+    try:
+        da.rio.to_raster(path)
+    finally:
+        if fill_in_attrs is not _SENTINEL:
+            da.attrs["_FillValue"] = fill_in_attrs
+        if fill_in_encoding is not _SENTINEL:
+            da.encoding["_FillValue"] = fill_in_encoding
     logger.debug("Saved GeoTIFF: %s (%s)", path, da.shape)
     return path
 
