@@ -21,6 +21,7 @@ from hydro_param.pipeline import (
     PipelineResult,
     Stage4Results,
     _buffered_bbox,
+    _process_batch,
     _process_temporal,
     _split_time_period_by_year,
     _write_temporal_file,
@@ -620,7 +621,6 @@ def test_process_batch_nhgf_stac_dispatch(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a", "b"]},
@@ -666,7 +666,6 @@ def test_process_batch_nhgf_stac_rejects_derived(tmp_path: Path):
     """Derived variables raise NotImplementedError for nhgf_stac strategy."""
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, DerivedVariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a"]},
@@ -698,7 +697,6 @@ def test_process_batch_nhgf_stac_passes_year(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a"]},
@@ -733,7 +731,6 @@ def test_process_batch_nhgf_stac_year_none(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a"]},
@@ -768,7 +765,6 @@ def test_process_batch_nhgf_stac_passes_statistics(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a"]},
@@ -806,7 +802,6 @@ def test_process_batch_temporal_nhgf_stac_raises(tmp_path: Path):
     """Temporal nhgf_stac datasets raise NotImplementedError in _fetch()."""
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a"]},
@@ -1491,7 +1486,6 @@ def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a", "b"]},
@@ -1542,7 +1536,6 @@ def test_process_batch_stac_cog_passes_asset_key(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a", "b"]},
@@ -1569,6 +1562,7 @@ def test_process_batch_stac_cog_passes_asset_key(tmp_path: Path):
 
     with (
         patch("hydro_param.pipeline.fetch_stac_cog") as mock_fetch,
+        patch("hydro_param.pipeline.query_stac_items", return_value=[]),
         patch("hydro_param.pipeline.save_to_geotiff"),
         patch.object(ZonalProcessor, "process", return_value=mock_df),
     ):
@@ -1596,7 +1590,6 @@ def test_process_batch_stac_cog_no_asset_key_passes_none(tmp_path: Path):
 
     from hydro_param.config import DatasetRequest
     from hydro_param.dataset_registry import DatasetEntry, VariableSpec
-    from hydro_param.pipeline import _process_batch
 
     fabric = gpd.GeoDataFrame(
         {"hru_id": ["a", "b"]},
@@ -1623,6 +1616,7 @@ def test_process_batch_stac_cog_no_asset_key_passes_none(tmp_path: Path):
 
     with (
         patch("hydro_param.pipeline.fetch_stac_cog") as mock_fetch,
+        patch("hydro_param.pipeline.query_stac_items", return_value=[]),
         patch("hydro_param.pipeline.save_to_geotiff"),
         patch.object(ZonalProcessor, "process", return_value=mock_df),
     ):
@@ -1963,3 +1957,76 @@ class TestPipelineResultSIR:
         )
         raw = result.load_raw_sir()
         assert "elevation" in raw.data_vars
+
+
+# ---------------------------------------------------------------------------
+# _process_batch memory cleanup + STAC items caching
+# ---------------------------------------------------------------------------
+
+
+def test_process_batch_releases_source_cache(tmp_path: Path):
+    """_process_batch releases source_cache entries for raw vars after save."""
+    from unittest.mock import MagicMock, patch
+
+    import numpy as np
+
+    rioxarray = pytest.importorskip("rioxarray")  # noqa: F841
+
+    # Create a mock raster
+    mock_da = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": [1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0]},
+        attrs={"units": "cm"},
+    )
+    mock_da = mock_da.rio.set_crs("EPSG:5070")
+    mock_da = mock_da.rio.set_spatial_dims(x_dim="x", y_dim="y")
+
+    # Build minimal fixtures
+    fabric = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com/stac",
+        collection="test",
+        crs="EPSG:5070",
+    )
+
+    config_raw = {
+        "target_fabric": {"path": "dummy.gpkg", "id_field": "nhm_id"},
+        "domain": {"type": "bbox", "bbox": [0, 0, 2, 2]},
+        "datasets": [
+            {"name": "test_ds", "variables": ["var_a", "var_b"], "statistics": ["mean"]},
+        ],
+    }
+    cfg_path = tmp_path / "cfg.yml"
+    cfg_path.write_text(yaml.dump(config_raw))
+    config = load_config(cfg_path)
+
+    ds_req = config.datasets[0]
+
+    var_specs: list = [
+        VariableSpec(name="var_a", band=1, units="cm", categorical=False, asset_key="var_a"),
+        VariableSpec(name="var_b", band=1, units="cm", categorical=False, asset_key="var_b"),
+    ]
+
+    mock_zonal_df = pd.DataFrame({"mean": [1.0, 2.0]}, index=pd.Index([1, 2], name="nhm_id"))
+
+    with (
+        patch("hydro_param.pipeline.fetch_stac_cog", return_value=mock_da),
+        patch("hydro_param.pipeline.query_stac_items", return_value=[MagicMock()]),
+        patch("hydro_param.pipeline.save_to_geotiff", return_value=tmp_path / "mock.tif"),
+        patch("hydro_param.processing.ZonalProcessor.process", return_value=mock_zonal_df),
+    ):
+        results = _process_batch(fabric, entry, ds_req, var_specs, config, tmp_path)
+
+    assert "var_a" in results
+    assert "var_b" in results
+    assert len(results["var_a"]) == 2
+    assert len(results["var_b"]) == 2

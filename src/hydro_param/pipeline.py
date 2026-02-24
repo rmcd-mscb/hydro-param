@@ -18,6 +18,7 @@ See design.md section 11 for MVP implementation details.
 
 from __future__ import annotations
 
+import gc
 import logging
 import sys
 import tempfile
@@ -38,6 +39,7 @@ from hydro_param.data_access import (
     DERIVATION_FUNCTIONS,
     fetch_local_tiff,
     fetch_stac_cog,
+    query_stac_items,
     save_to_geotiff,
 )
 from hydro_param.dataset_registry import (
@@ -333,16 +335,27 @@ def _process_batch(
     # Cache source data to avoid redundant fetches for derived variables
     source_cache: dict[str, xr.DataArray] = {}
 
+    # Pre-query STAC items once for all variables in this batch
+    stac_items: list | None = None
+    if entry.strategy == "stac_cog":
+        stac_items = query_stac_items(entry, bbox)
+
     def _fetch(
         dataset_entry: DatasetEntry,
         fetch_bbox: list[float],
         *,
         variable_source: str | None = None,
         asset_key: str | None = None,
+        items: list | None = None,
     ) -> xr.DataArray:
         """Dispatch to the correct fetch function based on strategy."""
         if dataset_entry.strategy == "stac_cog":
-            return fetch_stac_cog(dataset_entry, fetch_bbox, asset_key=asset_key)
+            return fetch_stac_cog(
+                dataset_entry,
+                fetch_bbox,
+                asset_key=asset_key,
+                items=items,
+            )
         if dataset_entry.strategy == "local_tiff":
             return fetch_local_tiff(
                 dataset_entry,
@@ -365,7 +378,7 @@ def _process_batch(
             # elevation). If derived vars are added to per-asset datasets like
             # gNATSGO, the source VarSpec's asset_key will need to be resolved.
             if var_spec.source not in source_cache:
-                source_cache[var_spec.source] = _fetch(entry, bbox)
+                source_cache[var_spec.source] = _fetch(entry, bbox, items=stac_items)
 
             source_da = source_cache[var_spec.source]
             derive_fn = DERIVATION_FUNCTIONS.get(var_spec.name)
@@ -386,6 +399,7 @@ def _process_batch(
                 bbox,
                 variable_source=var_spec.source_override,
                 asset_key=var_spec.asset_key,
+                items=stac_items,
             )
             # Cache for potential derived variable reuse
             source_cache[var_spec.name] = da
@@ -394,9 +408,8 @@ def _process_batch(
         tiff_path = work_dir / f"{var_spec.name}.tif"
         save_to_geotiff(da, tiff_path)
 
-        # Free derived/fetched raster before zonal stats to reduce peak memory
-        if isinstance(var_spec, DerivedVariableSpec):
-            del da
+        # Free raster before zonal stats — gdptools reads from the file
+        del da
 
         # Determine if variable is categorical
         categorical = isinstance(var_spec, VariableSpec) and var_spec.categorical
@@ -419,7 +432,7 @@ def _process_batch(
         # Clean up GeoTIFF after zonal stats
         tiff_path.unlink(missing_ok=True)
 
-        # Release source from cache when no remaining derived vars need it
+        # Release source_cache entries no longer needed
         if isinstance(var_spec, DerivedVariableSpec):
             remaining = var_specs[i + 1 :]
             source_still_needed = any(
@@ -428,6 +441,16 @@ def _process_batch(
             )
             if not source_still_needed and var_spec.source in source_cache:
                 del source_cache[var_spec.source]
+        else:
+            # Raw var: check if any later derived var uses this as source
+            remaining = var_specs[i + 1 :]
+            needed_by_derived = any(
+                isinstance(v, DerivedVariableSpec) and v.source == var_spec.name for v in remaining
+            )
+            if not needed_by_derived and var_spec.name in source_cache:
+                del source_cache[var_spec.name]
+
+        gc.collect()
 
     return results
 
