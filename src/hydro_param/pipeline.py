@@ -1039,6 +1039,14 @@ def run_pipeline_from_config(
     logger.info("  Output: %s (%s)", config.output.path, config.output.format)
     logger.info("=" * 60)
 
+    # Apply network timeout to all GDAL/HTTP operations
+    import os as _os
+
+    _timeout_s = str(config.processing.network_timeout)
+    _os.environ["GDAL_HTTP_TIMEOUT"] = _timeout_s
+    _os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = _timeout_s
+    logger.info("  Network timeout: %ss", _timeout_s)
+
     # Stage 1: Resolve target fabric (applies domain filter if configured)
     t1 = time.perf_counter()
     fabric = stage1_resolve_fabric(config)

@@ -2140,3 +2140,35 @@ def test_process_batch_releases_source_cache(tmp_path: Path):
     assert "var_b" in results
     assert len(results["var_a"]) == 2
     assert len(results["var_b"]) == 2
+
+
+def test_run_pipeline_sets_gdal_http_timeout(tmp_path: Path):
+    """run_pipeline_from_config sets GDAL_HTTP_TIMEOUT from config."""
+    import os
+    from unittest.mock import patch
+
+    from hydro_param.config import PipelineConfig
+    from hydro_param.dataset_registry import DatasetRegistry
+    from hydro_param.pipeline import run_pipeline_from_config
+
+    gpkg_path = tmp_path / "test.gpkg"
+    gpkg_path.write_text("fake")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+        processing={"network_timeout": 300},
+    )
+
+    # Patch stage1 to short-circuit the pipeline
+    with patch("hydro_param.pipeline.stage1_resolve_fabric") as mock_s1:
+        mock_s1.side_effect = RuntimeError("stop early")
+        try:
+            registry = DatasetRegistry(datasets={})
+            run_pipeline_from_config(config, registry)
+        except RuntimeError:
+            pass
+
+    assert os.environ.get("GDAL_HTTP_TIMEOUT") == "300"
+    assert os.environ.get("GDAL_HTTP_CONNECTTIMEOUT") == "300"
