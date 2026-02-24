@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SENTINEL = object()
+
 CLIMR_CATALOG_URL = (
     "https://github.com/mikejohnson51/climateR-catalogs/releases/download/June-2024/catalog.parquet"
 )
@@ -169,36 +171,29 @@ DERIVATION_FUNCTIONS = {
 # ---------------------------------------------------------------------------
 
 
-def fetch_stac_cog(
+def query_stac_items(
     entry: DatasetEntry,
     bbox: list[float],
-    *,
-    asset_key: str | None = None,
-) -> xr.DataArray:
-    """Query a STAC catalog and load COG(s) clipped to the bounding box.
+) -> list[Any]:
+    """Query a STAC catalog and return matching items.
 
-    Handles multi-tile mosaicing when a bounding box spans multiple
-    STAC items.
+    Handles client creation, optional Planetary Computer signing,
+    search, and GSD filtering. The returned items can be passed to
+    ``fetch_stac_cog(..., items=...)`` to avoid repeated queries.
 
     Parameters
     ----------
     entry : DatasetEntry
         Registry entry with ``strategy="stac_cog"``.
     bbox : list[float]
-        ``[west, south, east, north]`` in the dataset's CRS.
-    asset_key : str or None
-        Per-variable STAC asset key override. When not ``None``, this is
-        used instead of ``entry.asset_key``. Necessary for collections
-        like ``gnatsgo-rasters`` where each variable is a separate named
-        asset (i.e., there is no single ``data`` asset).
+        ``[west, south, east, north]`` in EPSG:4326.
 
     Returns
     -------
-    xr.DataArray
-        Raster data clipped to the bounding box.
+    list
+        Matching STAC items (signed if required).
     """
     import pystac_client
-    import rioxarray  # noqa: F401
 
     if entry.catalog_url is None:
         raise ValueError("stac_cog strategy requires 'catalog_url' on the dataset entry")
@@ -234,9 +229,52 @@ def fetch_stac_cog(
         if filtered:
             items = filtered
         else:
-            logger.warning("No items with gsd=%d; using %d unfiltered items", entry.gsd, len(items))
+            logger.warning(
+                "No items with gsd=%d; using %d unfiltered items",
+                entry.gsd,
+                len(items),
+            )
 
     logger.info("Found %d STAC items for bbox", len(items))
+    return items
+
+
+def fetch_stac_cog(
+    entry: DatasetEntry,
+    bbox: list[float],
+    *,
+    asset_key: str | None = None,
+    items: list[Any] | None = None,
+) -> xr.DataArray:
+    """Query a STAC catalog and load COG(s) clipped to the bounding box.
+
+    Handles multi-tile mosaicing when a bounding box spans multiple
+    STAC items.
+
+    Parameters
+    ----------
+    entry : DatasetEntry
+        Registry entry with ``strategy="stac_cog"``.
+    bbox : list[float]
+        ``[west, south, east, north]`` in EPSG:4326.
+    asset_key : str or None
+        Per-variable STAC asset key override. When not ``None``, this is
+        used instead of ``entry.asset_key``. Necessary for collections
+        like ``gnatsgo-rasters`` where each variable is a separate named
+        asset (i.e., there is no single ``data`` asset).
+    items : list or None
+        Pre-fetched STAC items from :func:`query_stac_items`. When
+        provided, the STAC query is skipped entirely.
+
+    Returns
+    -------
+    xr.DataArray
+        Raster data clipped to the bounding box.
+    """
+    import rioxarray  # noqa: F401
+
+    if items is None:
+        items = query_stac_items(entry, bbox)
 
     # Load and mosaic tiles
     resolved_key = asset_key if asset_key is not None else entry.asset_key
@@ -439,11 +477,17 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
     """
     import rioxarray  # noqa: F401
 
-    # Remove _FillValue from attrs to avoid conflict with encoding
-    clean = da.copy()
-    clean.attrs = {k: v for k, v in da.attrs.items() if k != "_FillValue"}
-    clean.encoding = {k: v for k, v in da.encoding.items() if k != "_FillValue"}
-    clean.rio.to_raster(path)
+    # Temporarily remove _FillValue to avoid conflict with encoding,
+    # then restore — avoids a full .copy() of the DataArray.
+    fill_in_attrs = da.attrs.pop("_FillValue", _SENTINEL)
+    fill_in_encoding = da.encoding.pop("_FillValue", _SENTINEL)
+    try:
+        da.rio.to_raster(path)
+    finally:
+        if fill_in_attrs is not _SENTINEL:
+            da.attrs["_FillValue"] = fill_in_attrs
+        if fill_in_encoding is not _SENTINEL:
+            da.encoding["_FillValue"] = fill_in_encoding
     logger.debug("Saved GeoTIFF: %s (%s)", path, da.shape)
     return path
 
