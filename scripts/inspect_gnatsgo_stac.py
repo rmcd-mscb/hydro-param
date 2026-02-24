@@ -17,7 +17,7 @@ import pystac_client
 CATALOG_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTION = "gnatsgo-rasters"
 
-# DRB batch-1 bbox (from pipeline log)
+# DRB batch-1 bbox from pipeline log (single batch, not full DRB extent)
 BBOX = [-75.81, 39.60, -75.23, 41.02]
 
 

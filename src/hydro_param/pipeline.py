@@ -325,7 +325,11 @@ def _process_batch(
 
     for i, var_spec in enumerate(var_specs):
         if isinstance(var_spec, DerivedVariableSpec):
-            # Load source once, then derive
+            # Load source once, then derive.
+            # Note: asset_key is not passed here — derived variables currently
+            # only exist on single-asset datasets (e.g. 3DEP slope/aspect from
+            # elevation). If derived vars are added to per-asset datasets like
+            # gNATSGO, the source VarSpec's asset_key will need to be resolved.
             if var_spec.source not in source_cache:
                 source_cache[var_spec.source] = _fetch(entry, bbox)
 

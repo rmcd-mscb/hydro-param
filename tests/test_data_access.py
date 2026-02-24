@@ -271,3 +271,79 @@ def test_fetch_stac_cog_falls_back_to_entry_asset_key():
         result = fetch_stac_cog(entry, bbox)
 
     assert result is not None
+
+
+def test_fetch_stac_cog_missing_asset_key_raises_informative_error():
+    """fetch_stac_cog raises KeyError with available assets when key is missing."""
+    from hydro_param.data_access import fetch_stac_cog
+
+    pytest.importorskip("rioxarray")
+
+    # Build a mock STAC item with only specific assets
+    mock_data_asset = MagicMock()
+    mock_data_asset.roles = ["data"]
+    mock_preview_asset = MagicMock()
+    mock_preview_asset.roles = ["overview"]
+    mock_item = MagicMock()
+    mock_item.id = "test_tile_123"
+    mock_item.properties = {}
+    mock_item.assets = {
+        "aws0_100": mock_data_asset,
+        "rootznemc": mock_data_asset,
+        "rendered_preview": mock_preview_asset,
+    }
+
+    mock_search = MagicMock()
+    mock_search.item_collection.return_value = [mock_item]
+
+    mock_client = MagicMock()
+    mock_client.search.return_value = mock_search
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="gnatsgo-rasters",
+        crs="EPSG:5070",
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with (
+        patch("pystac_client.Client.open", return_value=mock_client),
+        pytest.raises(KeyError, match="'data' not found in STAC item 'test_tile_123'"),
+    ):
+        # Default asset_key is "data" which doesn't exist — should get helpful error
+        fetch_stac_cog(entry, bbox)
+
+
+def test_fetch_stac_cog_missing_asset_key_lists_available():
+    """KeyError message includes available data asset keys."""
+    from hydro_param.data_access import fetch_stac_cog
+
+    pytest.importorskip("rioxarray")
+
+    mock_data_asset = MagicMock()
+    mock_data_asset.roles = ["data"]
+    mock_item = MagicMock()
+    mock_item.id = "tile_1"
+    mock_item.properties = {}
+    mock_item.assets = {"aws0_100": mock_data_asset, "rootznemc": mock_data_asset}
+
+    mock_search = MagicMock()
+    mock_search.item_collection.return_value = [mock_item]
+
+    mock_client = MagicMock()
+    mock_client.search.return_value = mock_search
+
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://planetarycomputer.microsoft.com/api/stac/v1",
+        collection="gnatsgo-rasters",
+        crs="EPSG:5070",
+    )
+    bbox = [-75.8, 39.6, -74.4, 42.5]
+
+    with (
+        patch("pystac_client.Client.open", return_value=mock_client),
+        pytest.raises(KeyError, match="aws0_100.*rootznemc"),
+    ):
+        fetch_stac_cog(entry, bbox, asset_key="nonexistent")
