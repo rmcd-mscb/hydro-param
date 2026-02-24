@@ -522,6 +522,17 @@ def test_resolve_bbox_unsupported_type():
         resolve_bbox(config)
 
 
+def test_resolve_bbox_no_domain():
+    """resolve_bbox raises ValueError when domain is None."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets=[],
+    )
+    assert config.domain is None
+    with pytest.raises(ValueError, match="No domain configured"):
+        resolve_bbox(config)
+
+
 # ---------------------------------------------------------------------------
 # _buffered_bbox
 # ---------------------------------------------------------------------------

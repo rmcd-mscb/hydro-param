@@ -417,7 +417,6 @@ class TestApplyConversion:
         assert_allclose(result[2], 100.0)
 
     def test_k_to_c(self) -> None:
-
         from hydro_param.sir import apply_conversion
 
         values = np.array([273.15, 283.15, 293.15])
@@ -425,7 +424,6 @@ class TestApplyConversion:
         np.testing.assert_allclose(result, [0.0, 10.0, 20.0])
 
     def test_k_to_c_with_nan(self) -> None:
-
         from hydro_param.sir import apply_conversion
 
         values = np.array([273.15, np.nan, 293.15])
@@ -690,7 +688,6 @@ class TestValidateSIR:
         assert warnings == []
 
     def test_all_nan_warns(self, tmp_path: Path) -> None:
-
         from hydro_param.sir import SIRVariableSchema, validate_sir
 
         path = self._write_csv(tmp_path, "elevation_m_mean", [np.nan, np.nan], [1, 2])
@@ -789,6 +786,36 @@ class TestValidateSIR:
         ]
         warnings = validate_sir({}, schema)
         assert any(w.check_type == "missing" for w in warnings)
+
+    def test_netcdf_files_skipped(self, tmp_path: Path) -> None:
+        """Temporal NetCDF files are skipped by CSV-only validation."""
+        import xarray as xr
+
+        from hydro_param.sir import SIRVariableSchema, validate_sir
+
+        # Write a NetCDF that would crash pd.read_csv if not skipped
+        ds = xr.Dataset({"tmmx_C_mean": (["time", "nhm_id"], [[26.85, 36.85]])})
+        nc_path = tmp_path / "tmmx_C_mean_2020.nc"
+        ds.to_netcdf(nc_path)
+
+        schema = [
+            SIRVariableSchema(
+                canonical_name="tmmx_C_mean",
+                source_name="tmmx",
+                source_units="K",
+                canonical_units="°C",
+                long_name="daily_maximum_temperature",
+                categorical=False,
+                valid_range=None,
+                conversion="K_to_C",
+                temporal=True,
+            )
+        ]
+        # Should not crash — .nc files are skipped
+        warnings = validate_sir({"tmmx_C_mean_2020": nc_path}, schema)
+        # The only warning should be "missing" since schema expects "tmmx_C_mean"
+        # but sir_files has "tmmx_C_mean_2020"
+        assert all(w.check_type == "missing" for w in warnings)
 
     def test_categorical_count_column_not_range_checked(self, tmp_path: Path) -> None:
         """Count columns in categorical CSVs should not trigger range warnings."""
@@ -909,6 +936,72 @@ class TestNormalizeSIRTemporal:
         pr_var = [v for v in pr_ds.data_vars][0]
         np.testing.assert_allclose(pr_ds[pr_var].values[0], [5.0, 10.0])
         pr_ds.close()
+
+    def test_multi_year_produces_separate_files(self, tmp_path: Path) -> None:
+        """Multi-year temporal files produce year-suffixed output keys."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+
+        # Create 2 year files with the same variable
+        for year in [2020, 2021]:
+            ds = xr.Dataset(
+                {
+                    "daily_maximum_temperature": (
+                        ["time", "nhm_id"],
+                        np.array([[300.0 + year - 2020, 310.0]]),
+                    ),
+                },
+                coords={
+                    "time": pd.date_range(f"{year}-01-01", periods=1),
+                    "nhm_id": [1, 2],
+                },
+            )
+            ds.to_netcdf(input_dir / f"gridmet_{year}.nc")
+
+        temporal_files = {
+            "gridmet_2020": input_dir / "gridmet_2020.nc",
+            "gridmet_2021": input_dir / "gridmet_2021.nc",
+        }
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["tmmx"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2021-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files=temporal_files,
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+
+        # Should have 2 separate output keys with year suffixes
+        assert "tmmx_C_mean_2020" in result
+        assert "tmmx_C_mean_2021" in result
+        assert result["tmmx_C_mean_2020"] != result["tmmx_C_mean_2021"]
 
     def test_skips_unknown_variables(self, tmp_path: Path) -> None:
         """Variables not in schema are skipped with a warning."""

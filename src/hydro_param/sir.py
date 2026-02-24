@@ -214,7 +214,8 @@ def apply_conversion(
         Input values in source units.
     conversion
         Conversion type: ``None`` (passthrough), ``"log10_to_linear"``
-        (10^x), or raises ``ValueError`` for unknown types.
+        (10^x), ``"K_to_C"`` (Kelvin to Celsius), or raises
+        ``ValueError`` for unknown types.
 
     Returns
     -------
@@ -432,38 +433,43 @@ def normalize_sir_temporal(
                     long_name_lookup[vs.long_name] = (vs, matching)
 
     for file_key, nc_path in temporal_files.items():
-        ds = xr.open_dataset(nc_path)
+        # Extract year suffix from file_key (e.g., "gridmet_2020" → "_2020")
+        year_match = re.search(r"_(\d{4})$", file_key)
+        year_suffix = f"_{year_match.group(1)}" if year_match else ""
 
-        for data_var in list(ds.data_vars):
-            lookup = long_name_lookup.get(str(data_var))
-            if lookup is None:
-                logger.warning(
-                    "No SIR schema match for temporal variable '%s' in %s — skipping",
-                    data_var,
-                    nc_path.name,
+        with xr.open_dataset(nc_path) as ds:
+            for data_var in list(ds.data_vars):
+                lookup = long_name_lookup.get(str(data_var))
+                if lookup is None:
+                    logger.warning(
+                        "No SIR schema match for temporal variable '%s' in %s — skipping",
+                        data_var,
+                        nc_path.name,
+                    )
+                    continue
+
+                schema_entries = lookup[1]
+                schema_entry = schema_entries[0]
+
+                # Apply unit conversion
+                values: NDArray[np.floating] = ds[data_var].values.astype(np.float64)
+                if schema_entry.conversion is not None:
+                    values = apply_conversion(values, schema_entry.conversion)
+
+                cname = schema_entry.canonical_name
+                # Include year suffix to avoid multi-year collisions
+                out_key = f"{cname}{year_suffix}"
+
+                out_ds = xr.Dataset(
+                    {cname: (ds[data_var].dims, values)},
+                    coords=ds.coords,
                 )
-                continue
-
-            var_spec, schema_entries = lookup
-            schema_entry = schema_entries[0]
-
-            # Apply unit conversion
-            values: NDArray[np.floating] = ds[data_var].values.astype(np.float64)
-            if schema_entry.conversion is not None:
-                values = apply_conversion(values, schema_entry.conversion)
-
-            cname = schema_entry.canonical_name
-
-            out_ds = xr.Dataset(
-                {cname: (ds[data_var].dims, values)},
-                coords=ds.coords,
-            )
-            out_path = output_dir / f"{cname}.nc"
-            out_ds.to_netcdf(out_path)
-            sir_files[cname] = out_path
-            logger.info("SIR temporal normalized: %s/%s → %s", file_key, data_var, out_path.name)
-
-        ds.close()
+                out_path = output_dir / f"{out_key}.nc"
+                out_ds.to_netcdf(out_path)
+                sir_files[out_key] = out_path
+                logger.info(
+                    "SIR temporal normalized: %s/%s → %s", file_key, data_var, out_path.name
+                )
 
     return sir_files
 
@@ -525,8 +531,10 @@ def validate_sir(
                 )
             )
 
-    # Check each file
+    # Check each file (skip temporal NetCDF — CSV validation only)
     for cname, path in sir_files.items():
+        if path.suffix == ".nc":
+            continue
         df = pd.read_csv(path, index_col=0)
 
         # Find matching schema entry
