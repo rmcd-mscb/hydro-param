@@ -520,3 +520,25 @@ def test_fetch_nhgf_stac_cog_no_year():
     # source_time_period should NOT be in kwargs when year is None
     nhgf_kwargs = p_nhgf.call_args.kwargs
     assert "source_time_period" not in nhgf_kwargs
+
+
+def test_fetch_nhgf_stac_cog_timeout_message():
+    """fetch_nhgf_stac_cog wraps timeout errors with guidance."""
+    from unittest.mock import patch
+
+    import pytest
+
+    from hydro_param.data_access import fetch_nhgf_stac_cog
+
+    with (
+        patch(
+            "gdptools.helpers.get_stac_collection",
+            side_effect=Exception("HTTP timeout"),
+        ),
+        pytest.raises(RuntimeError, match="network_timeout"),
+    ):
+        fetch_nhgf_stac_cog(
+            collection_id="nlcd-LndCov",
+            variable_name="LndCov",
+            year=2021,
+        )

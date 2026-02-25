@@ -843,9 +843,7 @@ def stage4_process(
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
             # Update manifest after temporal dataset completes
-            _save_manifest(
-                manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path
-            )
+            _save_manifest(manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path)
 
             continue
 

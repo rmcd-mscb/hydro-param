@@ -308,6 +308,7 @@ def test_sir_validation_strict() -> None:
 def test_processing_config_network_timeout_default():
     """network_timeout defaults to 120."""
     from hydro_param.config import ProcessingConfig
+
     pc = ProcessingConfig()
     assert pc.network_timeout == 120
 
@@ -315,6 +316,7 @@ def test_processing_config_network_timeout_default():
 def test_processing_config_network_timeout_custom():
     """network_timeout accepts positive int."""
     from hydro_param.config import ProcessingConfig
+
     pc = ProcessingConfig(network_timeout=300)
     assert pc.network_timeout == 300
 
@@ -322,14 +324,18 @@ def test_processing_config_network_timeout_custom():
 def test_processing_config_network_timeout_rejects_zero():
     """network_timeout rejects 0."""
     import pytest
+
     from hydro_param.config import ProcessingConfig
-    with pytest.raises(Exception):
+
+    with pytest.raises(ValueError):
         ProcessingConfig(network_timeout=0)
 
 
 def test_processing_config_network_timeout_rejects_negative():
     """network_timeout rejects negative values."""
     import pytest
+
     from hydro_param.config import ProcessingConfig
-    with pytest.raises(Exception):
+
+    with pytest.raises(ValueError):
         ProcessingConfig(network_timeout=-10)

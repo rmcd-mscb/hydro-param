@@ -2038,7 +2038,6 @@ def test_stage4_resume_false_does_not_skip(tmp_path: Path):
         mock_method.assert_called_once()
 
 
-
 # ---------------------------------------------------------------------------
 # PipelineResult with SIR normalization
 # ---------------------------------------------------------------------------

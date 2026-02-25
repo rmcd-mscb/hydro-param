@@ -535,17 +535,28 @@ def fetch_nhgf_stac_cog(
         year,
     )
 
-    collection = gdptools.helpers.get_stac_collection(collection_id)
+    try:
+        collection = gdptools.helpers.get_stac_collection(collection_id)
 
-    kwargs: dict[str, Any] = {
-        "source_collection": collection,
-        "source_var": variable_name,
-        "band": band,
-    }
-    if year is not None:
-        kwargs["source_time_period"] = [f"{year}-01-01", f"{year}-12-31"]
+        kwargs: dict[str, Any] = {
+            "source_collection": collection,
+            "source_var": variable_name,
+            "band": band,
+        }
+        if year is not None:
+            kwargs["source_time_period"] = [f"{year}-01-01", f"{year}-12-31"]
 
-    nhgf_data = gdptools.NHGFStacTiffData(**kwargs)
+        nhgf_data = gdptools.NHGFStacTiffData(**kwargs)
+    except Exception as exc:
+        exc_msg = str(exc).lower()
+        if any(kw in exc_msg for kw in ("timeout", "timed out", "connect")):
+            raise RuntimeError(
+                f"NHGF STAC fetch failed for {collection_id}/{variable_name} "
+                f"(year={year}): {exc}\n"
+                "Hint: increase 'network_timeout' in your pipeline config "
+                "and set 'resume: true' to skip already-completed variables."
+            ) from exc
+        raise
 
     logger.info("NHGF STAC COG fetched: shape=%s", nhgf_data.ds.shape)
     return nhgf_data.ds
