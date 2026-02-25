@@ -6,10 +6,15 @@ from pathlib import Path
 
 import pytest
 import xarray as xr
+
 from hydro_param.plugins import (
     DerivationContext,
     DerivationPlugin,
     FormatterPlugin,
+    NetCDFFormatter,
+    ParquetFormatter,
+    get_derivation,
+    get_formatter,
 )
 
 
@@ -59,3 +64,42 @@ class TestProtocolSatisfaction:
         from hydro_param.formatters.pywatershed import PywatershedFormatter
 
         assert isinstance(PywatershedFormatter(), FormatterPlugin)
+
+
+class TestGetDerivation:
+    """Tests for the get_derivation() factory."""
+
+    def test_pywatershed(self) -> None:
+        from hydro_param.derivations.pywatershed import PywatershedDerivation
+
+        plugin = get_derivation("pywatershed")
+        assert isinstance(plugin, PywatershedDerivation)
+
+    def test_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown derivation plugin"):
+            get_derivation("nextgen")
+
+
+class TestGetFormatter:
+    """Tests for the get_formatter() factory."""
+
+    def test_netcdf(self) -> None:
+        fmt = get_formatter("netcdf")
+        assert fmt.name == "netcdf"
+        assert isinstance(fmt, NetCDFFormatter)
+
+    def test_parquet(self) -> None:
+        fmt = get_formatter("parquet")
+        assert fmt.name == "parquet"
+        assert isinstance(fmt, ParquetFormatter)
+
+    def test_pywatershed(self) -> None:
+        from hydro_param.formatters.pywatershed import PywatershedFormatter
+
+        fmt = get_formatter("pywatershed")
+        assert fmt.name == "pywatershed"
+        assert isinstance(fmt, PywatershedFormatter)
+
+    def test_unknown_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown output formatter"):
+            get_formatter("prms_v3_text")
