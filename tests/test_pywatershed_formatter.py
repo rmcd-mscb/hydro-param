@@ -11,13 +11,11 @@ import yaml
 
 from hydro_param.formatters.pywatershed import PywatershedFormatter
 
-PARAM_METADATA_PATH = Path("configs/pywatershed/parameter_metadata.yml")
-
 
 @pytest.fixture()
 def formatter() -> PywatershedFormatter:
-    """Formatter with project metadata."""
-    return PywatershedFormatter(metadata_path=PARAM_METADATA_PATH)
+    """Formatter with bundled metadata."""
+    return PywatershedFormatter()
 
 
 @pytest.fixture()
@@ -263,9 +261,20 @@ class TestValidate:
         warnings = formatter.validate(ds)
         assert any("hru_slope" in w and "below" in w for w in warnings)
 
-    def test_no_metadata_no_crash(self, tmp_path: Path) -> None:
-        """Formatter works even if metadata YAML is missing."""
-        fmt = PywatershedFormatter(metadata_path=tmp_path / "nonexistent.yml")
+    def test_no_metadata_returns_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Formatter returns warning when metadata YAML is missing."""
+        monkeypatch.setattr(
+            PywatershedFormatter,
+            "_default_metadata_path",
+            staticmethod(lambda: Path("/nonexistent/metadata.yml")),
+        )
+        fmt = PywatershedFormatter()
         ds = xr.Dataset({"hru_elev": ("nhru", np.array([100.0]))})
         warnings = fmt.validate(ds)
-        assert warnings == []
+        assert len(warnings) == 1
+        assert "unavailable" in warnings[0].lower()
+
+    def test_formatter_no_init_args(self) -> None:
+        """Formatter can be constructed with no arguments."""
+        fmt = PywatershedFormatter()
+        assert fmt.name == "pywatershed"
