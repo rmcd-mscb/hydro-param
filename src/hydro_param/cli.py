@@ -627,8 +627,6 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 @pws_app.command(name="validate")
 def pws_validate_cmd(
     param_file: Path,
-    *,
-    metadata: Path | None = None,
 ) -> None:
     """Validate a pywatershed parameter file.
 
@@ -639,9 +637,6 @@ def pws_validate_cmd(
     ----------
     param_file
         Path to a pywatershed parameter NetCDF file.
-    metadata
-        Path to parameter metadata YAML. Defaults to
-        ``configs/pywatershed/parameter_metadata.yml``.
     """
     import xarray as xr
 
@@ -653,15 +648,7 @@ def pws_validate_cmd(
         print(f"Error: Could not open '{param_file}': {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    formatter = PywatershedFormatter(metadata_path=metadata) if metadata else PywatershedFormatter()
-
-    if not formatter.has_metadata():
-        print(
-            "Warning: parameter metadata not found at "
-            f"'{formatter.metadata_path}'. Validation will be incomplete.",
-            file=sys.stderr,
-        )
-
+    formatter = PywatershedFormatter()
     warnings = formatter.validate(ds)
     ds.close()
 
