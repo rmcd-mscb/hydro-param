@@ -99,6 +99,18 @@ def merge_temporal_into_derived(
     xr.Dataset
         Derived dataset with temporal variables merged in.
     """
+    import warnings
+
+    warnings.warn(
+        "merge_temporal_into_derived() is deprecated. "
+        "Use PywatershedDerivation._derive_forcing() via DerivationContext.temporal instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    logger.warning(
+        "merge_temporal_into_derived() is deprecated; "
+        "use DerivationContext.temporal with _derive_forcing() instead."
+    )
     renames = renames or {}
     conversions = conversions or {}
 

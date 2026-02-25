@@ -1902,3 +1902,17 @@ class TestDeriveCalibrationSeeds:
         # Should use default value 0.015
         np.testing.assert_allclose(ds["gwflow_coef"].values, [0.015, 0.015])
         assert any("unknown method" in r.message for r in caplog.records)
+
+
+class TestMergeTemporalDeprecation:
+    """Test that merge_temporal_into_derived logs a deprecation warning."""
+
+    def test_deprecation_warning_logged(self) -> None:
+        """Calling merge_temporal_into_derived logs a deprecation warning."""
+        import pytest
+
+        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
+
+        ds = xr.Dataset({"x": ("nhru", [1.0])})
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            merge_temporal_into_derived(ds, {})
