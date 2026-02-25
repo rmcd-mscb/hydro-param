@@ -5,9 +5,6 @@ data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
 Foundation implementation covers steps 1, 2, 3, 4, 8, and 13.
-Future PRs will add steps 5 (soils), 6 (waterbody overlay),
-7 (forcing generation), 9 (soltab), 10 (PET), 11 (transp),
-12 (routing), and 14 (calibration seeds).
 """
 
 from __future__ import annotations
@@ -22,24 +19,10 @@ import pyproj
 import xarray as xr
 import yaml
 
+from hydro_param.plugins import DerivationContext
 from hydro_param.units import convert
 
 logger = logging.getLogger(__name__)
-
-
-def _sir_id_dim(sir: xr.Dataset, id_field: str) -> str:
-    """Return the feature-ID dimension present in *sir*.
-
-    Raises
-    ------
-    KeyError
-        If *id_field* is not a dimension in *sir*.
-    """
-    if id_field not in sir.dims:
-        raise KeyError(
-            f"Expected dimension '{id_field}' not found in SIR. Available dims: {list(sir.dims)}"
-        )
-    return id_field
 
 
 # Default PRMS values from Regan et al. 2018 / Markstrom et al. 2015
@@ -83,6 +66,7 @@ def merge_temporal_into_derived(
     temporal: dict[str, xr.Dataset],
     renames: dict[str, str] | None = None,
     conversions: dict[str, tuple[str, str]] | None = None,
+    id_field: str = "nhru",
 ) -> xr.Dataset:
     """Merge temporal data into derived dataset with renaming and unit conversion.
 
@@ -97,6 +81,8 @@ def merge_temporal_into_derived(
     conversions
         Unit conversions ``{variable_name: (from_unit, to_unit)}``.
         Applied **after** renames (use target names).
+    id_field
+        Feature dimension name used in the derived dataset.
 
     Returns
     -------
@@ -121,24 +107,24 @@ def merge_temporal_into_derived(
         else:
             ds = chunks[0]
 
-        # Rename temporal variables (e.g., pr→prcp, tmmx→tmax)
+        # Rename temporal variables (e.g., pr->prcp, tmmx->tmax)
         actual_renames = {old: new for old, new in renames.items() if old in ds}
         if actual_renames:
             ds = ds.rename(actual_renames)
 
-        # Apply unit conversions (e.g., K→C for temperature)
+        # Apply unit conversions (e.g., K->C for temperature)
         for var_name, (from_unit, to_unit) in conversions.items():
             if var_name in ds:
                 da = ds[var_name]
                 converted = convert(da.values.astype(np.float64), from_unit, to_unit)
                 ds[var_name] = da.copy(data=converted)
 
-        # Align temporal feature dimension to derived dataset's nhru
+        # Align temporal feature dimension to derived dataset's id_field
         for var in ds.data_vars:
             da = ds[str(var)]
             feat_dims = [d for d in da.dims if d != "time"]
-            if feat_dims and "nhru" in derived.dims and feat_dims[0] != "nhru":
-                da = da.rename({feat_dims[0]: "nhru"})
+            if feat_dims and id_field in derived.dims and feat_dims[0] != id_field:
+                da = da.rename({feat_dims[0]: id_field})
             derived[str(var)] = da
 
     return derived
@@ -151,124 +137,55 @@ class PywatershedDerivation:
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
     8 (lookup tables), and 13 (defaults).
-
-    Parameters
-    ----------
-    lookup_tables_dir
-        Path to the directory containing lookup table YAML files.
-        Defaults to ``configs/lookup_tables``.
     """
 
-    def __init__(self, lookup_tables_dir: Path | None = None) -> None:
-        self._lookup_tables_dir = lookup_tables_dir or Path("configs/lookup_tables")
+    name: str = "pywatershed"
+
+    def __init__(self) -> None:
         self._lookup_cache: dict[str, dict] = {}
 
-    def rename_sir_variables(
-        self,
-        sir: xr.Dataset,
-        renames: dict[str, str] | None = None,
-    ) -> xr.Dataset:
-        """Rename SIR variables for derivation compatibility.
-
-        .. deprecated::
-            SIR normalization (Stage 5) now produces canonical variable
-            names directly. This method is retained for backward
-            compatibility but performs no default renames. Pass explicit
-            ``renames`` if needed.
-
-        Parameters
-        ----------
-        sir
-            Input SIR dataset.
-        renames
-            Explicit variable name mapping ``{old: new}``.
-
-        Returns
-        -------
-        xr.Dataset
-            SIR with renamed variables (unchanged if no renames given).
-        """
-        if renames:
-            actual = {old: new for old, new in renames.items() if old in sir}
-            if actual:
-                sir = sir.rename(actual)
-                logger.info("SIR variable renames: %s", actual)
-        return sir
-
-    def derive(
-        self,
-        sir: xr.Dataset,
-        *,
-        config: dict | None = None,
-        fabric: gpd.GeoDataFrame | None = None,
-        segments: gpd.GeoDataFrame | None = None,
-        id_field: str = "nhm_id",
-        segment_id_field: str = "nhm_seg",
-    ) -> xr.Dataset:
+    def derive(self, context: DerivationContext) -> xr.Dataset:
         """Derive all pywatershed parameters from the SIR.
 
         Parameters
         ----------
-        sir
-            Standardized Internal Representation with physical properties
-            using canonical SIR names (e.g., ``elevation_m_mean``,
-            ``slope_deg_mean``, ``aspect_deg_mean``, ``lndcov_frac_*``).
-        config
-            Optional derivation configuration.  Supports key:
-            ``parameter_overrides`` (dict).
-        fabric
-            HRU polygon GeoDataFrame with topology attributes.
-            Required for step 2 (topology extraction).
-        segments
-            Stream segment GeoDataFrame with line geometries.
-            Required for step 2 (topology extraction).
-        id_field
-            Column name for HRU identifiers in the fabric.
-        segment_id_field
-            Column name for segment identifiers in the segments
-            GeoDataFrame.
+        context
+            Typed input bundle containing SIR, fabric, config, etc.
 
         Returns
         -------
         xr.Dataset
             pywatershed parameter dataset with PRMS-convention units.
         """
-        config = config or {}
-        sir_id = _sir_id_dim(sir, id_field)
-        nhru = sir.sizes.get(sir_id, 0)
+        sir = context.sir
+        id_field = context.fabric_id_field
+        nhru = sir.sizes.get(id_field, 0)
         ds = xr.Dataset()
 
         # Carry HRU coordinates so derived params retain stable indexing
-        if sir_id in sir.coords:
-            ds = ds.assign_coords(nhru=sir[sir_id].values)
+        if id_field in sir.coords:
+            ds = ds.assign_coords(nhru=sir[id_field].values)
 
         # Step 1: Geometry (hru_area, hru_lat)
-        ds = self._derive_geometry(sir, ds, fabric=fabric, id_field=id_field)
+        ds = self._derive_geometry(context, ds)
 
         # Step 2: Topology (tosegment, hru_segment, seg_length)
-        if fabric is not None and segments is not None:
-            ds = self._derive_topology(
-                ds,
-                fabric=fabric,
-                segments=segments,
-                id_field=id_field,
-                segment_id_field=segment_id_field,
-            )
+        ds = self._derive_topology(context, ds)
 
         # Step 3: Topographic parameters (hru_elev, hru_slope, hru_aspect)
-        ds = self._derive_topography(sir, ds)
+        ds = self._derive_topography(context, ds)
 
         # Step 4: Land cover parameters (cov_type, covden_sum, hru_percent_imperv)
-        ds = self._derive_landcover(sir, ds)
+        ds = self._derive_landcover(context, ds)
 
         # Step 8: Lookup table application
-        ds = self._apply_lookup_tables(ds)
+        ds = self._apply_lookup_tables(context, ds)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
 
         # Apply parameter overrides last
-        overrides = config.get("parameter_overrides", {})
+        overrides = context.config.get("parameter_overrides", {})
         if isinstance(overrides, dict) and "values" in overrides:
             overrides = overrides["values"]
         if overrides:
@@ -282,11 +199,8 @@ class PywatershedDerivation:
 
     def _derive_geometry(
         self,
-        sir: xr.Dataset,
+        ctx: DerivationContext,
         ds: xr.Dataset,
-        *,
-        fabric: gpd.GeoDataFrame | None = None,
-        id_field: str = "nhm_id",
     ) -> xr.Dataset:
         """Step 1: Compute basic geometry from the target fabric.
 
@@ -295,10 +209,13 @@ class PywatershedDerivation:
         SIR variables ``hru_area_m2`` and ``hru_lat`` when fabric is not
         available.
         """
+        sir = ctx.sir
+        fabric = ctx.fabric
+        id_field = ctx.fabric_id_field
+
         if fabric is not None and id_field in fabric.columns:
             # Align fabric rows to SIR HRU ordering
-            sir_id = _sir_id_dim(sir, id_field)
-            hru_ids = sir[sir_id].values if sir_id in sir.coords else None
+            hru_ids = sir[id_field].values if id_field in sir.coords else None
             if hru_ids is not None:
                 fab = fabric.set_index(id_field).loc[hru_ids].reset_index()
             else:
@@ -344,12 +261,8 @@ class PywatershedDerivation:
 
     def _derive_topology(
         self,
+        ctx: DerivationContext,
         ds: xr.Dataset,
-        *,
-        fabric: gpd.GeoDataFrame,
-        segments: gpd.GeoDataFrame,
-        id_field: str,
-        segment_id_field: str,
     ) -> xr.Dataset:
         """Step 2: Extract routing topology from GeoDataFrames.
 
@@ -359,19 +272,10 @@ class PywatershedDerivation:
 
         Parameters
         ----------
+        ctx
+            Derivation context with fabric, segments, and field names.
         ds
             Output dataset being constructed.
-        fabric
-            HRU polygon GeoDataFrame.  Required columns: ``hru_segment``
-            and the column named by ``id_field``.
-        segments
-            Stream segment line GeoDataFrame.  Required column:
-            ``tosegment``.  Optional: ``seg_length``.
-        id_field
-            Column name for HRU identifiers in the fabric.  Used to
-            align fabric rows to ``ds.coords['nhru']``.
-        segment_id_field
-            Column name for segment identifiers.
 
         Raises
         ------
@@ -379,6 +283,14 @@ class PywatershedDerivation:
             If required columns (``tosegment``, ``hru_segment``) are
             missing from the GeoDataFrames.
         """
+        fabric = ctx.fabric
+        segments = ctx.segments
+        if fabric is None or segments is None:
+            return ds
+
+        id_field = ctx.fabric_id_field
+        segment_id_field = ctx.segment_id_field or "nhm_seg"
+
         nseg = len(segments)
 
         # Add nsegment coordinate from segment IDs
@@ -515,8 +427,9 @@ class PywatershedDerivation:
     # Step 3: Topographic parameters
     # ------------------------------------------------------------------
 
-    def _derive_topography(self, sir: xr.Dataset, ds: xr.Dataset) -> xr.Dataset:
+    def _derive_topography(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Step 3: Convert DEM zonal statistics to PRMS parameters."""
+        sir = ctx.sir
         if "elevation_m_mean" in sir:
             ds["hru_elev"] = xr.DataArray(
                 convert(sir["elevation_m_mean"].values, "m", "ft"),
@@ -546,7 +459,7 @@ class PywatershedDerivation:
     # Step 4: Land cover parameters
     # ------------------------------------------------------------------
 
-    def _derive_landcover(self, sir: xr.Dataset, ds: xr.Dataset) -> xr.Dataset:
+    def _derive_landcover(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Step 4: Derive vegetation and impervious parameters from NLCD.
 
         Supports three input modes:
@@ -560,6 +473,7 @@ class PywatershedDerivation:
         3. **Impervious/canopy**: ``fctimp_pct_mean`` (0-100%) and
            ``tree_canopy_pct_mean`` (0-100%).
         """
+        sir = ctx.sir
         # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
         lc_var = None
         nlcd_values = self._compute_majority_from_fractions(sir)
@@ -573,11 +487,15 @@ class PywatershedDerivation:
 
         has_lc = nlcd_values is not None or lc_var is not None
         if nlcd_values is not None:
-            nlcd_table = self._load_lookup_table("nlcd_to_prms_cov_type")
+            nlcd_table = self._load_lookup_table(
+                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
+            )
             mapping = nlcd_table["mapping"]
             cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values])
         elif lc_var is not None:
-            nlcd_table = self._load_lookup_table("nlcd_to_prms_cov_type")
+            nlcd_table = self._load_lookup_table(
+                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
+            )
             mapping = nlcd_table["mapping"]
             nlcd_values_lc = sir[lc_var].values.astype(int)
             cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
@@ -590,7 +508,7 @@ class PywatershedDerivation:
             )
 
         if "tree_canopy_pct_mean" in sir:
-            # Continuous canopy cover (0-100%) → fraction (0-1)
+            # Continuous canopy cover (0-100%) -> fraction (0-1)
             ds["covden_sum"] = xr.DataArray(
                 np.clip(sir["tree_canopy_pct_mean"].values / 100.0, 0.0, 1.0),
                 dims="nhru",
@@ -607,7 +525,7 @@ class PywatershedDerivation:
             )
 
         if "fctimp_pct_mean" in sir:
-            # Percent (0-100) → fraction (0-1)
+            # Percent (0-100) -> fraction (0-1)
             ds["hru_percent_imperv"] = xr.DataArray(
                 np.clip(sir["fctimp_pct_mean"].values / 100.0, 0.0, 1.0),
                 dims="nhru",
@@ -678,7 +596,7 @@ class PywatershedDerivation:
     # Step 8: Lookup table application
     # ------------------------------------------------------------------
 
-    def _apply_lookup_tables(self, ds: xr.Dataset) -> xr.Dataset:
+    def _apply_lookup_tables(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Step 8: Apply lookup tables for interception and winter cover.
 
         Requires ``cov_type`` and ``covden_sum`` to already be in ``ds``.
@@ -686,10 +604,11 @@ class PywatershedDerivation:
         if "cov_type" not in ds:
             return ds
 
+        tables_dir = ctx.resolved_lookup_tables_dir
         cov_type_vals = ds["cov_type"].values.astype(int)
 
         # Interception capacities
-        intcp_table = self._load_lookup_table("cov_type_to_interception")
+        intcp_table = self._load_lookup_table("cov_type_to_interception", tables_dir)
         columns = intcp_table["columns"]  # [srain_intcp, wrain_intcp, snow_intcp]
         mapping = intcp_table["mapping"]
 
@@ -711,7 +630,7 @@ class PywatershedDerivation:
 
         # Winter cover density
         if "covden_sum" in ds:
-            winter_table = self._load_lookup_table("cov_type_winter_reduction")
+            winter_table = self._load_lookup_table("cov_type_winter_reduction", tables_dir)
             winter_mapping = winter_table["mapping"]
             reduction = np.array([winter_mapping.get(int(ct), 0.5) for ct in cov_type_vals])
             ds["covden_win"] = xr.DataArray(
@@ -773,29 +692,18 @@ class PywatershedDerivation:
         return ds
 
     # ------------------------------------------------------------------
-    # Future steps (stubs)
-    # ------------------------------------------------------------------
-
-    # TODO: Step 5 — soils (soil_type, soil_moist_max, soil_rechr_max_frac)
-    # TODO: Step 6 — waterbody overlay (dprst_frac, dprst_area_max, hru_type)
-    # TODO: Step 7 — forcing generation (prcp, tmax, tmin time series)
-    # TODO: Step 9 — soltab computation (Swift 1976 algorithm)
-    # TODO: Step 10 — PET coefficients (jh_coef, jh_coef_hru)
-    # TODO: Step 11 — climate-derived params (transp_beg, transp_end)
-    # TODO: Step 12 — routing coefficients (K_coef from seg_length + velocity)
-    # TODO: Step 14 — calibration seeds (physically-based initial values)
-
-    # ------------------------------------------------------------------
     # Lookup table loader
     # ------------------------------------------------------------------
 
-    def _load_lookup_table(self, name: str) -> dict:
+    def _load_lookup_table(self, name: str, tables_dir: Path) -> dict:
         """Load a YAML lookup table from the lookup tables directory.
 
         Parameters
         ----------
         name
             Lookup table filename (without ``.yml`` extension).
+        tables_dir
+            Directory containing lookup table YAML files.
 
         Returns
         -------
@@ -803,7 +711,7 @@ class PywatershedDerivation:
             Parsed YAML content with at least a ``mapping`` key.
         """
         if name not in self._lookup_cache:
-            path = self._lookup_tables_dir / f"{name}.yml"
+            path = tables_dir / f"{name}.yml"
             with open(path) as f:
                 self._lookup_cache[name] = yaml.safe_load(f)
         return self._lookup_cache[name]

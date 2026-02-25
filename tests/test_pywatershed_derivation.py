@@ -11,14 +11,13 @@ import xarray as xr
 from shapely.geometry import LineString, Polygon
 
 from hydro_param.derivations.pywatershed import PywatershedDerivation
-
-LOOKUP_TABLES_DIR = Path("configs/lookup_tables")
+from hydro_param.plugins import DerivationContext
 
 
 @pytest.fixture()
 def derivation() -> PywatershedDerivation:
-    """Derivation plugin with project lookup tables."""
-    return PywatershedDerivation(lookup_tables_dir=LOOKUP_TABLES_DIR)
+    """Derivation plugin instance."""
+    return PywatershedDerivation()
 
 
 @pytest.fixture()
@@ -73,27 +72,30 @@ class TestDeriveTopography:
     def test_elevation_m_to_ft(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_elev" in ds
-        # 100m ≈ 328.084 ft
+        # 100m ~ 328.084 ft
         np.testing.assert_allclose(ds["hru_elev"].values[0], 328.084, atol=0.01)
         assert ds["hru_elev"].attrs["units"] == "feet"
 
     def test_slope_degrees_to_fraction(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_slope" in ds
-        # tan(5°) ≈ 0.0875
+        # tan(5deg) ~ 0.0875
         np.testing.assert_allclose(ds["hru_slope"].values[0], np.tan(np.radians(5.0)), atol=1e-6)
-        # tan(30°) ≈ 0.5774
+        # tan(30deg) ~ 0.5774
         np.testing.assert_allclose(ds["hru_slope"].values[2], np.tan(np.radians(30.0)), atol=1e-4)
         assert ds["hru_slope"].attrs["units"] == "decimal_fraction"
 
     def test_aspect_preserved(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_aspect" in ds
         np.testing.assert_array_equal(ds["hru_aspect"].values, [0.0, 90.0, 270.0])
         assert ds["hru_aspect"].attrs["units"] == "degrees"
@@ -105,16 +107,18 @@ class TestDeriveGeometry:
     def test_area_m2_to_acres(
         self, derivation: PywatershedDerivation, sir_geometry: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_geometry)
+        ctx = DerivationContext(sir=sir_geometry, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_area" in ds
-        # 4046856 m² ≈ 1000 acres
+        # 4046856 m2 ~ 1000 acres
         np.testing.assert_allclose(ds["hru_area"].values[0], 1000.0, atol=1.0)
         assert ds["hru_area"].attrs["units"] == "acres"
 
     def test_lat_preserved(
         self, derivation: PywatershedDerivation, sir_geometry: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_geometry)
+        ctx = DerivationContext(sir=sir_geometry, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_lat" in ds
         np.testing.assert_array_equal(ds["hru_lat"].values, [42.0, 41.5, 43.0])
 
@@ -125,26 +129,29 @@ class TestDeriveLandcover:
     def test_nlcd_reclassification(
         self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "cov_type" in ds
-        # NLCD 42 = Evergreen → cov_type 4 (coniferous)
+        # NLCD 42 = Evergreen -> cov_type 4 (coniferous)
         assert ds["cov_type"].values[0] == 4
-        # NLCD 71 = Grassland → cov_type 1 (grasses)
+        # NLCD 71 = Grassland -> cov_type 1 (grasses)
         assert ds["cov_type"].values[1] == 1
-        # NLCD 52 = Shrub/Scrub → cov_type 2 (shrubs)
+        # NLCD 52 = Shrub/Scrub -> cov_type 2 (shrubs)
         assert ds["cov_type"].values[2] == 2
 
     def test_tree_canopy_to_covden(
         self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "covden_sum" in ds
         np.testing.assert_allclose(ds["covden_sum"].values, [0.8, 0.1, 0.3])
 
     def test_impervious_to_fraction(
         self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_percent_imperv" in ds
         np.testing.assert_allclose(ds["hru_percent_imperv"].values, [0.05, 0.20, 0.0])
 
@@ -154,9 +161,10 @@ class TestDeriveLandcover:
             {"land_cover": ("nhm_id", np.array([42, 71]))},
             coords={"nhm_id": [1, 2]},
         )
-        ds = derivation.derive(sir)
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "covden_sum" in ds
-        # Coniferous (4) → 0.8, Grasses (1) → 0.3
+        # Coniferous (4) -> 0.8, Grasses (1) -> 0.3
         np.testing.assert_allclose(ds["covden_sum"].values, [0.8, 0.3])
 
 
@@ -166,7 +174,8 @@ class TestApplyLookupTables:
     def test_interception_values(
         self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         # cov_type 4 (coniferous): srain=0.08, wrain=0.08, snow=0.06
         assert ds["srain_intcp"].values[0] == 0.08
         assert ds["wrain_intcp"].values[0] == 0.08
@@ -178,12 +187,14 @@ class TestApplyLookupTables:
     def test_imperv_stor_max(
         self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "imperv_stor_max" in ds
         np.testing.assert_allclose(ds["imperv_stor_max"].values, 0.03)
 
     def test_covden_win(self, derivation: PywatershedDerivation, sir_landcover: xr.Dataset) -> None:
-        ds = derivation.derive(sir_landcover)
+        ctx = DerivationContext(sir=sir_landcover, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "covden_win" in ds
         # coniferous (factor=1.0): 0.8 * 1.0 = 0.8
         np.testing.assert_allclose(ds["covden_win"].values[0], 0.8)
@@ -199,7 +210,8 @@ class TestApplyDefaults:
     def test_defaults_present(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert ds["tmax_allsnow"].item() == 32.0
         assert ds["den_init"].item() == 0.10
         assert ds["gwstor_init"].item() == 2.0
@@ -211,7 +223,8 @@ class TestApplyDefaults:
             {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
             coords={"nhm_id": [1]},
         )
-        ds = derivation.derive(sir)
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         # hru_elev was derived from data, not from defaults
         np.testing.assert_allclose(ds["hru_elev"].values, [328.084], atol=0.01)
 
@@ -223,21 +236,24 @@ class TestParameterOverrides:
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         config = {"parameter_overrides": {"values": {"tmax_allsnow": 30.0}}}
-        ds = derivation.derive(sir_topography, config=config)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
+        ds = derivation.derive(ctx)
         assert ds["tmax_allsnow"].item() == 30.0
 
     def test_override_array(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         config = {"parameter_overrides": {"values": {"hru_elev": [100.0, 200.0, 300.0]}}}
-        ds = derivation.derive(sir_topography, config=config)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
+        ds = derivation.derive(ctx)
         np.testing.assert_array_equal(ds["hru_elev"].values, [100.0, 200.0, 300.0])
 
     def test_override_new_param(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         config = {"parameter_overrides": {"values": {"custom_param": 42.0}}}
-        ds = derivation.derive(sir_topography, config=config)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
+        ds = derivation.derive(ctx)
         assert ds["custom_param"].item() == 42.0
 
 
@@ -247,7 +263,8 @@ class TestHruCoordinates:
     def test_nhru_coords_from_sir(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "nhru" in ds.coords
         np.testing.assert_array_equal(ds.coords["nhru"].values, [1, 2, 3])
 
@@ -260,9 +277,10 @@ class TestLandCoverMajorityFallback:
             {"land_cover_majority": ("nhm_id", np.array([42, 71]))},
             coords={"nhm_id": [1, 2]},
         )
-        ds = derivation.derive(sir)
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "cov_type" in ds
-        assert ds["cov_type"].values[0] == 4  # Evergreen → coniferous
+        assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
 
 
 class TestOverrideDims:
@@ -272,7 +290,8 @@ class TestOverrideDims:
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         config = {"parameter_overrides": {"values": {"new_param": [1.0, 2.0, 3.0]}}}
-        ds = derivation.derive(sir_topography, config=config)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
+        ds = derivation.derive(ctx)
         assert ds["new_param"].dims == ("nhru",)
 
 
@@ -282,7 +301,8 @@ class TestFullDerivation:
     def test_all_foundation_params_present(
         self, derivation: PywatershedDerivation, sir_full: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_full)
+        ctx = DerivationContext(sir=sir_full, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         expected = {
             "hru_elev",
             "hru_slope",
@@ -304,7 +324,8 @@ class TestFullDerivation:
     def test_defaults_included(
         self, derivation: PywatershedDerivation, sir_full: xr.Dataset
     ) -> None:
-        ds = derivation.derive(sir_full)
+        ctx = DerivationContext(sir=sir_full, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "tmax_allsnow" in ds
         assert "den_init" in ds
         assert "gwstor_init" in ds
@@ -315,8 +336,8 @@ class TestFullDerivation:
 # ------------------------------------------------------------------
 
 # Network topology:
-#   seg1 → seg2 → seg3 → outlet
-#   hru1 → seg1, hru2 → seg2, hru3 → seg2
+#   seg1 -> seg2 -> seg3 -> outlet
+#   hru1 -> seg1, hru2 -> seg2, hru3 -> seg2
 
 
 @pytest.fixture()
@@ -342,7 +363,7 @@ def synthetic_segments() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(
         {
             "nhm_seg": [201, 202, 203],
-            "tosegment": [2, 3, 0],  # seg1→seg2, seg2→seg3, seg3→outlet
+            "tosegment": [2, 3, 0],  # seg1->seg2, seg2->seg3, seg3->outlet
         },
         geometry=[
             LineString([(0.5, 0.5), (1.0, 0.5)]),
@@ -369,7 +390,14 @@ class TestDeriveTopology:
         synthetic_fabric: gpd.GeoDataFrame,
         synthetic_segments: gpd.GeoDataFrame,
     ) -> None:
-        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert "tosegment" in ds
         np.testing.assert_array_equal(ds["tosegment"].values, [2, 3, 0])
         assert ds["tosegment"].dims == ("nsegment",)
@@ -381,7 +409,14 @@ class TestDeriveTopology:
         synthetic_fabric: gpd.GeoDataFrame,
         synthetic_segments: gpd.GeoDataFrame,
     ) -> None:
-        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert "hru_segment" in ds
         np.testing.assert_array_equal(ds["hru_segment"].values, [1, 2, 2])
         assert ds["hru_segment"].dims == ("nhru",)
@@ -393,10 +428,17 @@ class TestDeriveTopology:
         synthetic_fabric: gpd.GeoDataFrame,
         synthetic_segments: gpd.GeoDataFrame,
     ) -> None:
-        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert "seg_length" in ds
         assert ds["seg_length"].dims == ("nsegment",)
-        # All segments span ~0.5 to ~1.0 degrees longitude at ~0.5° lat
+        # All segments span ~0.5 to ~1.0 degrees longitude at ~0.5deg lat
         # Geodesic lengths should be positive and reasonable
         assert np.all(ds["seg_length"].values > 0)
         assert ds["seg_length"].attrs["units"] == "meters"
@@ -408,7 +450,14 @@ class TestDeriveTopology:
         synthetic_fabric: gpd.GeoDataFrame,
         synthetic_segments: gpd.GeoDataFrame,
     ) -> None:
-        ds = derivation.derive(sir_minimal, fabric=synthetic_fabric, segments=synthetic_segments)
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert "nsegment" in ds.coords
         np.testing.assert_array_equal(ds.coords["nsegment"].values, [201, 202, 203])
 
@@ -418,7 +467,8 @@ class TestDeriveTopology:
         sir_topography: xr.Dataset,
     ) -> None:
         """derive() without fabric/segments still works (no topology)."""
-        ds = derivation.derive(sir_topography)
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "tosegment" not in ds
         assert "hru_segment" not in ds
         assert "seg_length" not in ds
@@ -447,7 +497,14 @@ class TestDeriveTopology:
             ],
             crs="EPSG:4326",
         )
-        ds = derivation.derive(sir, fabric=fabric, segments=segments)
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert ds["seg_length"].values[1] > ds["seg_length"].values[0]
 
 
@@ -466,8 +523,15 @@ class TestTopologyValidation:
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
         with pytest.raises(ValueError, match="self-loops"):
-            derivation.derive(sir, fabric=fabric, segments=segments)
+            derivation.derive(ctx)
 
     def test_no_outlet_raises(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
@@ -487,8 +551,15 @@ class TestTopologyValidation:
             ],
             crs="EPSG:4326",
         )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
         with pytest.raises(ValueError, match="No outlets"):
-            derivation.derive(sir, fabric=fabric, segments=segments)
+            derivation.derive(ctx)
 
     def test_hru_segment_out_of_range_raises(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(coords={"nhm_id": [1]})
@@ -502,8 +573,15 @@ class TestTopologyValidation:
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
         with pytest.raises(ValueError, match="hru_segment values out of range"):
-            derivation.derive(sir, fabric=fabric, segments=segments)
+            derivation.derive(ctx)
 
     def test_hru_segment_zero_is_valid(self, derivation: PywatershedDerivation) -> None:
         """hru_segment=0 means HRU doesn't drain to any segment."""
@@ -518,7 +596,14 @@ class TestTopologyValidation:
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
-        ds = derivation.derive(sir, fabric=fabric, segments=segments)
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
         assert ds["hru_segment"].values[0] == 0
 
     def test_missing_tosegment_raises(self, derivation: PywatershedDerivation) -> None:
@@ -533,8 +618,15 @@ class TestTopologyValidation:
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
         with pytest.raises(ValueError, match="missing required 'tosegment'"):
-            derivation.derive(sir, fabric=fabric, segments=segments)
+            derivation.derive(ctx)
 
     def test_missing_hru_segment_raises(self, derivation: PywatershedDerivation) -> None:
         sir = xr.Dataset(coords={"nhm_id": [1]})
@@ -548,8 +640,15 @@ class TestTopologyValidation:
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
         with pytest.raises(ValueError, match="missing required 'hru_segment'"):
-            derivation.derive(sir, fabric=fabric, segments=segments)
+            derivation.derive(ctx)
 
 
 # ------------------------------------------------------------------
@@ -632,12 +731,14 @@ class TestTopologyIntegrationDRB:
         sir = xr.Dataset(coords={"nhm_id": drb_fabric["nhm_id"].values})
         seg_id_field = "nhm_seg" if "nhm_seg" in drb_segments.columns else "nsegment_v"
 
-        ds = derivation.derive(
-            sir,
+        ctx = DerivationContext(
+            sir=sir,
             fabric=drb_fabric,
             segments=drb_segments,
+            fabric_id_field="nhm_id",
             segment_id_field=seg_id_field,
         )
+        ds = derivation.derive(ctx)
 
         # tosegment from GeoPackage should match reference param NetCDF
         ref_tosegment = drb_params_dis_both["tosegment"].values
@@ -664,12 +765,14 @@ class TestTopologyIntegrationDRB:
         sir = xr.Dataset(coords={"nhm_id": drb_fabric["nhm_id"].values})
         seg_id_field = "nhm_seg" if "nhm_seg" in segs_no_length.columns else "nsegment_v"
 
-        ds = derivation.derive(
-            sir,
+        ctx = DerivationContext(
+            sir=sir,
             fabric=drb_fabric,
             segments=segs_no_length,
+            fabric_id_field="nhm_id",
             segment_id_field=seg_id_field,
         )
+        ds = derivation.derive(ctx)
 
         ref_seg_length = drb_params_dis_both["seg_length"].values
         computed = ds["seg_length"].values
@@ -689,7 +792,7 @@ class TestDeriveGeometryFromFabric:
     def test_area_from_fabric(self, derivation: PywatershedDerivation) -> None:
         """hru_area computed from fabric polygon geometry."""
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
-        # Two 1-degree squares near equator — area should be > 0
+        # Two 1-degree squares near equator -- area should be > 0
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
             geometry=[
@@ -698,7 +801,8 @@ class TestDeriveGeometryFromFabric:
             ],
             crs="EPSG:4326",
         )
-        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_area" in ds
         assert np.all(ds["hru_area"].values > 0)
         assert ds["hru_area"].attrs["units"] == "acres"
@@ -714,7 +818,8 @@ class TestDeriveGeometryFromFabric:
             ],
             crs="EPSG:4326",
         )
-        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_lat" in ds
         np.testing.assert_allclose(ds["hru_lat"].values, [40.5, 42.5], atol=0.01)
 
@@ -735,53 +840,21 @@ class TestDeriveGeometryFromFabric:
             ],
             crs="EPSG:4326",
         )
-        ds = derivation.derive(sir, fabric=fabric, id_field="nhm_id")
-        # Should NOT be 1.0 (from SIR) — should be computed from fabric
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Should NOT be 1.0 (from SIR) -- should be computed from fabric
         assert np.all(ds["hru_area"].values > 1.0)
-        # Should NOT be 0.0 (from SIR) — should be ~40.5, ~42.5
+        # Should NOT be 0.0 (from SIR) -- should be ~40.5, ~42.5
         assert np.all(ds["hru_lat"].values > 30.0)
 
     def test_fallback_without_fabric(
         self, derivation: PywatershedDerivation, sir_geometry: xr.Dataset
     ) -> None:
         """Without fabric, falls back to SIR-based geometry."""
-        ds = derivation.derive(sir_geometry)
+        ctx = DerivationContext(sir=sir_geometry, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "hru_area" in ds
         np.testing.assert_allclose(ds["hru_area"].values[0], 1000.0, atol=1.0)
-
-
-# ------------------------------------------------------------------
-# SIR variable renaming
-# ------------------------------------------------------------------
-
-
-class TestSirVariableRenaming:
-    """Tests for SIR variable renaming (deprecated, now a no-op by default)."""
-
-    def test_no_default_renames(self, derivation: PywatershedDerivation) -> None:
-        """Without explicit renames, rename_sir_variables is a no-op."""
-        sir = xr.Dataset(
-            {"fctimp_pct_mean": ("nhm_id", np.array([5.0, 20.0]))},
-            coords={"nhm_id": [1, 2]},
-        )
-        renamed = derivation.rename_sir_variables(sir)
-        assert "fctimp_pct_mean" in renamed
-
-    def test_custom_rename(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(
-            {"my_var": ("nhm_id", np.array([1.0]))},
-            coords={"nhm_id": [1]},
-        )
-        renamed = derivation.rename_sir_variables(sir, renames={"my_var": "new_var"})
-        assert "new_var" in renamed
-
-    def test_rename_noop_when_not_present(self, derivation: PywatershedDerivation) -> None:
-        sir = xr.Dataset(
-            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
-            coords={"nhm_id": [1]},
-        )
-        renamed = derivation.rename_sir_variables(sir)
-        assert "elevation_m_mean" in renamed
 
 
 # ------------------------------------------------------------------
@@ -803,13 +876,14 @@ class TestCategoricalFractionMajority:
             },
             coords={"nhm_id": [1, 2, 3]},
         )
-        ds = derivation.derive(sir)
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "cov_type" in ds
-        # HRU 1: LndCov_41 (Deciduous Forest) highest → cov_type 3
+        # HRU 1: LndCov_41 (Deciduous Forest) highest -> cov_type 3
         assert ds["cov_type"].values[0] == 3
-        # HRU 2: LndCov_71 (Grassland) highest → cov_type 1
+        # HRU 2: LndCov_71 (Grassland) highest -> cov_type 1
         assert ds["cov_type"].values[1] == 1
-        # HRU 3: LndCov_42 (Evergreen Forest) highest → cov_type 4
+        # HRU 3: LndCov_42 (Evergreen Forest) highest -> cov_type 4
         assert ds["cov_type"].values[2] == 4
 
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
@@ -818,9 +892,10 @@ class TestCategoricalFractionMajority:
             {"land_cover": ("nhm_id", np.array([42, 71]))},
             coords={"nhm_id": [1, 2]},
         )
-        ds = derivation.derive(sir)
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
         assert "cov_type" in ds
-        assert ds["cov_type"].values[0] == 4  # Evergreen → coniferous
+        assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
 
 
 # ------------------------------------------------------------------
@@ -883,7 +958,7 @@ class TestMergeTemporalIntoDerived:
             conversions={"tmax": ("K", "C")},
         )
 
-        # 300K = 26.85°C
+        # 300K = 26.85 degC
         np.testing.assert_allclose(result["tmax"].values[0, 0], 26.85, atol=0.01)
 
     def test_aligns_dimension(self) -> None:
