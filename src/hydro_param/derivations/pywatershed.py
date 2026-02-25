@@ -675,13 +675,20 @@ class PywatershedDerivation:
         """Step 9: Compute potential solar radiation tables (Swift 1976).
 
         Requires ``hru_lat``, ``hru_slope``, and ``hru_aspect`` from step 3.
-        Produces 2-D arrays of shape (ndoy=366, nhru) for potential solar
-        radiation on sloped and horizontal surfaces.
+        Produces 2-D arrays of shape ``(ndoy=366, nhru)`` for potential solar
+        radiation on sloped and horizontal surfaces.  Output dimensions are
+        named ``ndoy`` and ``nhru`` to match pywatershed's internal convention;
+        ``nhru`` aligns with the id_field coordinate on the existing dataset.
         """
         required = ("hru_lat", "hru_slope", "hru_aspect")
         if not all(v in ds for v in required):
             missing = [v for v in required if v not in ds]
-            logger.info("Skipping soltab: missing %s", missing)
+            logger.warning(
+                "Skipping soltab derivation (step 9): missing required variables %s. "
+                "Ensure step 3 (topography) completed successfully. "
+                "Output will NOT contain soltab_potsw, soltab_horad_potsw, or soltab_sunhrs.",
+                missing,
+            )
             return ds
 
         potsw, horad, sunhrs = compute_soltab(
@@ -689,6 +696,22 @@ class PywatershedDerivation:
             aspects=ds["hru_aspect"].values,
             lats=ds["hru_lat"].values,
         )
+
+        # Check for NaN in output (can occur if upstream zonal stats had gaps)
+        for name, arr in [
+            ("soltab_potsw", potsw),
+            ("soltab_horad_potsw", horad),
+            ("soltab_sunhrs", sunhrs),
+        ]:
+            nan_count = np.count_nonzero(np.isnan(arr))
+            if nan_count:
+                logger.warning(
+                    "%s contains %d/%d NaN values — likely caused by NaN in "
+                    "hru_slope, hru_aspect, or hru_lat inputs",
+                    name,
+                    nan_count,
+                    arr.size,
+                )
 
         ds["soltab_potsw"] = xr.DataArray(
             potsw,

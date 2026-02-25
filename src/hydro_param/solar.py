@@ -4,6 +4,9 @@ Ports pywatershed's ``PRMSSolarGeometry.compute_soltab()`` into a standalone
 pure-function module.  The algorithm computes potential clear-sky solar
 radiation on sloped and horizontal surfaces for every day of the year (1--366).
 
+Output units are Langleys (cal/cm2/day) for radiation and hours for sunlight
+duration.
+
 References
 ----------
 Swift, L.W., 1976, Algorithm for solar radiation on mountain slopes:
@@ -28,7 +31,9 @@ logger = logging.getLogger(__name__)
 _DNEARZERO: float = 1.0e-12
 _PI: float = np.pi
 _TWO_PI: float = 2.0 * np.pi
-_PI_12: float = 12.0 / np.pi
+# 1 radian of hour angle = 12/pi hours (since 2*pi rad = 24 h).
+# Also scales the radiation integral in _func3.  Name follows pywatershed.
+_RAD_TO_HOURS: float = 12.0 / np.pi
 _RAD_DAY: float = _TWO_PI / 365.242
 _ECCENTRICITY: float = 0.01671
 
@@ -54,7 +59,7 @@ solar_declination: NDArray[np.floating] = (
 """Solar declination angle (radians) for each day of the year, shape (366,)."""
 
 r1: NDArray[np.floating] = (60.0 * 2.0) / (_obliquity**2)
-"""Solar constant adjusted for orbital eccentricity, shape (366,)."""
+"""Extraterrestrial irradiance corrected for Earth-Sun distance (Langleys/hr), shape (366,)."""
 
 # Clean up module namespace
 del _julian_days, _obliquity, _yy
@@ -79,7 +84,9 @@ def _compute_t(
     Returns
     -------
     ndarray, shape (ndoy, nhru)
-        Hour angle of sunrise (positive half; sunset is the negative).
+        Half-day hour angle (radians).  Sunrise occurs at ``-t``,
+        sunset at ``+t``.  Clamped to *pi* for perpetual daylight
+        and *0* for polar night.
     """
     nhru = len(lats)
     lats_mat = np.tile(-1.0 * np.tan(lats), (NDOY, 1))
@@ -92,6 +99,15 @@ def _compute_t(
 
     result[np.where(tx < -1.0)] = _PI
     result[np.where(tx > 1.0)] = 0.0
+
+    nan_count = np.count_nonzero(np.isnan(result))
+    if nan_count > 0:
+        logger.warning(
+            "%d/%d hour-angle values are NaN after arccos correction "
+            "(likely NaN in latitude input)",
+            nan_count,
+            result.size,
+        )
     return result
 
 
@@ -102,6 +118,10 @@ def _func3(
     y: NDArray[np.floating],
 ) -> NDArray[np.floating]:
     """Swift (1976) equation 6 — potential radiation integral.
+
+    Integrates extraterrestrial direct-beam radiation from hour angle *y*
+    to *x* on an equivalent tilted surface defined by latitude *w* and
+    longitude offset *v* (Lee 1963, eqs. 12--13).
 
     Parameters
     ----------
@@ -127,7 +147,7 @@ def _func3(
 
     f3 = (
         rr
-        * _PI_12
+        * _RAD_TO_HOURS
         * (
             np.sin(dd) * np.sin(ww) * (x - y)
             + np.cos(dd) * np.cos(ww) * (np.sin(x + vv) - np.sin(y + vv))
@@ -158,9 +178,9 @@ def _compute_soltab_core(
     Returns
     -------
     solt : ndarray, shape (ndoy, nhru)
-        Potential clear-sky solar radiation.
+        Potential clear-sky solar radiation (Langleys, cal/cm2/day).
     sunh : ndarray, shape (ndoy, nhru)
-        Sun hours.
+        Hours of direct sunlight.
     """
     nhru = len(slopes)
 
@@ -220,7 +240,7 @@ def _compute_soltab_core(
 
     # Base computation
     solt = _func3(x2, x1, t3, t2)
-    sunh = (t3 - t2) * _PI_12
+    sunh = (t3 - t2) * _RAD_TO_HOURS
 
     # Wrap-around: t7 > t0
     wh_t7_gt_t0 = np.where(t7 > t0)
@@ -228,7 +248,7 @@ def _compute_soltab_core(
         solt[wh_t7_gt_t0] = (
             _func3(x2, x1, t3, t2)[wh_t7_gt_t0] + _func3(x2, x1, t7, t0)[wh_t7_gt_t0]
         )
-        sunh[wh_t7_gt_t0] = (t3 - t2 + t7 - t0)[wh_t7_gt_t0] * _PI_12
+        sunh[wh_t7_gt_t0] = (t3 - t2 + t7 - t0)[wh_t7_gt_t0] * _RAD_TO_HOURS
 
     # Wrap-around: t6 < t1
     wh_t6_lt_t1 = np.where(t6 < t1)
@@ -236,7 +256,7 @@ def _compute_soltab_core(
         solt[wh_t6_lt_t1] = (
             _func3(x2, x1, t3, t2)[wh_t6_lt_t1] + _func3(x2, x1, t1, t6)[wh_t6_lt_t1]
         )
-        sunh[wh_t6_lt_t1] = (t3 - t2 + t1 - t6)[wh_t6_lt_t1] * _PI_12
+        sunh[wh_t6_lt_t1] = (t3 - t2 + t1 - t6)[wh_t6_lt_t1] * _RAD_TO_HOURS
 
     # Override flat surfaces with horizontal computation
     mask_sl_lt_dnearzero = np.tile(np.abs(sl), (NDOY, 1)) < _DNEARZERO
@@ -245,7 +265,7 @@ def _compute_soltab_core(
         _func3(np.zeros(nhru), x0, t1, t0),
         solt,
     )
-    sunh = np.where(mask_sl_lt_dnearzero, (t1 - t0) * _PI_12, sunh)
+    sunh = np.where(mask_sl_lt_dnearzero, (t1 - t0) * _RAD_TO_HOURS, sunh)
 
     # Clamp negatives
     mask_sunh_lt_dnearzero = sunh < _DNEARZERO
@@ -253,12 +273,26 @@ def _compute_soltab_core(
 
     wh_solt_lt_zero = np.where(solt < 0.0)
     if len(wh_solt_lt_zero[0]):
+        n_neg = len(wh_solt_lt_zero[0])
+        n_total = int(np.prod(solt.shape))
+        pct = 100.0 * n_neg / n_total
         solt[wh_solt_lt_zero] = 0.0
-        warnings.warn(
-            f"{len(wh_solt_lt_zero[0])}/{np.prod(solt.shape)} "
-            "locations-times with negative potential solar radiation.",
-            stacklevel=2,
-        )
+        if pct > 1.0:
+            logger.warning(
+                "Clamped %d/%d (%.1f%%) negative potential solar radiation "
+                "values to zero — may indicate incorrect input units or CRS",
+                n_neg,
+                n_total,
+                pct,
+            )
+        else:
+            logger.info(
+                "Clamped %d/%d (%.2f%%) negative potential solar radiation "
+                "values to zero (numerical edge cases)",
+                n_neg,
+                n_total,
+                pct,
+            )
 
     return solt, sunh
 
@@ -279,11 +313,12 @@ def compute_soltab(
     Parameters
     ----------
     slopes : ndarray, shape (nhru,)
-        Slope as decimal fraction (rise / run).
+        Slope as decimal fraction (rise / run), non-negative.
     aspects : ndarray, shape (nhru,)
-        Aspect in degrees (0 = north, 180 = south).
+        Aspect in degrees, 0--360 clockwise from north (0 = north,
+        180 = south).
     lats : ndarray, shape (nhru,)
-        Latitude in decimal degrees.
+        Latitude in decimal degrees, range [-90, 90].
 
     Returns
     -------
@@ -293,7 +328,44 @@ def compute_soltab(
         Potential solar radiation on a horizontal surface (Langleys).
     soltab_sunhrs : ndarray, shape (ndoy, nhru)
         Hours of direct sunlight on the sloped surface.
+
+    Raises
+    ------
+    ValueError
+        If input arrays have mismatched lengths, are empty, contain NaN,
+        or have out-of-range values.
     """
+    # --- Input validation ---
+    if len(slopes) != len(aspects) or len(slopes) != len(lats):
+        raise ValueError(
+            f"Input arrays must have equal length: "
+            f"slopes={len(slopes)}, aspects={len(aspects)}, lats={len(lats)}"
+        )
+    if len(slopes) == 0:
+        raise ValueError("Input arrays must not be empty")
+    if np.any(np.isnan(slopes)) or np.any(np.isnan(aspects)) or np.any(np.isnan(lats)):
+        nan_counts = (
+            np.count_nonzero(np.isnan(slopes)),
+            np.count_nonzero(np.isnan(aspects)),
+            np.count_nonzero(np.isnan(lats)),
+        )
+        raise ValueError(
+            f"NaN values in input arrays: slopes={nan_counts[0]}, "
+            f"aspects={nan_counts[1]}, lats={nan_counts[2]}"
+        )
+    if np.any(np.abs(lats) > 90):
+        raise ValueError(
+            f"Latitude values must be in [-90, 90], got range [{lats.min():.2f}, {lats.max():.2f}]"
+        )
+    if np.any(slopes < 0):
+        raise ValueError("Slope values must be non-negative (decimal fraction rise/run)")
+    if np.any(slopes > 10):
+        logger.warning(
+            "Slopes > 10 detected (max=%.1f). Slopes must be decimal fraction "
+            "(rise/run), not degrees. Verify input units.",
+            float(slopes.max()),
+        )
+
     nhru = len(slopes)
 
     # Horizontal surface (zero slope, zero aspect)

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+import pytest
 
 from hydro_param.solar import NDOY, compute_soltab, r1, solar_declination
 
@@ -86,3 +89,110 @@ class TestComputeSoltab:
         lats = np.array([0.0])
         _potsw, _horad, sunhrs = compute_soltab(slopes, aspects, lats)
         np.testing.assert_allclose(sunhrs, 12.0, atol=0.5)
+
+    def test_high_latitude_polar_day(self) -> None:
+        """At 70N, summer should have ~24h sun, winter ~0h."""
+        slopes = np.array([0.0])
+        aspects = np.array([0.0])
+        lats = np.array([70.0])
+        _potsw, _horad, sunhrs = compute_soltab(slopes, aspects, lats)
+        assert sunhrs[171, 0] > 20.0  # summer solstice
+        assert sunhrs[354, 0] < 4.0  # winter solstice
+
+    def test_high_latitude_southern_hemisphere(self) -> None:
+        """Southern hemisphere high latitude produces valid output."""
+        slopes = np.array([0.0])
+        aspects = np.array([0.0])
+        lats = np.array([-65.0])
+        potsw, horad, sunhrs = compute_soltab(slopes, aspects, lats)
+        assert np.all(potsw >= 0)
+        assert np.all(sunhrs >= 0)
+        assert np.all(sunhrs <= 24)
+
+    def test_steep_slope_wrap_around(self) -> None:
+        """Steep slopes exercise wrap-around hour angle branches."""
+        slopes = np.array([1.5, 2.0])
+        aspects = np.array([180.0, 90.0])
+        lats = np.array([45.0, 45.0])
+        potsw, horad, sunhrs = compute_soltab(slopes, aspects, lats)
+        assert np.all(potsw >= 0)
+        assert np.all(sunhrs >= 0)
+        assert np.all(sunhrs <= 24)
+        assert not np.any(np.isnan(potsw))
+
+    def test_reference_values(self) -> None:
+        """Validate specific values for a known configuration.
+
+        Reference HRU: lat=40.5, slope=0.15 (rise/run), aspect=180 (south).
+        Values computed from this implementation to guard against regressions
+        in the trigonometric formulas.
+        """
+        slopes = np.array([0.15])
+        aspects = np.array([180.0])
+        lats = np.array([40.5])
+        potsw, horad, sunhrs = compute_soltab(slopes, aspects, lats)
+
+        # Summer solstice (day 172)
+        np.testing.assert_allclose(potsw[171, 0], 1010.088790, rtol=1e-6)
+        np.testing.assert_allclose(horad[171, 0], 1022.596186, rtol=1e-6)
+        np.testing.assert_allclose(sunhrs[171, 0], 14.094478, rtol=1e-5)
+
+        # Winter solstice (day 355) — south-facing slope gets more than horad
+        np.testing.assert_allclose(potsw[354, 0], 447.556212, rtol=1e-6)
+        np.testing.assert_allclose(horad[354, 0], 322.702031, rtol=1e-6)
+
+        # Equinox (day 80) — ~12h sunlight
+        np.testing.assert_allclose(sunhrs[79, 0], 11.990138, rtol=1e-5)
+
+    def test_negative_radiation_clamped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Steep north-facing slope at high latitude: values clamped, no NaN."""
+        slopes = np.array([2.0])
+        aspects = np.array([0.0])  # north-facing
+        lats = np.array([60.0])
+        with caplog.at_level(logging.DEBUG, logger="hydro_param.solar"):
+            potsw, _horad, _sunhrs = compute_soltab(slopes, aspects, lats)
+        assert np.all(potsw >= 0)
+        assert not np.any(np.isnan(potsw))
+
+
+class TestInputValidation:
+    """Tests for compute_soltab input validation."""
+
+    def test_nan_in_slopes_raises(self) -> None:
+        slopes = np.array([0.1, np.nan])
+        aspects = np.array([180.0, 90.0])
+        lats = np.array([42.0, 42.0])
+        with pytest.raises(ValueError, match="NaN"):
+            compute_soltab(slopes, aspects, lats)
+
+    def test_nan_in_lats_raises(self) -> None:
+        slopes = np.array([0.1])
+        aspects = np.array([180.0])
+        lats = np.array([np.nan])
+        with pytest.raises(ValueError, match="NaN"):
+            compute_soltab(slopes, aspects, lats)
+
+    def test_mismatched_lengths_raises(self) -> None:
+        slopes = np.array([0.1, 0.2])
+        aspects = np.array([180.0])
+        lats = np.array([42.0])
+        with pytest.raises(ValueError, match="equal length"):
+            compute_soltab(slopes, aspects, lats)
+
+    def test_empty_arrays_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            compute_soltab(np.array([]), np.array([]), np.array([]))
+
+    def test_latitude_out_of_range_raises(self) -> None:
+        slopes = np.array([0.1])
+        aspects = np.array([180.0])
+        lats = np.array([91.0])
+        with pytest.raises(ValueError, match="Latitude"):
+            compute_soltab(slopes, aspects, lats)
+
+    def test_negative_slope_raises(self) -> None:
+        slopes = np.array([-0.1])
+        aspects = np.array([180.0])
+        lats = np.array([42.0])
+        with pytest.raises(ValueError, match="non-negative"):
+            compute_soltab(slopes, aspects, lats)
