@@ -146,8 +146,8 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 8 (lookup tables), 9 (soltab), 13 (defaults), and
-    14 (calibration seeds).
+    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 13 (defaults),
+    and 14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -203,6 +203,9 @@ class PywatershedDerivation:
 
         # Step 14: Calibration seeds
         ds = self._derive_calibration_seeds(context, ds)
+
+        # Step 7: Forcing (temporal merge — runs late, no downstream deps)
+        ds = self._derive_forcing(context, ds)
 
         # Apply parameter overrides last
         overrides = context.config.get("parameter_overrides", {})

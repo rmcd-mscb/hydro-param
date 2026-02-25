@@ -1607,6 +1607,29 @@ class TestDeriveForcing:
         assert len(result.data_vars) == 0
 
 
+class TestDeriveIntegrationForcing:
+    """Integration test: full derive() with temporal data produces forcing."""
+
+    def test_derive_with_temporal_produces_forcing(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """Full derive() call with temporal context includes forcing vars."""
+        ctx = DerivationContext(
+            sir=sir_topography,
+            temporal=temporal_gridmet,
+        )
+        result = derivation.derive(ctx)
+        assert "prcp" in result
+        assert "tmax" in result
+        assert "tmin" in result
+        assert "swrad" in result
+        assert "potet" in result
+        assert "time" in result["prcp"].dims
+
+
 # ------------------------------------------------------------------
 # Calibration seeds derivation
 # ------------------------------------------------------------------
