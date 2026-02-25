@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 8, 9, 13, and 14.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 13, and 14.
 """
 
 from __future__ import annotations
@@ -99,6 +99,18 @@ def merge_temporal_into_derived(
     xr.Dataset
         Derived dataset with temporal variables merged in.
     """
+    import warnings
+
+    warnings.warn(
+        "merge_temporal_into_derived() is deprecated. "
+        "Use PywatershedDerivation._derive_forcing() via DerivationContext.temporal instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    logger.warning(
+        "merge_temporal_into_derived() is deprecated; "
+        "use DerivationContext.temporal with _derive_forcing() instead."
+    )
     renames = renames or {}
     conversions = conversions or {}
 
@@ -146,8 +158,8 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 8 (lookup tables), 9 (soltab), 13 (defaults), and
-    14 (calibration seeds).
+    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 13 (defaults),
+    and 14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -203,6 +215,9 @@ class PywatershedDerivation:
 
         # Step 14: Calibration seeds
         ds = self._derive_calibration_seeds(context, ds)
+
+        # Step 7: Forcing (temporal merge — runs late, no downstream deps)
+        ds = self._derive_forcing(context, ds)
 
         # Apply parameter overrides last
         overrides = context.config.get("parameter_overrides", {})
@@ -1009,6 +1024,149 @@ class PywatershedDerivation:
             sum(1 for p in mapping if p in ds and ds[p].attrs.get("source") == "calibration_seed"),
         )
         return ds
+
+    # ------------------------------------------------------------------
+    # Step 7: Forcing generation (temporal merge)
+    # ------------------------------------------------------------------
+
+    def _derive_forcing(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Step 7: Merge SIR-normalized temporal forcing into derived dataset.
+
+        Loads variable mappings from ``forcing_variables.yml``, detects the
+        source dataset by matching SIR variable names, renames to PRMS names,
+        applies unit conversions, and merges into *ds*.
+
+        Skips gracefully when no temporal data is available.
+        """
+        if ctx.temporal is None or len(ctx.temporal) == 0:
+            logger.info("No temporal data provided; skipping forcing generation.")
+            return ds
+
+        tables_dir = ctx.resolved_lookup_tables_dir
+        config = self._load_lookup_table("forcing_variables", tables_dir)
+        datasets_config = config["mapping"]
+
+        # Concat multi-year chunks by base name (strip _YYYY suffix)
+        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        for ds_name, tds in ctx.temporal.items():
+            base_name = re.sub(r"_\d{4}$", "", ds_name)
+            chunks_by_source.setdefault(base_name, []).append(tds)
+
+        for source_name, chunks in chunks_by_source.items():
+            if len(chunks) > 1:
+                chunks.sort(key=lambda c: c["time"].values[0])
+                merged_temporal = xr.concat(chunks, dim="time")
+            else:
+                merged_temporal = chunks[0]
+
+            # Detect dataset config by matching source name or SIR variable names
+            dataset_cfg = self._detect_forcing_dataset(
+                source_name, merged_temporal, datasets_config
+            )
+            if dataset_cfg is None:
+                logger.warning(
+                    "Could not match temporal source '%s' to any forcing dataset config; skipping.",
+                    source_name,
+                )
+                continue
+
+            # Process each mapped variable
+            for prms_name, var_cfg in dataset_cfg.items():
+                sir_name = var_cfg["sir_name"]
+                sir_unit = var_cfg["sir_unit"]
+                intermediate_unit = var_cfg["intermediate_unit"]
+
+                if sir_name not in merged_temporal:
+                    logger.warning(
+                        "Forcing variable '%s' (SIR name '%s') not found in "
+                        "temporal data; skipping.",
+                        prms_name,
+                        sir_name,
+                    )
+                    continue
+
+                da = merged_temporal[sir_name]
+
+                # Unit conversion (SIR unit → intermediate unit)
+                if sir_unit != intermediate_unit:
+                    try:
+                        converted = convert(
+                            da.values.astype(np.float64), sir_unit, intermediate_unit
+                        )
+                    except KeyError:
+                        logger.error(
+                            "No unit conversion registered for '%s' → '%s' "
+                            "(forcing variable '%s' from source '%s'). "
+                            "Register the conversion in units.py or fix "
+                            "forcing_variables.yml.",
+                            sir_unit,
+                            intermediate_unit,
+                            prms_name,
+                            source_name,
+                        )
+                        continue
+                    da = da.copy(data=converted)
+                    da.attrs["units"] = intermediate_unit
+
+                # Align feature dimension to derived dataset
+                target_dim = "nhru"
+                feat_dims = [d for d in da.dims if d != "time"]
+                if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
+                    da = da.rename({feat_dims[0]: target_dim})
+
+                ds[prms_name] = da
+
+            n_vars = sum(1 for p in dataset_cfg if p in ds)
+            logger.info(
+                "Step 7: merged %d forcing variables from '%s' (%d timesteps).",
+                n_vars,
+                source_name,
+                merged_temporal.sizes.get("time", 0),
+            )
+
+        return ds
+
+    @staticmethod
+    def _detect_forcing_dataset(
+        source_name: str,
+        temporal: xr.Dataset,
+        datasets_config: dict,
+    ) -> dict | None:
+        """Match a temporal dataset to its forcing config section.
+
+        Tries exact name match first, then falls back to counting SIR
+        variable name matches.
+        """
+        # Exact match on source name
+        if source_name in datasets_config:
+            return datasets_config[source_name]
+
+        # Fuzzy match: pick config with most SIR variable name hits
+        best_match: str | None = None
+        best_count = 0
+        temporal_vars = set(temporal.data_vars)
+        for cfg_name, cfg_vars in datasets_config.items():
+            sir_names = {v["sir_name"] for v in cfg_vars.values()}
+            count = len(sir_names & temporal_vars)
+            if count > best_count:
+                best_count = count
+                best_match = cfg_name
+
+        if best_match is not None and best_count > 0:
+            logger.info(
+                "Matched temporal source '%s' to forcing config '%s' (%d/%d variables matched).",
+                source_name,
+                best_match,
+                best_count,
+                len(datasets_config[best_match]),
+            )
+            return datasets_config[best_match]
+
+        return None
 
     # ------------------------------------------------------------------
     # Parameter overrides

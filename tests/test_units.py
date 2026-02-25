@@ -126,3 +126,14 @@ class TestLog10Conversions:
         values = np.array([0.0, -1.0, 1.0])
         result = convert(values, "log10(kPa^-1)", "kPa^-1")
         np.testing.assert_allclose(result, [1.0, 0.1, 10.0])
+
+
+class TestIrradianceConversions:
+    """Tests for irradiance unit conversions."""
+
+    def test_wm2_to_langleys_per_day(self) -> None:
+        """W/m2 → Langleys/day conversion (1 W/m2 ≈ 2.065 Langleys/day)."""
+        values = np.array([1.0, 100.0, 250.0])
+        result = convert(values, "W/m2", "Langleys/day")
+        expected = values * 2.065
+        np.testing.assert_allclose(result, expected, rtol=1e-6)

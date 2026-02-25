@@ -32,6 +32,8 @@ _FORCING_VARS: dict[str, tuple[str, str]] = {
     "prcp": ("mm", "in"),
     "tmax": ("C", "F"),
     "tmin": ("C", "F"),
+    "swrad": ("Langleys/day", "Langleys/day"),
+    "potet": ("in", "in"),
 }
 
 # Soltab variable names

@@ -33,6 +33,9 @@ class DerivationContext:
     ----------
     sir
         Normalized Standardized Internal Representation (SIR) dataset.
+    temporal
+        SIR-normalized temporal datasets keyed by name (e.g., ``"gridmet_2020"``).
+        When ``None``, step 7 (forcing generation) is skipped.
     fabric
         Target HRU polygon GeoDataFrame.
     segments
@@ -50,6 +53,7 @@ class DerivationContext:
     """
 
     sir: xr.Dataset
+    temporal: dict[str, xr.Dataset] | None = None
     fabric: gpd.GeoDataFrame | None = None
     segments: gpd.GeoDataFrame | None = None
     fabric_id_field: str = "nhm_id"

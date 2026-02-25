@@ -123,6 +123,9 @@ register("acres", "m2", lambda v: v / 0.000247105, "acres to square meters")
 register("deg", "rad", lambda v: np.radians(v), "degrees to radians")
 register("rad", "deg", lambda v: np.degrees(v), "radians to degrees")
 
+# Irradiance
+register("W/m2", "Langleys/day", lambda v: v * 2.065, "watts per square meter to Langleys per day")
+
 # Log-transform conversions (SIR normalization: source -> canonical SI)
 register("log10(cm/hr)", "cm/hr", lambda v: np.power(10.0, v), "log10 Ksat to linear cm/hr")
 register("log10(kPa)", "kPa", lambda v: np.power(10.0, v), "log10 pressure to linear kPa")
