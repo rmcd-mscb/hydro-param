@@ -811,11 +811,43 @@ class TestValidateSIR:
                 temporal=True,
             )
         ]
-        # Should not crash — .nc files are skipped
+        # Should not crash — .nc files are skipped.
+        # Year-suffixed key "tmmx_C_mean_2020" satisfies temporal schema "tmmx_C_mean".
         warnings = validate_sir({"tmmx_C_mean_2020": nc_path}, schema)
-        # The only warning should be "missing" since schema expects "tmmx_C_mean"
-        # but sir_files has "tmmx_C_mean_2020"
-        assert all(w.check_type == "missing" for w in warnings)
+        assert len(warnings) == 0
+
+    def test_temporal_year_suffix_satisfies_schema(self, tmp_path: Path) -> None:
+        """Year-suffixed temporal keys satisfy the base canonical schema entry."""
+        import xarray as xr
+
+        from hydro_param.sir import SIRVariableSchema, validate_sir
+
+        schema = [
+            SIRVariableSchema(
+                canonical_name="pr_mm_mean",
+                source_name="pr",
+                source_units="mm",
+                canonical_units="mm",
+                long_name="precipitation_amount",
+                categorical=False,
+                valid_range=None,
+                conversion=None,
+                temporal=True,
+            )
+        ]
+
+        # Two year-suffixed files for the same temporal variable
+        for year in (2020, 2021):
+            ds = xr.Dataset({"pr_mm_mean": (["time", "nhm_id"], [[5.0, 10.0]])})
+            ds.to_netcdf(tmp_path / f"pr_mm_mean_{year}.nc")
+
+        sir_files = {
+            "pr_mm_mean_2020": tmp_path / "pr_mm_mean_2020.nc",
+            "pr_mm_mean_2021": tmp_path / "pr_mm_mean_2021.nc",
+        }
+        warnings = validate_sir(sir_files, schema)
+        # No "missing" warning — year-suffixed keys satisfy the temporal schema
+        assert not any(w.check_type == "missing" for w in warnings)
 
     def test_categorical_count_column_not_range_checked(self, tmp_path: Path) -> None:
         """Count columns in categorical CSVs should not trigger range warnings."""

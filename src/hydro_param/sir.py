@@ -531,16 +531,22 @@ def validate_sir(
 
     warnings: list[SIRValidationWarning] = []
 
-    # Check completeness: schema variables present in files
+    # Check completeness: schema variables present in files.
+    # Temporal variables have year-suffixed keys (e.g. "pr_mm_mean_2020"),
+    # so check if any key starts with the canonical name for temporal entries.
+    sir_keys = set(sir_files.keys())
     for entry in schema:
-        if entry.canonical_name not in sir_files:
-            warnings.append(
-                SIRValidationWarning(
-                    variable=entry.canonical_name,
-                    check_type="missing",
-                    message=f"Expected variable '{entry.canonical_name}' not found in SIR output",
-                )
+        if entry.canonical_name in sir_keys:
+            continue
+        if entry.temporal and any(k.startswith(entry.canonical_name + "_") for k in sir_keys):
+            continue
+        warnings.append(
+            SIRValidationWarning(
+                variable=entry.canonical_name,
+                check_type="missing",
+                message=f"Expected variable '{entry.canonical_name}' not found in SIR output",
             )
+        )
 
     # Check each file (skip temporal NetCDF — CSV validation only)
     for cname, path in sir_files.items():
