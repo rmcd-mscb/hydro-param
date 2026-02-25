@@ -86,6 +86,33 @@ def sir_full(
     return xr.merge([sir_topography, sir_landcover, sir_geometry])
 
 
+@pytest.fixture()
+def temporal_gridmet() -> dict[str, xr.Dataset]:
+    """Synthetic SIR-normalized temporal data mimicking gridMET output."""
+    nhru = 3
+    ntime_2020 = 366
+    ntime_2021 = 365
+    rng = np.random.default_rng(42)
+
+    def _make_ds(ntime: int) -> xr.Dataset:
+        times = np.arange(ntime)
+        return xr.Dataset(
+            {
+                "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
+                "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
+                "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
+                "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
+                "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
+            },
+            coords={"time": times, "nhm_id": [1, 2, 3]},
+        )
+
+    return {
+        "gridmet_2020": _make_ds(ntime_2020),
+        "gridmet_2021": _make_ds(ntime_2021),
+    }
+
+
 class TestDerivationContextTemporal:
     """Tests for temporal field on DerivationContext."""
 
@@ -1424,6 +1451,143 @@ class TestForcingVariablesYAML:
         for prms_name, entry in gridmet.items():
             missing = required_keys - set(entry.keys())
             assert not missing, f"{prms_name} missing keys: {missing}"
+
+
+# ------------------------------------------------------------------
+# Forcing derivation (step 7)
+# ------------------------------------------------------------------
+
+
+class TestDeriveForcing:
+    """Tests for _derive_forcing (step 7)."""
+
+    def test_no_temporal_returns_unchanged(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """When temporal is None, dataset is returned unchanged."""
+        ctx = DerivationContext(sir=sir_topography, temporal=None)
+        ds = xr.Dataset({"hru_elev": ("nhru", [100.0, 200.0, 300.0])})
+        result = derivation._derive_forcing(ctx, ds)
+        assert set(result.data_vars) == {"hru_elev"}
+
+    def test_empty_temporal_returns_unchanged(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Empty temporal dict returns dataset unchanged."""
+        ctx = DerivationContext(sir=sir_topography, temporal={})
+        ds = xr.Dataset({"hru_elev": ("nhru", [100.0, 200.0, 300.0])})
+        result = derivation._derive_forcing(ctx, ds)
+        assert set(result.data_vars) == {"hru_elev"}
+
+    def test_renames_sir_to_prms(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """SIR canonical names are renamed to PRMS names."""
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal_gridmet)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        assert "prcp" in result
+        assert "tmax" in result
+        assert "tmin" in result
+        assert "swrad" in result
+        assert "potet" in result
+        assert "pr_mm_mean" not in result
+        assert "tmmx_C_mean" not in result
+
+    def test_multiyear_concat(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """Multi-year temporal data is concatenated along time."""
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal_gridmet)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        assert result["prcp"].sizes["time"] == 731
+
+    def test_swrad_converted_to_langleys(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """swrad is converted from W/m2 to Langleys/day."""
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {"srad_W_m2_mean": (("time", "nhm_id"), np.array([[100.0, 200.0, 300.0]]))},
+                coords={"time": [0], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        expected = np.array([100.0, 200.0, 300.0]) * 2.065
+        np.testing.assert_allclose(result["swrad"].values[0], expected, rtol=1e-6)
+
+    def test_potet_converted_to_inches(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """potet is converted from mm to inches."""
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {"pet_mm_mean": (("time", "nhm_id"), np.array([[25.4, 50.8, 0.0]]))},
+                coords={"time": [0], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        np.testing.assert_allclose(result["potet"].values[0], [1.0, 2.0, 0.0], rtol=1e-6)
+
+    def test_feature_dim_aligned(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Temporal feature dim is renamed to match derived dataset nhru."""
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        assert "nhru" in result["prcp"].dims
+
+    def test_missing_sir_variable_skipped(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Missing SIR variables are skipped with a warning."""
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        assert "prcp" in result
+        assert "tmax" not in result
 
 
 # ------------------------------------------------------------------
