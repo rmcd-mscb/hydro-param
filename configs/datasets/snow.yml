@@ -21,24 +21,29 @@ datasets:
         band: 1
         units: "m"
         long_name: "Modeled Snow Water Equivalent"
+        native_name: "SWE"
         categorical: false
       - name: SDP
         band: 1
         units: "m"
         long_name: "Modeled Snow Depth"
+        native_name: "SDP"
         categorical: false
       - name: SNM
         band: 1
         units: "m"
         long_name: "24-hour snowmelt rate"
+        native_name: "SNM"
         categorical: false
       - name: PRL
         band: 1
         units: "kg/m2"
         long_name: "Modeled liquid precipitation (24h total)"
+        native_name: "PRL"
         categorical: false
       - name: PRS
         band: 1
         units: "kg/m2"
         long_name: "Modeled solid precipitation (24h total)"
+        native_name: "PRS"
         categorical: false

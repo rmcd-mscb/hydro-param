@@ -395,9 +395,9 @@ def normalize_sir_temporal(
 ) -> dict[str, Path]:
     """Normalize temporal NetCDF files to canonical SIR format.
 
-    Reads raw temporal NetCDFs from stage 4, renames variables from gdptools
-    long names to canonical SIR names, applies unit conversions, and writes
-    normalized per-variable NetCDFs.
+    Reads raw temporal NetCDFs from stage 4, renames variables from native
+    source names (OPeNDAP/CF variable names) to canonical SIR names, applies
+    unit conversions, and writes normalized per-variable NetCDFs.
 
     Parameters
     ----------
@@ -420,17 +420,28 @@ def normalize_sir_temporal(
     output_dir.mkdir(parents=True, exist_ok=True)
     sir_files: dict[str, Path] = {}
 
-    # Build reverse lookup: gdptools long_name -> (var_spec, schema_entries)
-    # Only for temporal datasets.
-    long_name_lookup: dict[str, tuple[VariableSpec, list[SIRVariableSchema]]] = {}
+    # Build reverse lookup: native source name -> (var_spec, schema_entries)
+    # Only for temporal datasets. Keys are native_name (OPeNDAP/CF variable name
+    # that gdptools writes into the temporal NetCDF).
+    native_name_lookup: dict[str, tuple[VariableSpec, list[SIRVariableSchema]]] = {}
     for entry_obj, _ds_req, var_specs in resolved:
         if not (hasattr(entry_obj, "temporal") and entry_obj.temporal):
             continue
         for vs in var_specs:
-            if isinstance(vs, VariableSpec) and vs.long_name:
+            if isinstance(vs, VariableSpec):
                 matching = [s for s in schema if s.source_name == vs.name and s.temporal]
                 if matching:
-                    long_name_lookup[vs.long_name] = (vs, matching)
+                    key = vs.native_name or vs.name
+                    if key in native_name_lookup:
+                        existing_vs = native_name_lookup[key][0]
+                        logger.warning(
+                            "Duplicate native_name_lookup key '%s': variable '%s' "
+                            "collides with '%s' — check native_name settings",
+                            key,
+                            vs.name,
+                            existing_vs.name,
+                        )
+                    native_name_lookup[key] = (vs, matching)
 
     for file_key, nc_path in temporal_files.items():
         # Extract year suffix from file_key (e.g., "gridmet_2020" → "_2020")
@@ -439,7 +450,7 @@ def normalize_sir_temporal(
 
         with xr.open_dataset(nc_path) as ds:
             for data_var in list(ds.data_vars):
-                lookup = long_name_lookup.get(str(data_var))
+                lookup = native_name_lookup.get(str(data_var))
                 if lookup is None:
                     logger.warning(
                         "No SIR schema match for temporal variable '%s' in %s — skipping",
@@ -520,16 +531,22 @@ def validate_sir(
 
     warnings: list[SIRValidationWarning] = []
 
-    # Check completeness: schema variables present in files
+    # Check completeness: schema variables present in files.
+    # Temporal variables have year-suffixed keys (e.g. "pr_mm_mean_2020"),
+    # so check if any key starts with the canonical name for temporal entries.
+    sir_keys = set(sir_files.keys())
     for entry in schema:
-        if entry.canonical_name not in sir_files:
-            warnings.append(
-                SIRValidationWarning(
-                    variable=entry.canonical_name,
-                    check_type="missing",
-                    message=f"Expected variable '{entry.canonical_name}' not found in SIR output",
-                )
+        if entry.canonical_name in sir_keys:
+            continue
+        if entry.temporal and any(k.startswith(entry.canonical_name + "_") for k in sir_keys):
+            continue
+        warnings.append(
+            SIRValidationWarning(
+                variable=entry.canonical_name,
+                check_type="missing",
+                message=f"Expected variable '{entry.canonical_name}' not found in SIR output",
             )
+        )
 
     # Check each file (skip temporal NetCDF — CSV validation only)
     for cname, path in sir_files.items():
@@ -541,9 +558,11 @@ def validate_sir(
         matching = [s for s in schema if s.canonical_name == cname]
 
         for col in df.columns:
-            # For categorical entries, only validate fraction columns
-            if matching and matching[0].categorical and "_frac_" not in col:
-                continue
+            # For categorical entries, only validate fraction columns (skip count, etc.)
+            if matching and matching[0].categorical:
+                is_fraction_col = "_frac_" in col and not col.endswith("_count")
+                if not is_fraction_col:
+                    continue
 
             values = df[col].values.astype(np.float64)
 

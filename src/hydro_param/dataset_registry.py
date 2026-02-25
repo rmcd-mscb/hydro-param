@@ -21,6 +21,7 @@ class VariableSpec(BaseModel):
     band: int = 1
     units: str = ""
     long_name: str = ""
+    native_name: str = ""  # variable name in source data (e.g. OPeNDAP CF name)
     categorical: bool = False
     asset_key: str | None = None  # per-variable STAC asset override (e.g. gNATSGO)
     source_override: str | None = None  # per-variable source path/URL (e.g. POLARIS VRTs)
@@ -160,6 +161,13 @@ class DatasetEntry(BaseModel):
                 raise ValueError("nhgf_stac strategy requires 'collection'")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
+        if self.temporal:
+            missing = [v.name for v in self.variables if not v.native_name]
+            if missing:
+                raise ValueError(
+                    f"Temporal datasets require 'native_name' on all variables. "
+                    f"Missing native_name for: {', '.join(missing)}"
+                )
         if self.year_range is not None:
             if len(self.year_range) != 2:
                 raise ValueError("year_range must be a 2-element list [start, end]")
