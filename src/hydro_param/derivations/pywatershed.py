@@ -296,7 +296,21 @@ class PywatershedDerivation:
         # Add nsegment coordinate from segment IDs
         if segment_id_field in segments.columns:
             seg_ids = segments[segment_id_field].values
+        elif ctx.segment_id_field is not None:
+            # User explicitly configured a field that doesn't exist — raise
+            raise KeyError(
+                f"segment_id_field '{segment_id_field}' not found in segments columns. "
+                f"Available columns: {sorted(segments.columns.tolist())}"
+            )
         else:
+            # Default field not found — fall back with warning
+            logger.warning(
+                "Default segment_id_field '%s' not found in segments columns %s; "
+                "using sequential IDs (1..%d)",
+                segment_id_field,
+                sorted(segments.columns.tolist()),
+                len(segments),
+            )
             seg_ids = np.arange(1, nseg + 1)
         ds = ds.assign_coords(nsegment=seg_ids)
 
@@ -572,6 +586,11 @@ class PywatershedDerivation:
                     class_codes.append(int(suffix))
                     valid_vars.append(v)
                 except ValueError:
+                    logger.debug(
+                        "Skipping variable '%s': suffix '%s' is not an integer class code",
+                        v,
+                        suffix,
+                    )
                     continue
 
             if len(class_codes) < 2:

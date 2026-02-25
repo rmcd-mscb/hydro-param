@@ -103,3 +103,34 @@ class TestGetFormatter:
     def test_unknown_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown output formatter"):
             get_formatter("prms_v3_text")
+
+
+class TestFabricIdFieldValidation:
+    """Tests for fabric_id_field validation against fabric columns."""
+
+    def test_fabric_id_field_not_in_fabric_raises(self) -> None:
+        import geopandas as gpd
+        from shapely.geometry import Polygon
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"wrong_col": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        with pytest.raises(KeyError, match="not found in fabric columns"):
+            DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+
+
+class TestLookupTablesDirValidation:
+    """Tests for lookup_tables_dir existence validation."""
+
+    def test_lookup_tables_dir_nonexistent_raises(self, tmp_path: Path) -> None:
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        bad_dir = tmp_path / "nonexistent"
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", lookup_tables_dir=bad_dir)
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            _ = ctx.resolved_lookup_tables_dir

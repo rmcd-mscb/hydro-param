@@ -1027,3 +1027,94 @@ class TestMergeTemporalIntoDerived:
         assert result.sizes["time"] == 4
         expected_values = [1.0, 2.0, 3.0, 4.0]
         np.testing.assert_array_equal(result["pr"].values[0], expected_values)
+
+
+# ------------------------------------------------------------------
+# Error handling: segment_id_field warning + fraction suffix debug
+# ------------------------------------------------------------------
+
+
+class TestSegmentIdFieldWarning:
+    """Tests for segment_id_field fallback and error behavior (item 4)."""
+
+    def test_explicit_segment_id_field_missing_raises(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """KeyError raised when explicitly configured segment_id_field not found."""
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"other_id": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        with pytest.raises(KeyError, match="segment_id_field"):
+            derivation.derive(ctx)
+
+    def test_default_segment_id_field_missing_warns(
+        self,
+        derivation: PywatershedDerivation,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Warning logged when default segment_id_field not in segments columns."""
+        import logging
+
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"other_id": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            # segment_id_field=None (default) — triggers warning fallback
+        )
+        with caplog.at_level(logging.WARNING, logger="hydro_param.derivations.pywatershed"):
+            derivation.derive(ctx)
+        assert any("segment_id_field" in r.message for r in caplog.records)
+        assert any("sequential IDs" in r.message for r in caplog.records)
+
+
+class TestFractionSuffixDebugLog:
+    """Tests for non-integer fraction suffix debug log (item 5)."""
+
+    def test_fraction_suffix_non_integer_skipped(
+        self,
+        derivation: PywatershedDerivation,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Debug log emitted when fraction variable has non-integer suffix."""
+        import logging
+
+        sir = xr.Dataset(
+            {
+                "lndcov_frac_11": ("nhm_id", np.array([0.8, 0.2])),
+                "lndcov_frac_42": ("nhm_id", np.array([0.2, 0.8])),
+                "lndcov_frac_meta": ("nhm_id", np.array([0.0, 0.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        with caplog.at_level(logging.DEBUG, logger="hydro_param.derivations.pywatershed"):
+            derivation.derive(ctx)
+        assert any("Skipping variable" in r.message and "meta" in r.message for r in caplog.records)
