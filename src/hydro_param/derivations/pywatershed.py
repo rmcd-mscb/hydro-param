@@ -63,7 +63,7 @@ _DEFAULTS: dict[str, float] = {
 _IMPERV_STOR_MAX_DEFAULT = 0.03
 
 # Calibration seed method dispatch — safe lambdas only, NO eval.
-_SEED_METHODS: dict[str, Callable[[xr.Dataset, dict], np.floating | np.ndarray]] = {
+_SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
     "linear": lambda ds, p: p["scale"] * ds[p["input"]].values + p["offset"],
     "exponential_scale": lambda ds, p: p["scale"] * np.exp(p["exponent"] * ds[p["input"]].values),
     "fraction_of": lambda ds, p: p["fraction"] * ds[p["input"]].values,
@@ -947,7 +947,7 @@ class PywatershedDerivation:
                 # Check if required input variable exists for non-constant methods
                 input_var = params.get("input")
                 if input_var is not None and input_var not in ds:
-                    logger.info(
+                    logger.warning(
                         "Calibration seed '%s': input '%s' not in dataset; using default %.4g",
                         param_name,
                         input_var,
