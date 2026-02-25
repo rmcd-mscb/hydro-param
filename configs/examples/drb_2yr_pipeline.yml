@@ -1,5 +1,5 @@
-# DRB 2-year pipeline config: DEM + NLCD + gridMET
-# Produces a SIR with topographic stats, land cover fractions, and temporal climate.
+# DRB 2-year pipeline config: pywatershed data requirements
+# Produces a SIR with topographic, soils, land cover, snow, and climate data.
 #
 # Usage:
 #   hydro-param run configs/examples/drb_2yr_pipeline.yml
@@ -9,30 +9,48 @@ target_fabric:
   id_field: nhm_id
 
 datasets:
+  # --- Topography ---
   # 3DEP 10m DEM — elevation, slope, aspect
   - name: dem_3dep_10m
     variables: [elevation, slope, aspect]
     statistics: [mean]
 
+  # --- Soils ---
   # gNATSGO pre-summarized soil properties (Planetary Computer)
   - name: gnatsgo_rasters
     variables: [aws0_100, rootznemc, rootznaws]
     statistics: [mean]
-
-  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
-  - name: nlcd_osn_lndcov
-    variables: [LndCov]
-    statistics: [categorical]
-    year: [2020, 2021]
 
   # POLARIS soil texture properties, 30m (remote VRT, no download needed)
   - name: polaris_30m
     variables: [sand, silt, clay, theta_s, ksat]
     statistics: [mean]
 
+  # --- Land Cover ---
+  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
+  - name: nlcd_osn_lndcov
+    variables: [LndCov]
+    statistics: [categorical]
+    year: [2020, 2021]
+
+  # NLCD Fractional Impervious via NHGF STAC OSN — for hru_percent_imperv
+  - name: nlcd_osn_fctimp
+    variables: [FctImp]
+    statistics: [mean]
+    year: [2020, 2021]
+
+  # --- Snow ---
+  # SNODAS daily snow — historical SWE for snarea_thresh calibration seed
+  - name: snodas
+    variables: [SWE]
+    statistics: [mean]
+    time_period: ["2020-01-01", "2021-12-31"]
+
+  # --- Climate ---
   # gridMET daily climate (OPeNDAP via ClimateR catalog)
+  # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
   - name: gridmet
-    variables: [pr, tmmx, tmmn]
+    variables: [pr, tmmx, tmmn, srad, pet, vs]
     statistics: [mean]
     time_period: ["2020-01-01", "2021-12-31"]
 
@@ -43,4 +61,5 @@ output:
 
 processing:
   engine: exactextract
-  batch_size: 80
+  batch_size: 240
+  resume: true
