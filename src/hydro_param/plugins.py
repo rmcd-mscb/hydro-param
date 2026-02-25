@@ -174,7 +174,7 @@ class NetCDFFormatter:
         out_file = output_path / f"{sir_name}.nc"
         try:
             parameters.to_netcdf(out_file)
-        except Exception as exc:
+        except OSError as exc:
             raise OSError(f"NetCDF write failed for '{out_file}': {exc}") from exc
         logger.info("Wrote NetCDF: %s", out_file)
         return [out_file]
@@ -201,7 +201,7 @@ class ParquetFormatter:
         out_file = output_path / f"{sir_name}.parquet"
         try:
             parameters.to_dataframe().to_parquet(out_file)
-        except Exception as exc:
+        except OSError as exc:
             raise OSError(f"Parquet write failed for '{out_file}': {exc}") from exc
         logger.info("Wrote Parquet: %s", out_file)
         return [out_file]

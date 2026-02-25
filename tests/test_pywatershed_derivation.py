@@ -1035,14 +1035,40 @@ class TestMergeTemporalIntoDerived:
 
 
 class TestSegmentIdFieldWarning:
-    """Tests for segment_id_field fallback warning (item 4)."""
+    """Tests for segment_id_field fallback and error behavior (item 4)."""
 
-    def test_segment_id_field_missing_warns(
+    def test_explicit_segment_id_field_missing_raises(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """KeyError raised when explicitly configured segment_id_field not found."""
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"other_id": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        with pytest.raises(KeyError, match="segment_id_field"):
+            derivation.derive(ctx)
+
+    def test_default_segment_id_field_missing_warns(
         self,
         derivation: PywatershedDerivation,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Warning logged when segment_id_field not in segments columns."""
+        """Warning logged when default segment_id_field not in segments columns."""
         import logging
 
         sir = xr.Dataset(coords={"nhm_id": [1]})
@@ -1061,7 +1087,7 @@ class TestSegmentIdFieldWarning:
             fabric=fabric,
             segments=segments,
             fabric_id_field="nhm_id",
-            segment_id_field="nhm_seg",
+            # segment_id_field=None (default) — triggers warning fallback
         )
         with caplog.at_level(logging.WARNING, logger="hydro_param.derivations.pywatershed"):
             derivation.derive(ctx)
