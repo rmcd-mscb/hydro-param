@@ -12,6 +12,7 @@ from shapely.geometry import LineString, Polygon
 
 from hydro_param.derivations.pywatershed import PywatershedDerivation
 from hydro_param.plugins import DerivationContext
+from hydro_param.solar import NDOY
 
 
 @pytest.fixture()
@@ -22,12 +23,17 @@ def derivation() -> PywatershedDerivation:
 
 @pytest.fixture()
 def sir_topography() -> xr.Dataset:
-    """Synthetic SIR with topographic data (canonical SIR names)."""
+    """Synthetic SIR with topographic data (canonical SIR names).
+
+    Includes ``hru_lat`` so that step 1 (geometry) populates latitude,
+    which step 9 (soltab) requires alongside slope and aspect.
+    """
     return xr.Dataset(
         {
             "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
             "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),  # degrees
             "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),  # degrees
+            "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
         },
         coords={"nhm_id": [1, 2, 3]},
     )
@@ -329,6 +335,57 @@ class TestFullDerivation:
         assert "tmax_allsnow" in ds
         assert "den_init" in ds
         assert "gwstor_init" in ds
+
+
+class TestDeriveSoltab:
+    """Tests for step 9: solar radiation tables."""
+
+    def test_soltab_output_shape(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soltab_potsw" in ds
+        assert "soltab_horad_potsw" in ds
+        assert ds["soltab_potsw"].shape == (NDOY, 3)
+        assert ds["soltab_horad_potsw"].shape == (NDOY, 3)
+
+    def test_soltab_dims(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert ds["soltab_potsw"].dims == ("ndoy", "nhru")
+        assert ds["soltab_horad_potsw"].dims == ("ndoy", "nhru")
+
+    def test_soltab_non_negative(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert np.all(ds["soltab_potsw"].values >= 0)
+        assert np.all(ds["soltab_horad_potsw"].values >= 0)
+
+    def test_soltab_units_langleys(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert ds["soltab_potsw"].attrs["units"] == "cal/cm2/day"
+
+    def test_soltab_requires_topo_params(self, derivation: PywatershedDerivation) -> None:
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soltab_potsw" not in ds
+
+    def test_soltab_sunhrs_present(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soltab_sunhrs" in ds
+        assert ds["soltab_sunhrs"].shape == (NDOY, 3)
 
 
 # ------------------------------------------------------------------

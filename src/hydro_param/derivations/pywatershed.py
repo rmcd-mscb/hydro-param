@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 8, and 13.
+Foundation implementation covers steps 1, 2, 3, 4, 8, 9, and 13.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import xarray as xr
 import yaml
 
 from hydro_param.plugins import DerivationContext
+from hydro_param.solar import compute_soltab
 from hydro_param.units import convert
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    8 (lookup tables), and 13 (defaults).
+    8 (lookup tables), 9 (soltab), and 13 (defaults).
     """
 
     name: str = "pywatershed"
@@ -180,6 +181,9 @@ class PywatershedDerivation:
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
+
+        # Step 9: Solar radiation tables (soltab)
+        ds = self._derive_soltab(context, ds)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
@@ -661,6 +665,46 @@ class PywatershedDerivation:
                 },
             )
 
+        return ds
+
+    # ------------------------------------------------------------------
+    # Step 9: Solar radiation tables
+    # ------------------------------------------------------------------
+
+    def _derive_soltab(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
+        """Step 9: Compute potential solar radiation tables (Swift 1976).
+
+        Requires ``hru_lat``, ``hru_slope``, and ``hru_aspect`` from step 3.
+        Produces 2-D arrays of shape (ndoy=366, nhru) for potential solar
+        radiation on sloped and horizontal surfaces.
+        """
+        required = ("hru_lat", "hru_slope", "hru_aspect")
+        if not all(v in ds for v in required):
+            missing = [v for v in required if v not in ds]
+            logger.info("Skipping soltab: missing %s", missing)
+            return ds
+
+        potsw, horad, sunhrs = compute_soltab(
+            slopes=ds["hru_slope"].values,
+            aspects=ds["hru_aspect"].values,
+            lats=ds["hru_lat"].values,
+        )
+
+        ds["soltab_potsw"] = xr.DataArray(
+            potsw,
+            dims=("ndoy", "nhru"),
+            attrs={"units": "cal/cm2/day", "long_name": "Potential SW radiation on slope"},
+        )
+        ds["soltab_horad_potsw"] = xr.DataArray(
+            horad,
+            dims=("ndoy", "nhru"),
+            attrs={"units": "cal/cm2/day", "long_name": "Potential SW radiation on horizontal"},
+        )
+        ds["soltab_sunhrs"] = xr.DataArray(
+            sunhrs,
+            dims=("ndoy", "nhru"),
+            attrs={"units": "hours", "long_name": "Hours of direct sunlight"},
+        )
         return ds
 
     # ------------------------------------------------------------------
