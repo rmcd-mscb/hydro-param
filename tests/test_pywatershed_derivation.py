@@ -65,6 +65,20 @@ def sir_geometry() -> xr.Dataset:
 
 
 @pytest.fixture()
+def sir_soils() -> xr.Dataset:
+    """Synthetic SIR with soil data (gNATSGO-like)."""
+    return xr.Dataset(
+        {
+            "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
+            "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
+            "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
+            "awc_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
+        },
+        coords={"nhm_id": [1, 2, 3]},
+    )
+
+
+@pytest.fixture()
 def sir_full(
     sir_topography: xr.Dataset, sir_landcover: xr.Dataset, sir_geometry: xr.Dataset
 ) -> xr.Dataset:
@@ -172,6 +186,88 @@ class TestDeriveLandcover:
         assert "covden_sum" in ds
         # Coniferous (4) -> 0.8, Grasses (1) -> 0.3
         np.testing.assert_allclose(ds["covden_sum"].values, [0.8, 0.3])
+
+
+class TestDeriveSoils:
+    """Tests for step 5: soils zonal stats derivation."""
+
+    def test_soil_type_from_fractions(
+        self, derivation: PywatershedDerivation, sir_soils: xr.Dataset
+    ) -> None:
+        """Majority texture class maps to PRMS soil_type."""
+        ctx = DerivationContext(sir=sir_soils, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # HRU 1: sand=0.7 (highest) -> soil_type 1
+        assert ds["soil_type"].values[0] == 1
+        # HRU 2: loam=0.8 (highest) -> soil_type 2
+        assert ds["soil_type"].values[1] == 2
+        # HRU 3: clay=0.9 (highest) -> soil_type 3
+        assert ds["soil_type"].values[2] == 3
+
+    def test_soil_moist_max(self, derivation: PywatershedDerivation, sir_soils: xr.Dataset) -> None:
+        """awc_mm_mean converted to inches for soil_moist_max."""
+        ctx = DerivationContext(sir=sir_soils, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        # 50mm / 25.4 ~ 1.9685 inches
+        np.testing.assert_allclose(ds["soil_moist_max"].values[0], 50.0 / 25.4, atol=0.01)
+        assert ds["soil_moist_max"].attrs["units"] == "inches"
+
+    def test_soil_rechr_max_frac_default(
+        self, derivation: PywatershedDerivation, sir_soils: xr.Dataset
+    ) -> None:
+        """Defaults to 0.4 when no layer data available."""
+        ctx = DerivationContext(sir=sir_soils, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_rechr_max_frac" in ds
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, 0.4)
+        assert ds["soil_rechr_max_frac"].attrs["units"] == "decimal_fraction"
+
+    def test_soil_moist_max_clipped(self, derivation: PywatershedDerivation) -> None:
+        """Very low AWC clips to 0.5 inches, very high clips to 20.0 inches."""
+        sir = xr.Dataset(
+            {
+                "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                "awc_mm_mean": ("nhm_id", np.array([1.0, 1000.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # 1.0mm / 25.4 = 0.039 inches -> clips to 0.5
+        assert ds["soil_moist_max"].values[0] == 0.5
+        # 1000.0mm / 25.4 = 39.37 inches -> clips to 20.0
+        assert ds["soil_moist_max"].values[1] == 20.0
+
+    def test_soils_missing_sir_vars(self, derivation: PywatershedDerivation) -> None:
+        """Graceful skip when no soil data in SIR."""
+        sir = xr.Dataset(
+            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" not in ds
+        assert "soil_moist_max" not in ds
+        assert "soil_rechr_max_frac" not in ds
+
+    def test_soil_type_single_value_fallback(self, derivation: PywatershedDerivation) -> None:
+        """Falls back to single soil_texture variable if no fractions."""
+        sir = xr.Dataset(
+            {
+                "soil_texture": ("nhm_id", np.array(["clay", "sand", "loam"])),
+                "awc_mm_mean": ("nhm_id", np.array([80.0, 60.0, 100.0])),
+            },
+            coords={"nhm_id": [1, 2, 3]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # clay -> 3, sand -> 1, loam -> 2
+        np.testing.assert_array_equal(ds["soil_type"].values, [3, 1, 2])
 
 
 class TestApplyLookupTables:

@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 8, 9, and 13.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 8, 9, and 13.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    8 (lookup tables), 9 (soltab), and 13 (defaults).
+    5 (soils), 8 (lookup tables), 9 (soltab), and 13 (defaults).
     """
 
     name: str = "pywatershed"
@@ -178,6 +178,9 @@ class PywatershedDerivation:
 
         # Step 4: Land cover parameters (cov_type, covden_sum, hru_percent_imperv)
         ds = self._derive_landcover(context, ds)
+
+        # Step 5: Soils parameters (soil_type, soil_moist_max, soil_rechr_max_frac)
+        ds = self._derive_soils(context, ds)
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
@@ -612,6 +615,93 @@ class PywatershedDerivation:
                 prefix,
             )
             return majority_class
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Step 5: Soils zonal stats
+    # ------------------------------------------------------------------
+
+    def _derive_soils(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
+        """Step 5: Derive soil parameters from gNATSGO/STATSGO2 zonal stats.
+
+        Supports two input modes:
+
+        1. **Soil texture fractions** (preferred): SIR contains columns
+           like ``soil_texture_frac_sand``, ``soil_texture_frac_loam``, etc.
+           Majority class via argmax, then reclassify to PRMS soil_type.
+        2. **Single texture class**: ``soil_texture`` or
+           ``soil_texture_majority`` containing the dominant USDA class name.
+
+        Also derives ``soil_moist_max`` from available water capacity (AWC).
+        """
+        sir = ctx.sir
+
+        # --- soil_type ---
+        soil_type = self._compute_soil_type(sir, ctx)
+        if soil_type is not None:
+            ds["soil_type"] = xr.DataArray(
+                soil_type,
+                dims="nhru",
+                attrs={"units": "integer", "long_name": "PRMS soil type (1=sand, 2=loam, 3=clay)"},
+            )
+
+        # --- soil_moist_max ---
+        if "awc_mm_mean" in sir:
+            awc_mm = sir["awc_mm_mean"].values.astype(np.float64)
+            soil_moist_max = convert(awc_mm, "mm", "in")
+            soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
+            ds["soil_moist_max"] = xr.DataArray(
+                soil_moist_max,
+                dims="nhru",
+                attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
+            )
+
+        # --- soil_rechr_max_frac ---
+        if "soil_type" in ds:
+            nhru = len(ds["soil_type"])
+            ds["soil_rechr_max_frac"] = xr.DataArray(
+                np.full(nhru, 0.4),
+                dims="nhru",
+                attrs={
+                    "units": "decimal_fraction",
+                    "long_name": "Fraction of soil moisture in recharge zone",
+                },
+            )
+
+        return ds
+
+    def _compute_soil_type(self, sir: xr.Dataset, ctx: DerivationContext) -> np.ndarray | None:
+        """Compute PRMS soil_type from SIR soil texture data."""
+        tables_dir = ctx.resolved_lookup_tables_dir
+        soil_table = self._load_lookup_table("soil_texture_to_prms_type", tables_dir)
+        mapping = soil_table["mapping"]
+
+        # Try fraction columns first
+        prefix = "soil_texture_frac_"
+        fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+        if len(fraction_vars) >= 2:
+            class_names: list[str] = []
+            valid_vars: list[str] = []
+            for v in fraction_vars:
+                name = v[len(prefix) :]
+                if name in mapping:
+                    class_names.append(name)
+                    valid_vars.append(v)
+                else:
+                    logger.debug("Skipping soil fraction '%s': class '%s' not in lookup", v, name)
+
+            if len(valid_vars) >= 2:
+                fractions = np.column_stack([sir[v].values for v in valid_vars])
+                majority_idx = np.argmax(fractions, axis=1)
+                majority_names = [class_names[i] for i in majority_idx]
+                return np.array([mapping[name] for name in majority_names])
+
+        # Fallback: single texture class variable
+        for candidate in ("soil_texture", "soil_texture_majority"):
+            if candidate in sir:
+                texture_values = sir[candidate].values
+                return np.array([mapping.get(str(v), 2) for v in texture_values])
 
         return None
 
