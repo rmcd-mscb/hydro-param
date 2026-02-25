@@ -1093,8 +1093,24 @@ class PywatershedDerivation:
 
                 # Unit conversion (SIR unit → intermediate unit)
                 if sir_unit != intermediate_unit:
-                    converted = convert(da.values.astype(np.float64), sir_unit, intermediate_unit)
+                    try:
+                        converted = convert(
+                            da.values.astype(np.float64), sir_unit, intermediate_unit
+                        )
+                    except KeyError:
+                        logger.error(
+                            "No unit conversion registered for '%s' → '%s' "
+                            "(forcing variable '%s' from source '%s'). "
+                            "Register the conversion in units.py or fix "
+                            "forcing_variables.yml.",
+                            sir_unit,
+                            intermediate_unit,
+                            prms_name,
+                            source_name,
+                        )
+                        continue
                     da = da.copy(data=converted)
+                    da.attrs["units"] = intermediate_unit
 
                 # Align feature dimension to derived dataset
                 target_dim = "nhru"

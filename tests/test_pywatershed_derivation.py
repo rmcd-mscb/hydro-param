@@ -1606,6 +1606,84 @@ class TestDeriveForcing:
         result = derivation._derive_forcing(ctx, ds)
         assert len(result.data_vars) == 0
 
+    def test_fuzzy_match_by_variable_names(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Source name doesn't match config key but SIR variables do → fuzzy match."""
+        temporal = {
+            "climate_data_2020": xr.Dataset(
+                {
+                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
+                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
+                    "tmmn_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 5.0),
+                },
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        # Should fuzzy-match to gridmet config and rename variables
+        assert "prcp" in result
+        assert "tmax" in result
+        assert "tmin" in result
+
+    def test_unregistered_conversion_skipped(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        tmp_path: Path,
+    ) -> None:
+        """Unregistered unit conversion logs error and skips variable."""
+        import yaml
+
+        # Create a custom YAML with a bogus conversion
+        custom_yaml = {
+            "name": "forcing_variables",
+            "description": "test",
+            "mapping": {
+                "gridmet": {
+                    "prcp": {
+                        "sir_name": "pr_mm_mean",
+                        "sir_unit": "mm",
+                        "intermediate_unit": "mm",
+                    },
+                    "bogus": {
+                        "sir_name": "tmmx_C_mean",
+                        "sir_unit": "C",
+                        "intermediate_unit": "furlongs",
+                    },
+                },
+            },
+        }
+        yaml_path = tmp_path / "forcing_variables.yml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(custom_yaml, f)
+
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
+                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
+                },
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(
+            sir=sir_topography,
+            temporal=temporal,
+            lookup_tables_dir=tmp_path,
+        )
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
+        result = derivation._derive_forcing(ctx, ds)
+        # prcp should succeed, bogus should be skipped (no crash)
+        assert "prcp" in result
+        assert "bogus" not in result
+
 
 class TestDeriveIntegrationForcing:
     """Integration test: full derive() with temporal data produces forcing."""
