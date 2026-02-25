@@ -1074,16 +1074,18 @@ class PywatershedDerivation:
                     )
                     continue
 
-                da = merged_temporal[sir_name].copy(deep=True)
+                da = merged_temporal[sir_name]
 
-                # Unit conversion (SIR unit -> intermediate unit)
+                # Unit conversion (SIR unit → intermediate unit)
                 if sir_unit != intermediate_unit:
-                    da.values = convert(da.values.astype(np.float64), sir_unit, intermediate_unit)
+                    converted = convert(da.values.astype(np.float64), sir_unit, intermediate_unit)
+                    da = da.copy(data=converted)
 
                 # Align feature dimension to derived dataset
+                target_dim = "nhru"
                 feat_dims = [d for d in da.dims if d != "time"]
-                if feat_dims and "nhru" in ds.dims and feat_dims[0] != "nhru":
-                    da = da.rename({feat_dims[0]: "nhru"})
+                if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
+                    da = da.rename({feat_dims[0]: target_dim})
 
                 ds[prms_name] = da
 

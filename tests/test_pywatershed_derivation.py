@@ -1589,6 +1589,23 @@ class TestDeriveForcing:
         assert "prcp" in result
         assert "tmax" not in result
 
+    def test_unknown_source_skipped(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Completely unknown source with no matching variables is skipped."""
+        temporal = {
+            "unknown_source_2020": xr.Dataset(
+                {"some_unknown_var": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+        }
+        ctx = DerivationContext(sir=sir_topography, temporal=temporal)
+        ds = xr.Dataset()
+        result = derivation._derive_forcing(ctx, ds)
+        assert len(result.data_vars) == 0
+
 
 # ------------------------------------------------------------------
 # Calibration seeds derivation
