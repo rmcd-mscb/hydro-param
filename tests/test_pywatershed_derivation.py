@@ -269,6 +269,66 @@ class TestDeriveSoils:
         # clay -> 3, sand -> 1, loam -> 2
         np.testing.assert_array_equal(ds["soil_type"].values, [3, 1, 2])
 
+    def test_soil_texture_majority_fallback(self, derivation: PywatershedDerivation) -> None:
+        """Falls back to soil_texture_majority when soil_texture absent."""
+        sir = xr.Dataset(
+            {
+                "soil_texture_majority": ("nhm_id", np.array(["sand", "clay"])),
+                "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 3])
+
+    def test_unknown_texture_defaults_to_loam(self, derivation: PywatershedDerivation) -> None:
+        """Unrecognized texture class defaults to loam (soil_type=2) with warning."""
+        sir = xr.Dataset(
+            {
+                "soil_texture": ("nhm_id", np.array(["sand", "organic", "clay"])),
+                "awc_mm_mean": ("nhm_id", np.array([50.0, 70.0, 80.0])),
+            },
+            coords={"nhm_id": [1, 2, 3]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # sand -> 1, organic (unknown) -> 2 (loam default), clay -> 3
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2, 3])
+
+    def test_fraction_columns_with_unknown_class_filtered(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Fraction columns with names not in lookup table are filtered out."""
+        sir = xr.Dataset(
+            {
+                "soil_texture_frac_sand": ("nhm_id", np.array([0.6, 0.2])),
+                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.7])),
+                "soil_texture_frac_bogus": ("nhm_id", np.array([0.1, 0.1])),
+                "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # sand=0.6 > loam=0.3 -> 1; loam=0.7 > sand=0.2 -> 2
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2])
+
+    def test_soil_moist_max_without_soil_type(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max produced even when no texture data (soil_type absent)."""
+        sir = xr.Dataset(
+            {"awc_mm_mean": ("nhm_id", np.array([100.0]))},
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        assert "soil_type" not in ds
+        # soil_rechr_max_frac gates on soil_type
+        assert "soil_rechr_max_frac" not in ds
+
 
 class TestApplyLookupTables:
     """Tests for step 8: lookup table application."""

@@ -622,6 +622,8 @@ class PywatershedDerivation:
     # Step 5: Soils zonal stats
     # ------------------------------------------------------------------
 
+    _SOIL_RECHR_MAX_FRAC_DEFAULT: float = 0.4
+
     def _derive_soils(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Step 5: Derive soil parameters from gNATSGO/STATSGO2 zonal stats.
 
@@ -645,6 +647,12 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "integer", "long_name": "PRMS soil type (1=sand, 2=loam, 3=clay)"},
             )
+        else:
+            logger.warning(
+                "Skipping soil_type derivation (step 5): no soil texture data "
+                "found in SIR. Expected soil_texture_frac_* columns or "
+                "soil_texture/soil_texture_majority variable."
+            )
 
         # --- soil_moist_max ---
         if "awc_mm_mean" in sir:
@@ -656,30 +664,46 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
+        else:
+            logger.warning(
+                "Skipping soil_moist_max derivation (step 5): 'awc_mm_mean' not found in SIR."
+            )
 
         # --- soil_rechr_max_frac ---
         if "soil_type" in ds:
             nhru = len(ds["soil_type"])
             ds["soil_rechr_max_frac"] = xr.DataArray(
-                np.full(nhru, 0.4),
+                np.full(nhru, self._SOIL_RECHR_MAX_FRAC_DEFAULT),
                 dims="nhru",
                 attrs={
                     "units": "decimal_fraction",
                     "long_name": "Fraction of soil moisture in recharge zone",
                 },
             )
+            logger.debug(
+                "soil_rechr_max_frac set to default %.2f for %d HRUs "
+                "(no soil layer data available)",
+                self._SOIL_RECHR_MAX_FRAC_DEFAULT,
+                nhru,
+            )
 
         return ds
 
     def _compute_soil_type(self, sir: xr.Dataset, ctx: DerivationContext) -> np.ndarray | None:
         """Compute PRMS soil_type from SIR soil texture data."""
+        # Check data availability before loading lookup table
+        prefix = "soil_texture_frac_"
+        fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+        has_single = any(c in sir for c in ("soil_texture", "soil_texture_majority"))
+
+        if len(fraction_vars) < 2 and not has_single:
+            return None
+
         tables_dir = ctx.resolved_lookup_tables_dir
         soil_table = self._load_lookup_table("soil_texture_to_prms_type", tables_dir)
         mapping = soil_table["mapping"]
 
         # Try fraction columns first
-        prefix = "soil_texture_frac_"
-        fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
         if len(fraction_vars) >= 2:
             class_names: list[str] = []
             valid_vars: list[str] = []
@@ -693,6 +717,14 @@ class PywatershedDerivation:
 
             if len(valid_vars) >= 2:
                 fractions = np.column_stack([sir[v].values for v in valid_vars])
+                nan_mask = np.any(np.isnan(fractions), axis=1)
+                if np.any(nan_mask):
+                    logger.warning(
+                        "soil_type: %d/%d HRU(s) have NaN soil texture fractions; "
+                        "argmax result may be unreliable for those HRUs",
+                        int(np.sum(nan_mask)),
+                        len(fractions),
+                    )
                 majority_idx = np.argmax(fractions, axis=1)
                 majority_names = [class_names[i] for i in majority_idx]
                 return np.array([mapping[name] for name in majority_names])
@@ -701,7 +733,24 @@ class PywatershedDerivation:
         for candidate in ("soil_texture", "soil_texture_majority"):
             if candidate in sir:
                 texture_values = sir[candidate].values
-                return np.array([mapping.get(str(v), 2) for v in texture_values])
+                result = []
+                unknown_values: set[str] = set()
+                for v in texture_values:
+                    key = str(v)
+                    if key in mapping:
+                        result.append(mapping[key])
+                    else:
+                        unknown_values.add(key)
+                        result.append(2)  # default to loam
+                if unknown_values:
+                    logger.warning(
+                        "soil_type: %d HRU(s) have unrecognized texture class(es) "
+                        "%s in '%s'; defaulting to loam (soil_type=2)",
+                        sum(1 for val in texture_values if str(val) in unknown_values),
+                        sorted(unknown_values),
+                        candidate,
+                    )
+                return np.array(result)
 
         return None
 
