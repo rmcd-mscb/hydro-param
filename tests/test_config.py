@@ -298,3 +298,32 @@ def test_sir_validation_default() -> None:
 def test_sir_validation_strict() -> None:
     config = ProcessingConfig(sir_validation="strict")
     assert config.sir_validation == "strict"
+
+
+# ---------------------------------------------------------------------------
+# network_timeout field
+# ---------------------------------------------------------------------------
+
+
+def test_processing_config_network_timeout_default() -> None:
+    """network_timeout defaults to 120."""
+    pc = ProcessingConfig()
+    assert pc.network_timeout == 120
+
+
+def test_processing_config_network_timeout_custom() -> None:
+    """network_timeout accepts positive int."""
+    pc = ProcessingConfig(network_timeout=300)
+    assert pc.network_timeout == 300
+
+
+def test_processing_config_network_timeout_rejects_zero() -> None:
+    """network_timeout rejects 0."""
+    with pytest.raises(ValueError):
+        ProcessingConfig(network_timeout=0)
+
+
+def test_processing_config_network_timeout_rejects_negative() -> None:
+    """network_timeout rejects negative values."""
+    with pytest.raises(ValueError):
+        ProcessingConfig(network_timeout=-10)

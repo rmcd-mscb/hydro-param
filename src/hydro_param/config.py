@@ -98,6 +98,7 @@ class ProcessingConfig(BaseModel):
     batch_size: int = Field(default=500, gt=0)
     resume: bool = False
     sir_validation: Literal["tolerant", "strict"] = "tolerant"
+    network_timeout: int = Field(default=120, gt=0, description="Network timeout in seconds")
 
 
 class PipelineConfig(BaseModel):

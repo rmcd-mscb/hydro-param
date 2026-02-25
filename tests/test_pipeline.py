@@ -103,6 +103,14 @@ def registry_yaml(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture()
+def fake_gpkg(tmp_path: Path) -> Path:
+    """Create a minimal fake .gpkg file for manifest fingerprinting."""
+    p = tmp_path / "test.gpkg"
+    p.write_text("fake")
+    return p
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Resolve fabric
 # ---------------------------------------------------------------------------
@@ -1141,7 +1149,7 @@ def test_split_time_period_same_day():
     assert result == [["2020-06-15", "2020-06-15"]]
 
 
-def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path):
+def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path, fake_gpkg: Path):
     """Multi-year datasets produce year-suffixed result keys in stage4."""
     from unittest.mock import patch
 
@@ -1171,7 +1179,7 @@ def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path):
     )
 
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1189,7 +1197,7 @@ def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path):
     assert results.categories["LndCov_2021"] == "land_cover"
 
 
-def test_stage4_single_year_produces_suffixed_key(tmp_path: Path):
+def test_stage4_single_year_produces_suffixed_key(tmp_path: Path, fake_gpkg: Path):
     """A single-int year still produces a year-suffixed result key."""
     from unittest.mock import patch
 
@@ -1218,7 +1226,7 @@ def test_stage4_single_year_produces_suffixed_key(tmp_path: Path):
     )
 
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1233,7 +1241,7 @@ def test_stage4_single_year_produces_suffixed_key(tmp_path: Path):
     assert "LndCov" not in results.static_files
 
 
-def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
+def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path, fake_gpkg: Path):
     """When year=None, result keys have no year suffix."""
     from unittest.mock import patch
 
@@ -1260,7 +1268,7 @@ def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
     )
 
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1275,7 +1283,7 @@ def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path):
     assert not any("LndCov_" in k for k in results.static_files)
 
 
-def test_stage4_duplicate_var_key_raises(tmp_path: Path):
+def test_stage4_duplicate_var_key_raises(tmp_path: Path, fake_gpkg: Path):
     """stage4_process raises ValueError when two datasets produce the same var_key."""
     from unittest.mock import patch
 
@@ -1299,7 +1307,7 @@ def test_stage4_duplicate_var_key_raises(tmp_path: Path):
     ds_req2 = DatasetRequest(name="dataset_b", variables=["LndCov"], statistics=["categorical"])
 
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1654,7 +1662,7 @@ def test_process_batch_stac_cog_no_asset_key_passes_none(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_stage4_resume_skips_completed_dataset(tmp_path: Path):
+def test_stage4_resume_skips_completed_dataset(tmp_path: Path, fake_gpkg: Path):
     """With resume=True and valid manifest, stage4 skips completed datasets."""
     from unittest.mock import patch
 
@@ -1695,12 +1703,8 @@ def test_stage4_resume_skips_completed_dataset(tmp_path: Path):
     csv_file = lc_dir / "LndCov.csv"
     csv_file.write_text("hru_id,LndCov\na,11\nb,21\n")
 
-    # Create a fabric file so fingerprint works
-    gpkg_path = tmp_path / "test.gpkg"
-    gpkg_path.write_text("fake")
-
     config = PipelineConfig(
-        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
         datasets=[],
         output={"path": str(output_dir)},
@@ -1732,7 +1736,7 @@ def test_stage4_resume_skips_completed_dataset(tmp_path: Path):
     assert results.static_files["LndCov"] == csv_file
 
 
-def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path):
+def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path, fake_gpkg: Path):
     """With resume=True but changed fingerprint, stage4 reprocesses."""
     from unittest.mock import patch
 
@@ -1761,11 +1765,9 @@ def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path):
     )
 
     output_dir = tmp_path / "output"
-    gpkg_path = tmp_path / "test.gpkg"
-    gpkg_path.write_text("fake")
 
     config = PipelineConfig(
-        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(output_dir)},
@@ -1796,7 +1798,7 @@ def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path):
     assert "LndCov" in results.static_files
 
 
-def test_stage4_resume_disabled_by_default(tmp_path: Path):
+def test_stage4_resume_disabled_by_default(tmp_path: Path, fake_gpkg: Path):
     """With resume=False (default), stage4 processes everything."""
     from unittest.mock import patch
 
@@ -1823,7 +1825,7 @@ def test_stage4_resume_disabled_by_default(tmp_path: Path):
     )
 
     config = PipelineConfig(
-        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(tmp_path / "output")},
@@ -1841,7 +1843,7 @@ def test_stage4_resume_disabled_by_default(tmp_path: Path):
     assert "LndCov" in results.static_files  # noqa: E501
 
 
-def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
+def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path, fake_gpkg: Path):
     """With resume=True but changed fabric, stage4 reprocesses all datasets."""
     from unittest.mock import patch
 
@@ -1874,11 +1876,8 @@ def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
     lc_dir.mkdir(parents=True)
     (lc_dir / "LndCov.csv").write_text("data")
 
-    gpkg_path = tmp_path / "test.gpkg"
-    gpkg_path.write_text("fake")
-
     config = PipelineConfig(
-        target_fabric={"path": str(gpkg_path), "id_field": "hru_id"},
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
         datasets=[],
         output={"path": str(output_dir)},
@@ -1905,6 +1904,116 @@ def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path):
         mock_method.assert_called_once()
 
     assert "LndCov" in results.static_files  # noqa: E501
+
+
+def test_stage4_always_writes_manifest(tmp_path: Path, fake_gpkg: Path) -> None:
+    """Manifest is written even when resume=False."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import load_manifest
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    config = PipelineConfig(
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+        processing={"resume": False},
+    )
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df):
+        stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+
+    manifest = load_manifest(config.output.path)
+    assert manifest is not None
+    assert "nlcd_osn_lndcov" in manifest.entries
+
+
+def test_stage4_resume_false_does_not_skip(tmp_path: Path, fake_gpkg: Path) -> None:
+    """With resume=False, stage4 does NOT skip even if manifest is current."""
+    from unittest.mock import patch
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+    from hydro_param.manifest import (
+        ManifestEntry,
+        PipelineManifest,
+        dataset_fingerprint,
+        fabric_fingerprint,
+    )
+    from hydro_param.pipeline import stage4_process
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a"], "batch_id": [0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="nlcd-LndCov",
+        temporal=False,
+        category="land_cover",
+    )
+    var_spec = VariableSpec(name="LndCov", band=1, categorical=True)
+    ds_req = DatasetRequest(
+        name="nlcd_osn_lndcov",
+        variables=["LndCov"],
+        statistics=["categorical"],
+    )
+
+    output_dir = tmp_path / "output"
+    lc_dir = output_dir / "land_cover"
+    lc_dir.mkdir(parents=True)
+    (lc_dir / "LndCov.csv").write_text("hru_id,LndCov\na,11\n")
+
+    config = PipelineConfig(
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(output_dir)},
+        processing={"resume": False},
+    )
+
+    ds_fp = dataset_fingerprint(ds_req, entry, [var_spec], config.processing)
+    fab_fp = fabric_fingerprint(config)
+    manifest = PipelineManifest(
+        fabric_fingerprint=fab_fp,
+        entries={
+            "nlcd_osn_lndcov": ManifestEntry(
+                fingerprint=ds_fp,
+                static_files={"LndCov": "land_cover/LndCov.csv"},
+            ),
+        },
+    )
+    manifest.save(output_dir)
+
+    mock_df = pd.DataFrame({"categorical": [11]}, index=["a"])
+
+    with patch.object(ZonalProcessor, "process_nhgf_stac", return_value=mock_df) as mock_method:
+        stage4_process(fabric, [(entry, ds_req, [var_spec])], config)
+        mock_method.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -2140,3 +2249,55 @@ def test_process_batch_releases_source_cache(tmp_path: Path):
     assert "var_b" in results
     assert len(results["var_a"]) == 2
     assert len(results["var_b"]) == 2
+
+
+def test_run_pipeline_sets_gdal_http_timeout(tmp_path: Path, fake_gpkg: Path) -> None:
+    """run_pipeline_from_config sets GDAL_HTTP_TIMEOUT from config."""
+    import os
+    from unittest.mock import patch
+
+    from hydro_param.config import PipelineConfig
+    from hydro_param.dataset_registry import DatasetRegistry
+    from hydro_param.pipeline import run_pipeline_from_config
+
+    config = PipelineConfig(
+        target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
+        datasets=[],
+        output={"path": str(tmp_path / "output")},
+        processing={"network_timeout": 300},
+    )
+
+    # Save previous env state to verify restore after pipeline
+    prev_timeout = os.environ.pop("GDAL_HTTP_TIMEOUT", None)
+    prev_connect = os.environ.pop("GDAL_HTTP_CONNECTTIMEOUT", None)
+
+    try:
+        # Capture env state inside stage1 (before the error aborts the pipeline)
+        captured_env: dict[str, str | None] = {}
+
+        def capture_and_raise(*_args: object, **_kwargs: object) -> None:
+            captured_env["GDAL_HTTP_TIMEOUT"] = os.environ.get("GDAL_HTTP_TIMEOUT")
+            captured_env["GDAL_HTTP_CONNECTTIMEOUT"] = os.environ.get("GDAL_HTTP_CONNECTTIMEOUT")
+            raise RuntimeError("stop early")
+
+        with patch("hydro_param.pipeline.stage1_resolve_fabric") as mock_s1:
+            mock_s1.side_effect = capture_and_raise
+            try:
+                registry = DatasetRegistry(datasets={})
+                run_pipeline_from_config(config, registry)
+            except RuntimeError:
+                pass
+
+        # Env vars were set BEFORE stage1 ran
+        assert captured_env["GDAL_HTTP_TIMEOUT"] == "300"
+        assert captured_env["GDAL_HTTP_CONNECTTIMEOUT"] == "300"
+
+        # Pipeline restores env vars after completion (try/finally)
+        assert os.environ.get("GDAL_HTTP_TIMEOUT") is None
+        assert os.environ.get("GDAL_HTTP_CONNECTTIMEOUT") is None
+    finally:
+        # Restore original env in case of test failure
+        if prev_timeout is not None:
+            os.environ["GDAL_HTTP_TIMEOUT"] = prev_timeout
+        if prev_connect is not None:
+            os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = prev_connect

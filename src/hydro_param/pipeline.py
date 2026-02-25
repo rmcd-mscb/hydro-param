@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import sys
 import tempfile
 import time
@@ -757,22 +758,22 @@ def stage4_process(
     # Ensure output directory exists for incremental writes
     config.output.path.mkdir(parents=True, exist_ok=True)
 
-    # Resume support: load manifest if resume is enabled
-    manifest: _manifest_mod.PipelineManifest | None = None
-    fab_fp: str = ""
+    # Always create manifest for resume support.
+    # The resume flag controls whether completed datasets are *skipped*,
+    # not whether the manifest is *written*.
+    fab_fp = _manifest_mod.fabric_fingerprint(config)
+    manifest = _manifest_mod.PipelineManifest(fabric_fingerprint=fab_fp)
+
     if config.processing.resume:
-        manifest = _manifest_mod.load_manifest(config.output.path)
-        fab_fp = _manifest_mod.fabric_fingerprint(config)
-        if manifest is not None and not manifest.is_fabric_current(fab_fp):
-            # Fabric changed: discard stale manifest and start fresh
+        existing = _manifest_mod.load_manifest(config.output.path)
+        if existing is not None and existing.is_fabric_current(fab_fp):
+            manifest = existing  # Preserve entries for skip checks
+        elif existing is not None:
             logger.warning(
                 "Fabric fingerprint changed — reprocessing all datasets (old=%s, new=%s)",
-                manifest.fabric_fingerprint,
+                existing.fabric_fingerprint,
                 fab_fp,
             )
-            manifest = None
-        if manifest is None:
-            manifest = _manifest_mod.PipelineManifest(fabric_fingerprint=fab_fp)
 
     static_files: dict[str, Path] = {}
     temporal_files: dict[str, Path] = {}
@@ -782,11 +783,10 @@ def stage4_process(
         category = entry.category or "uncategorized"
         var_names = [v.name for v in var_specs]
 
-        # Compute dataset fingerprint unconditionally (cheap hash)
         ds_fp = _manifest_mod.dataset_fingerprint(ds_req, entry, var_specs, config.processing)
 
         # Resume: check if this dataset can be skipped
-        if manifest is not None:
+        if config.processing.resume:
             if manifest.is_dataset_current(ds_req.name, ds_fp, config.output.path):
                 cached = manifest.entries[ds_req.name]
                 for k, rel in cached.static_files.items():
@@ -843,10 +843,7 @@ def stage4_process(
             logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
             # Update manifest after temporal dataset completes
-            if manifest is not None:
-                _save_manifest(
-                    manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path
-                )
+            _save_manifest(manifest, ds_req.name, ds_fp, {}, ds_temporal_files, config.output.path)
 
             continue
 
@@ -924,13 +921,11 @@ def stage4_process(
         logger.info("  %s complete (%.1fs)", ds_req.name, time.perf_counter() - t_ds)
 
         # Update manifest after static dataset completes
-        if manifest is not None:
-            ds_static: dict[str, Path] = {k: static_files[k] for k in ds_batch_results}
-            _save_manifest(manifest, ds_req.name, ds_fp, ds_static, {}, config.output.path)
+        ds_static: dict[str, Path] = {k: static_files[k] for k in ds_batch_results}
+        _save_manifest(manifest, ds_req.name, ds_fp, ds_static, {}, config.output.path)
 
-    # Final save: persists any entries added during the last dataset iteration
-    if manifest is not None:
-        _save_manifest_to_disk(manifest, config.output.path)
+    # Safety save: ensures manifest is on disk even if a per-dataset save was interrupted
+    _save_manifest_to_disk(manifest, config.output.path)
 
     return Stage4Results(
         static_files=static_files, temporal_files=temporal_files, categories=categories
@@ -1039,68 +1034,87 @@ def run_pipeline_from_config(
     logger.info("  Output: %s (%s)", config.output.path, config.output.format)
     logger.info("=" * 60)
 
-    # Stage 1: Resolve target fabric (applies domain filter if configured)
-    t1 = time.perf_counter()
-    fabric = stage1_resolve_fabric(config)
+    # Apply network timeout to GDAL HTTP operations (COG/vsicurl access)
+    _timeout_s = str(config.processing.network_timeout)
+    _prev_timeout = os.environ.get("GDAL_HTTP_TIMEOUT")
+    _prev_connect = os.environ.get("GDAL_HTTP_CONNECTTIMEOUT")
+    os.environ["GDAL_HTTP_TIMEOUT"] = _timeout_s
+    os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = _timeout_s
+    logger.info("  Network timeout: %ss", _timeout_s)
 
-    # Spatial batching
-    fabric = spatial_batch(fabric, batch_size=config.processing.batch_size)
-    batch_ids = sorted(fabric["batch_id"].unique())
-    batch_sizes = fabric.groupby("batch_id").size()
-    logger.info(
-        "Spatial batching: %d features → %d batches (min=%d, max=%d, mean=%d) (%.1fs)",
-        len(fabric),
-        len(batch_ids),
-        batch_sizes.min(),
-        batch_sizes.max(),
-        batch_sizes.mean(),
-        time.perf_counter() - t1,
-    )
+    try:
+        # Stage 1: Resolve target fabric (applies domain filter if configured)
+        t1 = time.perf_counter()
+        fabric = stage1_resolve_fabric(config)
 
-    # Stage 2: Resolve source datasets
-    t2 = time.perf_counter()
-    resolved = stage2_resolve_datasets(config, registry)
-    logger.info("Stage 2 complete (%.1fs)", time.perf_counter() - t2)
+        # Spatial batching
+        fabric = spatial_batch(fabric, batch_size=config.processing.batch_size)
+        batch_ids = sorted(fabric["batch_id"].unique())
+        batch_sizes = fabric.groupby("batch_id").size()
+        logger.info(
+            "Spatial batching: %d features → %d batches (min=%d, max=%d, mean=%d) (%.1fs)",
+            len(fabric),
+            len(batch_ids),
+            batch_sizes.min(),
+            batch_sizes.max(),
+            batch_sizes.mean(),
+            time.perf_counter() - t1,
+        )
 
-    # Stage 3: Weights (handled internally by gdptools ZonalGen)
-    logger.info("Stage 3: Weights computed internally by gdptools")
+        # Stage 2: Resolve source datasets
+        t2 = time.perf_counter()
+        resolved = stage2_resolve_datasets(config, registry)
+        logger.info("Stage 2 complete (%.1fs)", time.perf_counter() - t2)
 
-    # Stage 4: Process datasets + incremental writes
-    t4 = time.perf_counter()
-    results = stage4_process(fabric, resolved, config)
-    logger.info(
-        "Stage 4 complete: %d static vars, %d temporal datasets (%.1fs)",
-        len(results.static_files),
-        len(results.temporal_files),
-        time.perf_counter() - t4,
-    )
+        # Stage 3: Weights (handled internally by gdptools ZonalGen)
+        logger.info("Stage 3: Weights computed internally by gdptools")
 
-    # Stage 5: Normalize SIR
-    t5 = time.perf_counter()
-    sir_files, sir_schema, sir_warnings = stage5_normalize_sir(results, resolved, config)
-    logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)
+        # Stage 4: Process datasets + incremental writes
+        t4 = time.perf_counter()
+        results = stage4_process(fabric, resolved, config)
+        logger.info(
+            "Stage 4 complete: %d static vars, %d temporal datasets (%.1fs)",
+            len(results.static_files),
+            len(results.temporal_files),
+            time.perf_counter() - t4,
+        )
 
-    elapsed = time.perf_counter() - t0
-    logger.info("=" * 60)
-    logger.info(
-        "Pipeline complete: %d static + %d temporal datasets, %d features, %.1f seconds",
-        len(results.static_files),
-        len(results.temporal_files),
-        len(fabric),
-        elapsed,
-    )
-    logger.info("=" * 60)
+        # Stage 5: Normalize SIR
+        t5 = time.perf_counter()
+        sir_files, sir_schema, sir_warnings = stage5_normalize_sir(results, resolved, config)
+        logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)
 
-    return PipelineResult(
-        output_dir=config.output.path,
-        static_files=results.static_files,
-        temporal_files=results.temporal_files,
-        categories=results.categories,
-        fabric=fabric,
-        sir_files=sir_files,
-        sir_schema=sir_schema,
-        sir_warnings=sir_warnings,
-    )
+        elapsed = time.perf_counter() - t0
+        logger.info("=" * 60)
+        logger.info(
+            "Pipeline complete: %d static + %d temporal datasets, %d features, %.1f seconds",
+            len(results.static_files),
+            len(results.temporal_files),
+            len(fabric),
+            elapsed,
+        )
+        logger.info("=" * 60)
+
+        return PipelineResult(
+            output_dir=config.output.path,
+            static_files=results.static_files,
+            temporal_files=results.temporal_files,
+            categories=results.categories,
+            fabric=fabric,
+            sir_files=sir_files,
+            sir_schema=sir_schema,
+            sir_warnings=sir_warnings,
+        )
+    finally:
+        # Restore previous GDAL timeout settings
+        if _prev_timeout is None:
+            os.environ.pop("GDAL_HTTP_TIMEOUT", None)
+        else:
+            os.environ["GDAL_HTTP_TIMEOUT"] = _prev_timeout
+        if _prev_connect is None:
+            os.environ.pop("GDAL_HTTP_CONNECTTIMEOUT", None)
+        else:
+            os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = _prev_connect
 
 
 def run_pipeline(
