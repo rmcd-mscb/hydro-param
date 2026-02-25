@@ -334,7 +334,7 @@ class TestBuildSIRSchema:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
-            variables=[VariableSpec(name="pr", units="mm", long_name="Precipitation")],
+            variables=[VariableSpec(name="pr", units="mm", native_name="precipitation_amount")],
             category="climate",
         )
         ds_req = DatasetRequest(
@@ -343,7 +343,7 @@ class TestBuildSIRSchema:
             statistics=["mean"],
             time_period=["2020-01-01", "2020-12-31"],
         )
-        var_specs = [VariableSpec(name="pr", units="mm", long_name="Precipitation")]
+        var_specs = [VariableSpec(name="pr", units="mm", native_name="precipitation_amount")]
         resolved = [(entry, ds_req, var_specs)]
         schema = build_sir_schema(resolved)
         assert len(schema) == 1
@@ -829,6 +829,7 @@ class TestValidateSIR:
                 "lndcov_frac_11": [0.3, 0.5],
                 "lndcov_frac_21": [0.7, 0.5],
                 "count": [1000, 2000],  # pixel counts — NOT fractions
+                "lndcov_frac_count": [500, 800],  # contains _frac_ but ends with _count
             },
             index=pd.Index([1, 2], name="nhm_id"),
         )
@@ -858,7 +859,7 @@ class TestNormalizeSIRTemporal:
     """Tests for normalize_sir_temporal()."""
 
     def test_renames_variables_and_converts_units(self, tmp_path: Path) -> None:
-        """Temporal normalization renames long names to canonical and converts K to °C."""
+        """Temporal normalization renames native source names to canonical and converts K to C."""
         import pandas as pd
         import xarray as xr
 
@@ -866,7 +867,7 @@ class TestNormalizeSIRTemporal:
         from hydro_param.dataset_registry import DatasetEntry, VariableSpec
         from hydro_param.sir import build_sir_schema, normalize_sir_temporal
 
-        # Create a synthetic temporal NetCDF with gdptools-style long names
+        # Create a synthetic temporal NetCDF with native source variable names
         ds = xr.Dataset(
             {
                 "daily_maximum_temperature": (
@@ -1059,4 +1060,122 @@ class TestNormalizeSIRTemporal:
         )
 
         # Unknown variable should be skipped — no output files
+        assert len(result) == 0
+
+    def test_fallback_to_name_when_native_name_matches(self, tmp_path: Path) -> None:
+        """When native_name matches name, lookup uses name as key."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        # SNODAS-style: native_name == name (e.g. "SWE")
+        ds = xr.Dataset(
+            {
+                "SWE": (
+                    ["time", "nhm_id"],
+                    np.array([[50.0, 100.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "snodas_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        entry = DatasetEntry(
+            strategy="nhgf_stac",
+            collection="snodas-daily",
+            temporal=True,
+            t_coord="time",
+            variables=[
+                VariableSpec(name="SWE", units="m", native_name="SWE"),
+            ],
+            category="snow",
+        )
+        ds_req = DatasetRequest(
+            name="snodas",
+            variables=["SWE"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files={"snodas_2020": nc_path},
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+        assert len(result) == 1
+        assert "swe_m_mean_2020" in result
+
+    def test_long_name_is_not_used_as_lookup_key(self, tmp_path: Path) -> None:
+        """long_name should NOT be used for lookup — only native_name or name."""
+        import pandas as pd
+        import xarray as xr
+
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DatasetEntry, VariableSpec
+        from hydro_param.sir import build_sir_schema, normalize_sir_temporal
+
+        # NetCDF var is the long_name, but native_name differs
+        ds = xr.Dataset(
+            {
+                "Daily precipitation": (
+                    ["time", "nhm_id"],
+                    np.array([[5.0, 10.0]]),
+                ),
+            },
+            coords={
+                "time": pd.date_range("2020-01-01", periods=1),
+                "nhm_id": [1, 2],
+            },
+        )
+        nc_path = tmp_path / "input" / "gridmet_2020_temporal.nc"
+        nc_path.parent.mkdir()
+        ds.to_netcdf(nc_path)
+
+        entry = DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(
+                    name="pr",
+                    units="mm",
+                    long_name="Daily precipitation",
+                    native_name="precipitation_amount",
+                ),
+            ],
+            category="climate",
+        )
+        ds_req = DatasetRequest(
+            name="gridmet",
+            variables=["pr"],
+            statistics=["mean"],
+            time_period=["2020-01-01", "2020-12-31"],
+        )
+        var_specs: list = list(entry.variables)
+        resolved = [(entry, ds_req, var_specs)]
+        schema = build_sir_schema(resolved)
+
+        out_dir = tmp_path / "sir"
+        result = normalize_sir_temporal(
+            temporal_files={"gridmet_2020": nc_path},
+            schema=schema,
+            resolved=resolved,
+            output_dir=out_dir,
+        )
+        # Lookup is by native_name ("precipitation_amount"), NOT long_name
+        # ("Daily precipitation"). NetCDF var is "Daily precipitation" — no match.
         assert len(result) == 0

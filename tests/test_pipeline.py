@@ -934,7 +934,7 @@ def test_temporal_requires_time_period(tmp_path: Path):
                 "collection": "snodas",
                 "temporal": True,
                 "t_coord": "time",
-                "variables": [{"name": "SWE", "band": 1}],
+                "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
             },
         }
     }
@@ -2114,7 +2114,7 @@ def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
         catalog_id="gridmet",
         temporal=True,
         t_coord="day",
-        variables=[VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature")],
+        variables=[VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature")],
         category="climate",
     )
     ds_req = DatasetRequest(

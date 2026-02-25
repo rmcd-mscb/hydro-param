@@ -395,9 +395,9 @@ def normalize_sir_temporal(
 ) -> dict[str, Path]:
     """Normalize temporal NetCDF files to canonical SIR format.
 
-    Reads raw temporal NetCDFs from stage 4, renames variables from gdptools
-    long names to canonical SIR names, applies unit conversions, and writes
-    normalized per-variable NetCDFs.
+    Reads raw temporal NetCDFs from stage 4, renames variables from native
+    source names (OPeNDAP/CF variable names) to canonical SIR names, applies
+    unit conversions, and writes normalized per-variable NetCDFs.
 
     Parameters
     ----------
@@ -422,7 +422,7 @@ def normalize_sir_temporal(
 
     # Build reverse lookup: native source name -> (var_spec, schema_entries)
     # Only for temporal datasets. Keys are native_name (OPeNDAP/CF variable name
-    # that gdptools writes into the temporal NetCDF), falling back to name.
+    # that gdptools writes into the temporal NetCDF).
     native_name_lookup: dict[str, tuple[VariableSpec, list[SIRVariableSchema]]] = {}
     for entry_obj, _ds_req, var_specs in resolved:
         if not (hasattr(entry_obj, "temporal") and entry_obj.temporal):
@@ -432,6 +432,15 @@ def normalize_sir_temporal(
                 matching = [s for s in schema if s.source_name == vs.name and s.temporal]
                 if matching:
                     key = vs.native_name or vs.name
+                    if key in native_name_lookup:
+                        existing_vs = native_name_lookup[key][0]
+                        logger.warning(
+                            "Duplicate native_name_lookup key '%s': variable '%s' "
+                            "collides with '%s' — check native_name settings",
+                            key,
+                            vs.name,
+                            existing_vs.name,
+                        )
                     native_name_lookup[key] = (vs, matching)
 
     for file_key, nc_path in temporal_files.items():
@@ -544,12 +553,10 @@ def validate_sir(
 
         for col in df.columns:
             # For categorical entries, only validate fraction columns (skip count, etc.)
-            if (
-                matching
-                and matching[0].categorical
-                and ("_frac_" not in col or col.endswith("_count"))
-            ):
-                continue
+            if matching and matching[0].categorical:
+                is_fraction_col = "_frac_" in col and not col.endswith("_count")
+                if not is_fraction_col:
+                    continue
 
             values = df[col].values.astype(np.float64)
 

@@ -677,6 +677,34 @@ def test_climr_cat_requires_temporal():
         )
 
 
+def test_temporal_requires_native_name_on_variables():
+    """Temporal datasets with variables must have native_name set."""
+    with pytest.raises(ValidationError, match="native_name"):
+        DatasetEntry(
+            strategy="climr_cat",
+            catalog_id="gridmet",
+            temporal=True,
+            t_coord="day",
+            variables=[
+                VariableSpec(name="pr", units="mm"),  # missing native_name
+            ],
+        )
+
+
+def test_temporal_native_name_ok_when_set():
+    """Temporal datasets with native_name set on all variables pass validation."""
+    entry = DatasetEntry(
+        strategy="climr_cat",
+        catalog_id="gridmet",
+        temporal=True,
+        t_coord="day",
+        variables=[
+            VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
+        ],
+    )
+    assert entry.variables[0].native_name == "precipitation_amount"
+
+
 def test_nhgf_stac_valid():
     """nhgf_stac strategy with required fields validates."""
     entry = DatasetEntry(
