@@ -86,6 +86,28 @@ def sir_full(
     return xr.merge([sir_topography, sir_landcover, sir_geometry])
 
 
+class TestDerivationContextTemporal:
+    """Tests for temporal field on DerivationContext."""
+
+    def test_temporal_defaults_to_none(self, sir_topography: xr.Dataset) -> None:
+        """DerivationContext.temporal is None when not provided."""
+        ctx = DerivationContext(sir=sir_topography)
+        assert ctx.temporal is None
+
+    def test_temporal_accepts_dict(self, sir_topography: xr.Dataset) -> None:
+        """DerivationContext.temporal accepts a dict of datasets."""
+        temporal_ds = xr.Dataset(
+            {"pr_mm_mean": (("time", "nhm_id"), np.ones((3, 3)))},
+            coords={"time": [0, 1, 2], "nhm_id": [1, 2, 3]},
+        )
+        ctx = DerivationContext(
+            sir=sir_topography,
+            temporal={"gridmet_2020": temporal_ds},
+        )
+        assert ctx.temporal is not None
+        assert "gridmet_2020" in ctx.temporal
+
+
 class TestDeriveTopography:
     """Tests for step 3: topographic parameter derivation."""
 
