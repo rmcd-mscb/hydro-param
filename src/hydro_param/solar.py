@@ -29,7 +29,7 @@ _DNEARZERO: float = 1.0e-12
 _PI: float = np.pi
 _TWO_PI: float = 2.0 * np.pi
 _PI_12: float = 12.0 / np.pi
-_RAD_DAY: float = _TWO_PI / 365.0
+_RAD_DAY: float = _TWO_PI / 365.242
 _ECCENTRICITY: float = 0.01671
 
 # ---------------------------------------------------------------------------
@@ -194,18 +194,21 @@ def _compute_soltab_core(
     t0 = -1.0 * tt
     t1 = tt
 
-    # Clip slope angles to horizontal bounds
-    t3 = t7.copy()
+    # Clip slope angles to horizontal bounds.
+    # pywatershed uses aliasing here: t3 = t7 (same array), so mutations
+    # to t3 also mutate t7.  We replicate this by assigning aliases and
+    # then creating the shifted versions from the (now clipped) originals.
+    t3 = t7  # alias — t3[i]=val also sets t7[i]=val
     wh_t7_gt_t1 = np.where(t7 > t1)
     if len(wh_t7_gt_t1[0]) > 0:
         t3[wh_t7_gt_t1] = t1[wh_t7_gt_t1]
 
-    t2 = t6.copy()
+    t2 = t6  # alias — t2[i]=val also sets t6[i]=val
     wh_t6_lt_t0 = np.where(t6 < t0)
     if len(wh_t6_lt_t0[0]) > 0:
         t2[wh_t6_lt_t0] = t0[wh_t6_lt_t0]
 
-    # Wrap-around shifts
+    # Wrap-around shifts (operate on clipped values via aliasing)
     t6 = t6 + _TWO_PI
     t7 = t7 - _TWO_PI
 
