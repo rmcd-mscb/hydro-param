@@ -63,6 +63,11 @@ class DerivationContext:
                 f"Expected dimension '{self.fabric_id_field}' not found in SIR. "
                 f"Available dims: {list(self.sir.dims)}"
             )
+        if self.fabric is not None and self.fabric_id_field not in self.fabric.columns:
+            raise KeyError(
+                f"fabric_id_field '{self.fabric_id_field}' not found in fabric columns. "
+                f"Available columns: {sorted(self.fabric.columns.tolist())}"
+            )
 
     @property
     def resolved_lookup_tables_dir(self) -> Path:
@@ -72,6 +77,10 @@ class DerivationContext:
         package-bundled default via ``importlib.resources``.
         """
         if self.lookup_tables_dir is not None:
+            if not self.lookup_tables_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Lookup tables directory does not exist: '{self.lookup_tables_dir}'"
+                )
             return self.lookup_tables_dir
         return Path(str(files("hydro_param").joinpath("data/lookup_tables")))
 
@@ -163,7 +172,10 @@ class NetCDFFormatter:
         output_path.mkdir(parents=True, exist_ok=True)
         sir_name = config.get("sir_name", "result")
         out_file = output_path / f"{sir_name}.nc"
-        parameters.to_netcdf(out_file)
+        try:
+            parameters.to_netcdf(out_file)
+        except Exception as exc:
+            raise OSError(f"NetCDF write failed for '{out_file}': {exc}") from exc
         logger.info("Wrote NetCDF: %s", out_file)
         return [out_file]
 
@@ -187,7 +199,10 @@ class ParquetFormatter:
         output_path.mkdir(parents=True, exist_ok=True)
         sir_name = config.get("sir_name", "result")
         out_file = output_path / f"{sir_name}.parquet"
-        parameters.to_dataframe().to_parquet(out_file)
+        try:
+            parameters.to_dataframe().to_parquet(out_file)
+        except Exception as exc:
+            raise OSError(f"Parquet write failed for '{out_file}': {exc}") from exc
         logger.info("Wrote Parquet: %s", out_file)
         return [out_file]
 

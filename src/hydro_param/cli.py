@@ -555,7 +555,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     try:
         pws_config = load_pywatershed_config(config)
     except Exception as exc:
-        logger.error("Failed to load pywatershed config: %s", exc)
+        logger.exception("Failed to load pywatershed config '%s'.", config)
         raise SystemExit(1) from exc
 
     logger.info("pywatershed config validated: %s", config)
@@ -571,7 +571,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     try:
         result = run_pipeline_from_config(pipeline_config, reg)
     except Exception as exc:
-        logger.exception("Pipeline failed (phase 1).")
+        logger.exception("Pipeline failed (phase 1). Check config '%s'.", config)
         raise SystemExit(1) from exc
 
     # ── Phase 2: pywatershed post-processing ──
