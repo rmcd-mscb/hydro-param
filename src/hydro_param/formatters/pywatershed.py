@@ -305,5 +305,16 @@ class PywatershedFormatter:
                 self._metadata_cache = yaml.safe_load(f)
             return self._metadata_cache
         except FileNotFoundError:
-            logger.warning("Parameter metadata not found: %s", path)
+            logger.error(
+                "Bundled parameter metadata not found at '%s'. "
+                "This indicates a broken installation — reinstall hydro-param.",
+                path,
+            )
+            return None
+        except yaml.YAMLError as exc:
+            logger.error(
+                "Parameter metadata at '%s' contains invalid YAML: %s",
+                path,
+                exc,
+            )
             return None

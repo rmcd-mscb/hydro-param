@@ -712,6 +712,21 @@ class PywatershedDerivation:
         """
         if name not in self._lookup_cache:
             path = tables_dir / f"{name}.yml"
-            with open(path) as f:
-                self._lookup_cache[name] = yaml.safe_load(f)
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f)
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    f"Lookup table '{name}.yml' not found at '{path}'. "
+                    f"Verify lookup_tables_dir is correct or use the default bundled tables."
+                ) from None
+            except yaml.YAMLError as exc:
+                raise ValueError(
+                    f"Lookup table '{name}.yml' at '{path}' contains invalid YAML: {exc}"
+                ) from exc
+            if not isinstance(data, dict) or "mapping" not in data:
+                raise ValueError(
+                    f"Lookup table '{name}.yml' at '{path}' is missing required 'mapping' key."
+                )
+            self._lookup_cache[name] = data
         return self._lookup_cache[name]
