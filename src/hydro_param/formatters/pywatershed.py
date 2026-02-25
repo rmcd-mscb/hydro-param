@@ -16,6 +16,7 @@ See docs/reference/pywatershed_parameterization_guide.md §2C.
 from __future__ import annotations
 
 import logging
+from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
@@ -36,9 +37,6 @@ _FORCING_VARS: dict[str, tuple[str, str]] = {
 # Soltab variable names
 _SOLTAB_VARS = {"soltab_potsw", "soltab_horad_potsw"}
 
-# Path to parameter metadata YAML (relative to project root)
-_PARAM_METADATA_PATH = Path("configs/pywatershed/parameter_metadata.yml")
-
 
 class PywatershedFormatter:
     """Format derived parameters for pywatershed consumption.
@@ -49,18 +47,13 @@ class PywatershedFormatter:
 
     name: str = "pywatershed"
 
-    def __init__(self, metadata_path: Path | None = None) -> None:
-        self._metadata_path = metadata_path or _PARAM_METADATA_PATH
+    def __init__(self) -> None:
         self._metadata_cache: dict | None = None
 
-    @property
-    def metadata_path(self) -> Path:
-        """Path to the parameter metadata YAML."""
-        return self._metadata_path
-
-    def has_metadata(self) -> bool:
-        """Return True if the parameter metadata file exists."""
-        return self._metadata_path.exists()
+    @staticmethod
+    def _default_metadata_path() -> Path:
+        """Return path to bundled parameter metadata YAML."""
+        return Path(str(files("hydro_param").joinpath("data/pywatershed/parameter_metadata.yml")))
 
     def write(
         self,
@@ -270,7 +263,7 @@ class PywatershedFormatter:
         warnings: list[str] = []
         metadata = self._load_metadata()
         if metadata is None:
-            return warnings
+            return ["Parameter metadata unavailable — validation skipped"]
 
         params_meta = metadata.get("parameters", {})
 
@@ -306,10 +299,22 @@ class PywatershedFormatter:
         """Load parameter metadata YAML."""
         if self._metadata_cache is not None:
             return self._metadata_cache
+        path = self._default_metadata_path()
         try:
-            with open(self._metadata_path) as f:
+            with open(path) as f:
                 self._metadata_cache = yaml.safe_load(f)
             return self._metadata_cache
         except FileNotFoundError:
-            logger.warning("Parameter metadata not found: %s", self._metadata_path)
+            logger.error(
+                "Bundled parameter metadata not found at '%s'. "
+                "This indicates a broken installation — reinstall hydro-param.",
+                path,
+            )
+            return None
+        except yaml.YAMLError as exc:
+            logger.error(
+                "Parameter metadata at '%s' contains invalid YAML: %s",
+                path,
+                exc,
+            )
             return None

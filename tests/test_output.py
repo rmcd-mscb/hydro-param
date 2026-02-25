@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from hydro_param.output import NetCDFFormatter, ParquetFormatter, get_formatter
+from hydro_param.plugins import NetCDFFormatter, ParquetFormatter, get_formatter
 
 
 def _has_parquet_engine() -> bool:
