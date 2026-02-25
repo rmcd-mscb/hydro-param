@@ -1,0 +1,36 @@
+# Forcing variable mappings: SIR canonical names → PRMS parameter names.
+# One section per source dataset. Each variable maps an SIR temporal
+# variable to its PRMS name and specifies the unit the derivation step
+# should deliver (intermediate_unit). The formatter then does the final
+# PRMS unit conversion (e.g., mm → in, C → F).
+#
+# sir_name: canonical SIR variable name (from stage 5 normalization)
+# sir_unit: unit of the SIR variable
+# intermediate_unit: unit to deliver to the formatter
+
+name: forcing_variables
+description: "SIR temporal variable to PRMS forcing variable mappings"
+source: "gridMET via climateR-catalogs"
+
+mapping:
+  gridmet:
+    prcp:
+      sir_name: pr_mm_mean
+      sir_unit: mm
+      intermediate_unit: mm
+    tmax:
+      sir_name: tmmx_C_mean
+      sir_unit: C
+      intermediate_unit: C
+    tmin:
+      sir_name: tmmn_C_mean
+      sir_unit: C
+      intermediate_unit: C
+    swrad:
+      sir_name: srad_W_m2_mean
+      sir_unit: W/m2
+      intermediate_unit: Langleys/day
+    potet:
+      sir_name: pet_mm_mean
+      sir_unit: mm
+      intermediate_unit: in

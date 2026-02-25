@@ -1400,6 +1400,32 @@ class TestCalibrationSeedsYAML:
             )
 
 
+class TestForcingVariablesYAML:
+    """Validate the forcing_variables.yml lookup table."""
+
+    def test_forcing_variables_yaml_loads(self, derivation: PywatershedDerivation) -> None:
+        """forcing_variables.yml loads and has required structure."""
+        from importlib.resources import files as pkg_files
+
+        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/lookup_tables")))
+        data = derivation._load_lookup_table("forcing_variables", tables_dir)
+        assert "mapping" in data
+        datasets = data["mapping"]
+        assert "gridmet" in datasets
+
+    def test_gridmet_variables_have_required_keys(self, derivation: PywatershedDerivation) -> None:
+        """Each gridmet variable entry has sir_name, sir_unit, intermediate_unit."""
+        from importlib.resources import files as pkg_files
+
+        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/lookup_tables")))
+        data = derivation._load_lookup_table("forcing_variables", tables_dir)
+        gridmet = data["mapping"]["gridmet"]
+        required_keys = {"sir_name", "sir_unit", "intermediate_unit"}
+        for prms_name, entry in gridmet.items():
+            missing = required_keys - set(entry.keys())
+            assert not missing, f"{prms_name} missing keys: {missing}"
+
+
 # ------------------------------------------------------------------
 # Calibration seeds derivation
 # ------------------------------------------------------------------
