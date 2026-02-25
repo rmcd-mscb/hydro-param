@@ -46,3 +46,9 @@ cache/
 # Generated docs
 docs/ai-workflow-guide.md
 site/
+CONTRIBUTING.html
+CONTRIBUTING_files/
+
+# Claude local config (machine-specific)
+.claude/settings.local.json
+.claude/notes/
