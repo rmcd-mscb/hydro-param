@@ -549,7 +549,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         PywatershedDerivation,
         merge_temporal_into_derived,
     )
-    from hydro_param.output import get_formatter
+    from hydro_param.plugins import DerivationContext, get_formatter
     from hydro_param.pywatershed_config import load_pywatershed_config
 
     try:
@@ -590,14 +590,15 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
             "values": pws_config.parameter_overrides.values,
         }
 
-    derived = plugin.derive(
-        sir,
-        config=derivation_config,
+    ctx = DerivationContext(
+        sir=sir,
         fabric=result.fabric,
         segments=segments,
-        id_field=pws_config.domain.id_field,
+        fabric_id_field=pws_config.domain.id_field,
         segment_id_field=pws_config.domain.segment_id_field,
+        config=derivation_config,
     )
+    derived = plugin.derive(ctx)
 
     # Load temporal data from per-file paths and merge with model-specific transforms
     temporal = {name: xr.open_dataset(path) for name, path in result.temporal_files.items()}
