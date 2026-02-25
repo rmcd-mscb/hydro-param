@@ -1,0 +1,17 @@
+# Canopy interception storage capacities by PRMS cov_type.
+# Source: Regan et al. 2018 (TM6-B9), Markstrom et al. 2015 (TM6-B7).
+
+name: cov_type_to_interception
+description: "Interception storage capacity (inches) by PRMS vegetation cover type"
+source: "Markstrom et al. 2015 (USGS TM6-B7)"
+
+# Columns: srain_intcp (summer rain), wrain_intcp (winter rain), snow_intcp
+# All values in inches.
+
+columns: [srain_intcp, wrain_intcp, snow_intcp]
+mapping:
+  0: [0.0,   0.0,   0.0  ]   # bare
+  1: [0.05,  0.05,  0.01 ]   # grasses
+  2: [0.05,  0.05,  0.02 ]   # shrubs
+  3: [0.08,  0.04,  0.04 ]   # deciduous trees
+  4: [0.08,  0.08,  0.06 ]   # coniferous trees

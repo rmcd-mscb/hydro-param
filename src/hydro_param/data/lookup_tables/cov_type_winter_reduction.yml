@@ -1,0 +1,14 @@
+# Winter canopy density reduction factors by PRMS cov_type.
+# covden_win = covden_sum * reduction_factor
+# Source: Regan et al. 2018 (TM6-B9).
+
+name: cov_type_winter_reduction
+description: "Multiplier to convert summer canopy density (covden_sum) to winter (covden_win)"
+source: "Regan et al. 2018 (USGS TM6-B9)"
+
+mapping:
+  0: 0.0   # bare -> no canopy
+  1: 0.5   # grasses -> half of summer
+  2: 0.5   # shrubs -> half of summer
+  3: 0.5   # deciduous trees -> lose leaves
+  4: 1.0   # coniferous trees -> retain canopy
