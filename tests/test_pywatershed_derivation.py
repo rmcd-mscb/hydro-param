@@ -1331,3 +1331,322 @@ class TestFractionSuffixDebugLog:
         with caplog.at_level(logging.DEBUG, logger="hydro_param.derivations.pywatershed"):
             derivation.derive(ctx)
         assert any("Skipping variable" in r.message and "meta" in r.message for r in caplog.records)
+
+
+# ------------------------------------------------------------------
+# Calibration seeds YAML validation
+# ------------------------------------------------------------------
+
+
+class TestCalibrationSeedsYAML:
+    """Validates the calibration_seeds.yml file structure."""
+
+    @pytest.fixture()
+    def seed_data(self) -> dict:
+        """Load the calibration seeds YAML file."""
+        import yaml
+
+        seeds_path = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "hydro_param"
+            / "data"
+            / "lookup_tables"
+            / "calibration_seeds.yml"
+        )
+        with open(seeds_path) as f:
+            return yaml.safe_load(f)
+
+    def test_yaml_loads(self, seed_data: dict) -> None:
+        """All entries have method, params, range, default keys."""
+        mapping = seed_data["mapping"]
+        assert len(mapping) == 22
+        for param_name, spec in mapping.items():
+            assert "method" in spec, f"{param_name} missing 'method'"
+            assert "params" in spec, f"{param_name} missing 'params'"
+            assert "range" in spec, f"{param_name} missing 'range'"
+            assert "default" in spec, f"{param_name} missing 'default'"
+            assert len(spec["range"]) == 2, f"{param_name} range must have 2 elements"
+
+    def test_all_methods_recognized(self, seed_data: dict) -> None:
+        """All method names are in the known set."""
+        known_methods = {"linear", "exponential_scale", "fraction_of", "constant"}
+        mapping = seed_data["mapping"]
+        for param_name, spec in mapping.items():
+            assert spec["method"] in known_methods, (
+                f"{param_name} has unknown method '{spec['method']}'"
+            )
+
+
+# ------------------------------------------------------------------
+# Calibration seeds derivation
+# ------------------------------------------------------------------
+
+
+class TestDeriveCalibrationSeeds:
+    """Tests for step 14: calibration seed derivation."""
+
+    def test_constant_seeds_present(self, derivation: PywatershedDerivation) -> None:
+        """All 18 constant seeds produced with just an empty SIR."""
+        sir = xr.Dataset(coords={"nhm_id": [1, 2, 3]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        constant_seeds = [
+            "smidx_exp",
+            "ssr2gw_rate",
+            "ssr2gw_exp",
+            "slowcoef_lin",
+            "slowcoef_sq",
+            "fastcoef_lin",
+            "fastcoef_sq",
+            "pref_flow_den",
+            "gwflow_coef",
+            "gwsink_coef",
+            "rain_cbh_adj",
+            "snow_cbh_adj",
+            "tmax_cbh_adj",
+            "tmin_cbh_adj",
+            "tmax_allrain_offset",
+            "adjmix_rain",
+            "dday_slope",
+            "dday_intcp",
+        ]
+        for seed_name in constant_seeds:
+            assert seed_name in ds, f"Constant seed '{seed_name}' missing from output"
+
+    def test_constant_seed_values(self, derivation: PywatershedDerivation) -> None:
+        """Constant seeds have correct values from YAML."""
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        np.testing.assert_allclose(ds["smidx_exp"].values, 0.3)
+        np.testing.assert_allclose(ds["dday_intcp"].values, -40.0)
+        np.testing.assert_allclose(ds["ssr2gw_exp"].values, 1.0)
+        np.testing.assert_allclose(ds["fastcoef_sq"].values, 0.8)
+
+    def test_malformed_params_raises(
+        self,
+        derivation: PywatershedDerivation,
+        tmp_path: Path,
+    ) -> None:
+        """Missing params key in YAML raises ValueError with context."""
+        import shutil
+
+        import yaml
+
+        bundled_dir = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "hydro_param"
+            / "data"
+            / "lookup_tables"
+        )
+        for f in bundled_dir.iterdir():
+            shutil.copy(f, tmp_path / f.name)
+
+        seeds_path = tmp_path / "calibration_seeds.yml"
+        with open(seeds_path) as f:
+            data = yaml.safe_load(f)
+        # Remove required 'value' key from a constant seed
+        data["mapping"]["smidx_exp"]["params"] = {}
+        with open(seeds_path, "w") as f:
+            yaml.dump(data, f)
+
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            lookup_tables_dir=tmp_path,
+        )
+        with pytest.raises(ValueError, match="smidx_exp"):
+            derivation.derive(ctx)
+
+    def test_linear_seed_carea_max(self, derivation: PywatershedDerivation) -> None:
+        """carea_max = 0.6 * hru_percent_imperv + 0.2."""
+        sir = xr.Dataset(
+            {
+                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 50.0, 0.0])),
+            },
+            coords={"nhm_id": [1, 2, 3]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        assert "carea_max" in ds
+        # hru_percent_imperv = fctimp_pct_mean / 100 = [0.1, 0.5, 0.0]
+        # carea_max = 0.6 * [0.1, 0.5, 0.0] + 0.2 = [0.26, 0.5, 0.2]
+        expected = np.array([0.26, 0.5, 0.2])
+        np.testing.assert_allclose(ds["carea_max"].values, expected, atol=1e-10)
+
+    def test_exponential_seed_smidx_coef(self, derivation: PywatershedDerivation) -> None:
+        """smidx_coef = 0.005 * exp(3.0 * hru_slope)."""
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([100.0, 200.0])),
+                "slope_deg_mean": ("nhm_id", np.array([5.0, 10.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
+                "hru_lat": ("nhm_id", np.array([42.0, 42.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        assert "smidx_coef" in ds
+        # hru_slope = tan(deg2rad(slope_deg_mean))
+        slopes = np.tan(np.deg2rad(np.array([5.0, 10.0])))
+        expected = np.clip(0.005 * np.exp(3.0 * slopes), 0.001, 0.06)
+        np.testing.assert_allclose(ds["smidx_coef"].values, expected, atol=1e-10)
+
+    def test_fraction_of_seed(self, derivation: PywatershedDerivation) -> None:
+        """soil2gw_max = 0.1 * soil_moist_max."""
+        sir = xr.Dataset(
+            {
+                "awc_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
+                "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
+                "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
+                "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
+            },
+            coords={"nhm_id": [1, 2, 3]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        assert "soil2gw_max" in ds
+        assert "soil_moist_max" in ds
+        expected = np.clip(0.1 * ds["soil_moist_max"].values, 0.0, 5.0)
+        np.testing.assert_allclose(ds["soil2gw_max"].values, expected, atol=1e-10)
+
+    def test_missing_input_uses_default(self, derivation: PywatershedDerivation) -> None:
+        """When input variable missing, default value is used."""
+        # No slope data -> smidx_coef should use default 0.01
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        assert "smidx_coef" in ds
+        np.testing.assert_allclose(ds["smidx_coef"].values, [0.01, 0.01])
+
+    def test_range_clipping(self, derivation: PywatershedDerivation) -> None:
+        """Very steep slope -> smidx_coef clipped to 0.06."""
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([100.0])),
+                "slope_deg_mean": ("nhm_id", np.array([80.0])),  # Very steep
+                "aspect_deg_mean": ("nhm_id", np.array([0.0])),
+                "hru_lat": ("nhm_id", np.array([42.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        assert "smidx_coef" in ds
+        # tan(80 deg) ~ 5.67 -> 0.005 * exp(3.0 * 5.67) is huge -> clipped to 0.06
+        assert ds["smidx_coef"].values[0] == pytest.approx(0.06)
+
+    def test_existing_param_not_overwritten(self, derivation: PywatershedDerivation) -> None:
+        """Seed skipped if param already in dataset; override wins."""
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            config={"parameter_overrides": {"values": {"gwflow_coef": [0.999, 0.999]}}},
+        )
+        ds = derivation.derive(ctx)
+
+        # Override is applied AFTER seeds, so override value should win
+        assert "gwflow_coef" in ds
+        np.testing.assert_allclose(ds["gwflow_coef"].values, [0.999, 0.999])
+
+    def test_all_seeds_produced(self, derivation: PywatershedDerivation) -> None:
+        """All 22 seeds present when inputs are available."""
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([500.0, 1000.0])),
+                "slope_deg_mean": ("nhm_id", np.array([10.0, 20.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0, 270.0])),
+                "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
+                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
+                "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
+                "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
+                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
+                "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+
+        all_seeds = [
+            "carea_max",
+            "smidx_coef",
+            "smidx_exp",
+            "soil2gw_max",
+            "ssr2gw_rate",
+            "ssr2gw_exp",
+            "slowcoef_lin",
+            "slowcoef_sq",
+            "fastcoef_lin",
+            "fastcoef_sq",
+            "pref_flow_den",
+            "gwflow_coef",
+            "gwsink_coef",
+            "snarea_thresh",
+            "rain_cbh_adj",
+            "snow_cbh_adj",
+            "tmax_cbh_adj",
+            "tmin_cbh_adj",
+            "tmax_allrain_offset",
+            "adjmix_rain",
+            "dday_slope",
+            "dday_intcp",
+        ]
+        for seed_name in all_seeds:
+            assert seed_name in ds, f"Seed '{seed_name}' missing from output"
+
+    def test_unknown_method_uses_default(
+        self,
+        derivation: PywatershedDerivation,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: Path,
+    ) -> None:
+        """Unknown method name in YAML -> uses default with warning."""
+        import logging
+        import shutil
+
+        import yaml
+
+        # Copy bundled lookup tables to tmp_path, then modify calibration_seeds
+        bundled_dir = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "hydro_param"
+            / "data"
+            / "lookup_tables"
+        )
+        for f in bundled_dir.iterdir():
+            shutil.copy(f, tmp_path / f.name)
+
+        # Modify calibration_seeds.yml with an unknown method
+        seeds_path = tmp_path / "calibration_seeds.yml"
+        with open(seeds_path) as f:
+            data = yaml.safe_load(f)
+        data["mapping"]["gwflow_coef"]["method"] = "bogus_method"
+        with open(seeds_path, "w") as f:
+            yaml.dump(data, f)
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            lookup_tables_dir=tmp_path,
+        )
+        with caplog.at_level(logging.WARNING, logger="hydro_param.derivations.pywatershed"):
+            ds = derivation.derive(ctx)
+
+        assert "gwflow_coef" in ds
+        # Should use default value 0.015
+        np.testing.assert_allclose(ds["gwflow_coef"].values, [0.015, 0.015])
+        assert any("unknown method" in r.message for r in caplog.records)

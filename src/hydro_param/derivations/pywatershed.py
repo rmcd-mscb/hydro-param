@@ -4,13 +4,14 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 8, 9, and 13.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 8, 9, 13, and 14.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import geopandas as gpd
@@ -60,6 +61,14 @@ _DEFAULTS: dict[str, float] = {
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
+
+# Calibration seed method dispatch — safe lambdas only, NO eval.
+_SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
+    "linear": lambda ds, p: p["scale"] * ds[p["input"]].values + p["offset"],
+    "exponential_scale": lambda ds, p: p["scale"] * np.exp(p["exponent"] * ds[p["input"]].values),
+    "fraction_of": lambda ds, p: p["fraction"] * ds[p["input"]].values,
+    "constant": lambda ds, p: np.float64(p["value"]),
+}
 
 
 def merge_temporal_into_derived(
@@ -137,7 +146,8 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 8 (lookup tables), 9 (soltab), and 13 (defaults).
+    5 (soils), 8 (lookup tables), 9 (soltab), 13 (defaults), and
+    14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -190,6 +200,9 @@ class PywatershedDerivation:
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
+
+        # Step 14: Calibration seeds
+        ds = self._derive_calibration_seeds(context, ds)
 
         # Apply parameter overrides last
         overrides = context.config.get("parameter_overrides", {})
@@ -885,6 +898,116 @@ class PywatershedDerivation:
                     np.float64(default_val),
                     attrs={"long_name": param_name.replace("_", " ").title()},
                 )
+        return ds
+
+    # ------------------------------------------------------------------
+    # Step 14: Calibration seeds
+    # ------------------------------------------------------------------
+
+    def _derive_calibration_seeds(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
+        """Step 14: Apply YAML-driven calibration seed values.
+
+        Seeds provide physically-based initial values for calibration
+        parameters.  Each seed is computed from a method (linear,
+        exponential_scale, fraction_of, constant) with range clipping.
+        Seeds are skipped when the parameter already exists in ``ds``.
+        """
+        tables_dir = ctx.resolved_lookup_tables_dir
+        seed_table = self._load_lookup_table("calibration_seeds", tables_dir)
+        mapping = seed_table["mapping"]
+
+        nhru = ds.sizes.get("nhru", 0)
+
+        for param_name, spec in mapping.items():
+            # Skip if already derived or set by an earlier step
+            if param_name in ds:
+                logger.debug(
+                    "Calibration seed '%s' skipped: already present in dataset",
+                    param_name,
+                )
+                continue
+
+            method_name = spec.get("method", "")
+            params = spec.get("params", {})
+            val_range = spec.get("range", [None, None])
+            default = spec.get("default")
+            default_val = default if default is not None else 0.0
+
+            # Check method is known
+            method_fn = _SEED_METHODS.get(method_name)
+            value: np.floating | np.ndarray
+            if method_fn is None:
+                logger.warning(
+                    "Calibration seed '%s': unknown method '%s'; using default %.4g",
+                    param_name,
+                    method_name,
+                    default_val,
+                )
+                value = np.float64(default_val)
+            else:
+                # Check if required input variable exists for non-constant methods
+                input_var = params.get("input")
+                if input_var is not None and input_var not in ds:
+                    logger.warning(
+                        "Calibration seed '%s': input '%s' not in dataset; using default %.4g",
+                        param_name,
+                        input_var,
+                        default_val,
+                    )
+                    value = np.float64(default_val)
+                else:
+                    try:
+                        value = method_fn(ds, params)
+                    except KeyError as exc:
+                        raise ValueError(
+                            f"Calibration seed '{param_name}': method '{method_name}' "
+                            f"requires parameter {exc} missing from 'params' dict. "
+                            f"Available keys: {sorted(params.keys())}. "
+                            f"Check calibration_seeds.yml entry for '{param_name}'."
+                        ) from exc
+
+            # Expand scalar to array if nhru dimension exists
+            if nhru > 0 and np.ndim(value) == 0:
+                value = np.full(nhru, value, dtype=np.float64)
+
+            # Clip to range
+            if len(val_range) != 2:
+                raise ValueError(
+                    f"Calibration seed '{param_name}': 'range' must have exactly "
+                    f"2 elements [min, max], got {val_range}"
+                )
+            rmin, rmax = val_range
+            if rmin is not None or rmax is not None:
+                value = np.clip(value, rmin, rmax)
+
+            # Check for NaN in computed values
+            if np.ndim(value) >= 1:
+                nan_count = int(np.count_nonzero(np.isnan(value)))
+                if nan_count > 0:
+                    logger.warning(
+                        "Calibration seed '%s': %d/%d HRU(s) have NaN values "
+                        "(likely from NaN in input '%s')",
+                        param_name,
+                        nan_count,
+                        int(np.size(value)),
+                        params.get("input", "N/A"),
+                    )
+
+            # Add to dataset
+            dims: tuple[str, ...] = ("nhru",) if np.ndim(value) >= 1 else ()
+            ds[param_name] = xr.DataArray(
+                value,
+                dims=dims if dims else None,
+                attrs={
+                    "long_name": param_name.replace("_", " ").title(),
+                    "source": "calibration_seed",
+                },
+            )
+
+        logger.info(
+            "Step 14: applied %d calibration seeds",
+            sum(1 for p in mapping if p in ds and ds[p].attrs.get("source") == "calibration_seed"),
+        )
         return ds
 
     # ------------------------------------------------------------------
