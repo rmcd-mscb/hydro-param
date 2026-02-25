@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 8, 9, 13, and 14.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 13, and 14.
 """
 
 from __future__ import annotations
