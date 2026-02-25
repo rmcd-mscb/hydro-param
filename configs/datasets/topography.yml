@@ -20,6 +20,7 @@ datasets:
         band: 1
         units: "m"
         long_name: "Surface elevation above NAVD88"
+        native_name: "elevation"
         categorical: false
     derived_variables:
       - name: slope

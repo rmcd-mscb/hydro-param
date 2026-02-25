@@ -92,72 +92,85 @@ datasets:
         band: 1
         units: "%"
         long_name: "Sand content"
+        native_name: "sand"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/sand_mean_0_5.vrt"
       - name: silt
         band: 1
         units: "%"
         long_name: "Silt content"
+        native_name: "silt"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/silt_mean_0_5.vrt"
       - name: clay
         band: 1
         units: "%"
         long_name: "Clay content"
+        native_name: "clay"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/clay_mean_0_5.vrt"
       - name: bd
         band: 1
         units: "g/cm3"
         long_name: "Bulk density"
+        native_name: "bd"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/bd_mean_0_5.vrt"
       - name: theta_s
         band: 1
         units: "m3/m3"
         long_name: "Saturated water content (porosity)"
+        native_name: "theta_s"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/theta_s_mean_0_5.vrt"
       - name: theta_r
         band: 1
         units: "m3/m3"
         long_name: "Residual water content"
+        native_name: "theta_r"
         categorical: false
       - name: ksat
         band: 1
         units: "log10(cm/hr)"
         long_name: "Saturated hydraulic conductivity"
+        native_name: "ksat"
         categorical: false
         source_override: "http://hydrology.cee.duke.edu/POLARIS/PROPERTIES/v1.0/vrt/ksat_mean_0_5.vrt"
       - name: ph
         band: 1
         units: ""
         long_name: "Soil pH in H2O"
+        native_name: "ph"
         categorical: false
       - name: om
         band: 1
         units: "log10(%)"
         long_name: "Organic matter"
+        native_name: "om"
         categorical: false
       - name: lambda
         band: 1
         units: ""
         long_name: "Brooks-Corey pore size distribution index"
+        native_name: "lambda"
         categorical: false
       - name: hb
         band: 1
         units: "log10(kPa)"
         long_name: "Brooks-Corey bubbling pressure"
+        native_name: "hb"
         categorical: false
       - name: n
         band: 1
         units: ""
         long_name: "Van Genuchten pore size distribution"
+        native_name: "n"
         categorical: false
       - name: alpha
         band: 1
         units: "log10(kPa^-1)"
         long_name: "Van Genuchten scale parameter"
+        native_name: "alpha"
         categorical: false
 
   gnatsgo_rasters:
@@ -179,23 +192,27 @@ datasets:
         band: 1
         units: "cm"
         long_name: "Available water storage 0-100cm"
+        native_name: "aws0_100"
         categorical: false
         asset_key: "aws0_100"
       - name: rootznemc
         band: 1
         units: "cm"
         long_name: "Root zone depth"
+        native_name: "rootznemc"
         categorical: false
         asset_key: "rootznemc"
       - name: rootznaws
         band: 1
         units: "cm"
         long_name: "Root zone available water storage"
+        native_name: "rootznaws"
         categorical: false
         asset_key: "rootznaws"
       - name: mukey
         band: 1
         units: ""
         long_name: "Map unit key (for tabular join to full soil properties)"
+        native_name: "mukey"
         categorical: true
         asset_key: "mukey"

@@ -895,8 +895,8 @@ class TestNormalizeSIRTemporal:
             temporal=True,
             t_coord="day",
             variables=[
-                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
-                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+                VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature"),
+                VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
             ],
             category="climate",
         )
@@ -976,7 +976,7 @@ class TestNormalizeSIRTemporal:
             temporal=True,
             t_coord="day",
             variables=[
-                VariableSpec(name="tmmx", units="K", long_name="daily_maximum_temperature"),
+                VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature"),
             ],
             category="climate",
         )
@@ -1036,7 +1036,7 @@ class TestNormalizeSIRTemporal:
             temporal=True,
             t_coord="day",
             variables=[
-                VariableSpec(name="pr", units="mm", long_name="precipitation_amount"),
+                VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
             ],
             category="climate",
         )

@@ -20,54 +20,65 @@ datasets:
         band: 1
         units: "mm"
         long_name: "Daily precipitation"
+        native_name: "precipitation_amount"
         categorical: false
       - name: tmmx
         band: 1
         units: "K"
         long_name: "Daily maximum temperature"
+        native_name: "daily_maximum_temperature"
         categorical: false
       - name: tmmn
         band: 1
         units: "K"
         long_name: "Daily minimum temperature"
+        native_name: "daily_minimum_temperature"
         categorical: false
       - name: srad
         band: 1
         units: "W/m2"
         long_name: "Surface downwelling shortwave radiation"
+        native_name: "daily_mean_shortwave_radiation_at_surface"
         categorical: false
       - name: pet
         band: 1
         units: "mm"
         long_name: "Daily reference grass evapotranspiration"
+        native_name: "daily_mean_reference_evapotranspiration_grass"
         categorical: false
       - name: vs
         band: 1
         units: "m/s"
         long_name: "Daily mean wind speed"
+        native_name: "daily_mean_wind_speed"
         categorical: false
       - name: rmax
         band: 1
         units: "%"
         long_name: "Daily maximum relative humidity"
+        native_name: "daily_maximum_relative_humidity"
         categorical: false
       - name: rmin
         band: 1
         units: "%"
         long_name: "Daily minimum relative humidity"
+        native_name: "daily_minimum_relative_humidity"
         categorical: false
       - name: sph
         band: 1
         units: "kg/kg"
         long_name: "Daily mean specific humidity"
+        native_name: "daily_mean_specific_humidity"
         categorical: false
       - name: vpd
         band: 1
         units: "kPa"
         long_name: "Daily mean vapor pressure deficit"
+        native_name: "daily_mean_vapor_pressure_deficit"
         categorical: false
       - name: etr
         band: 1
         units: "mm"
         long_name: "Daily reference alfalfa evapotranspiration"
+        native_name: "daily_mean_reference_evapotranspiration_alfalfa"
         categorical: false

@@ -89,16 +89,19 @@ datasets:
       - name: land_cover
         band: 1
         long_name: "NLCD land cover class"
+        native_name: "land_cover"
         categorical: true
       - name: impervious
         band: 1
         units: "%"
         long_name: "Percent developed imperviousness"
+        native_name: "impervious"
         categorical: false
       - name: tree_canopy
         band: 1
         units: "%"
         long_name: "Percent tree canopy cover"
+        native_name: "tree_canopy"
         categorical: false
 
   nlcd_annual:
@@ -121,29 +124,35 @@ datasets:
       - name: LndCov
         band: 1
         long_name: "Land cover class"
+        native_name: "LndCov"
         categorical: true
       - name: LndChg
         band: 1
         long_name: "Land cover change"
+        native_name: "LndChg"
         categorical: true
       - name: LndCnf
         band: 1
         units: "%"
         long_name: "Land cover confidence"
+        native_name: "LndCnf"
         categorical: false
       - name: FctImp
         band: 1
         units: "%"
         long_name: "Fractional impervious surface"
+        native_name: "FctImp"
         categorical: false
       - name: ImpDsc
         band: 1
         long_name: "Impervious descriptor"
+        native_name: "ImpDsc"
         categorical: true
       - name: SpcChg
         band: 1
         units: "day_of_year"
         long_name: "Spectral change day of year"
+        native_name: "SpcChg"
         categorical: false
 
   # --- NLCD Annual via NHGF STAC OSN (free, anonymous access) ---
@@ -163,6 +172,7 @@ datasets:
       - name: LndCov
         band: 1
         long_name: "Land cover class"
+        native_name: "LndCov"
         categorical: true
 
   nlcd_osn_fctimp:
@@ -180,6 +190,7 @@ datasets:
         band: 1
         units: "%"
         long_name: "Fractional impervious surface"
+        native_name: "FctImp"
         categorical: false
 
   nlcd_osn_impdsc:
@@ -196,6 +207,7 @@ datasets:
       - name: ImpDsc
         band: 1
         long_name: "Impervious descriptor"
+        native_name: "ImpDsc"
         categorical: true
 
   nlcd_osn_lndchg:
@@ -212,6 +224,7 @@ datasets:
       - name: LndChg
         band: 1
         long_name: "Land cover change"
+        native_name: "LndChg"
         categorical: true
 
   nlcd_osn_lndcnf:
@@ -229,6 +242,7 @@ datasets:
         band: 1
         units: "%"
         long_name: "Land cover confidence"
+        native_name: "LndCnf"
         categorical: false
 
   nlcd_osn_spcchg:
@@ -246,4 +260,5 @@ datasets:
         band: 1
         units: "day_of_year"
         long_name: "Spectral change day of year"
+        native_name: "SpcChg"
         categorical: false
