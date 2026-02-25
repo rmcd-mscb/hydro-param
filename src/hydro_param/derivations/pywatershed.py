@@ -931,6 +931,7 @@ class PywatershedDerivation:
             params = spec.get("params", {})
             val_range = spec.get("range", [None, None])
             default = spec.get("default")
+            default_val = default if default is not None else 0.0
 
             # Check method is known
             method_fn = _SEED_METHODS.get(method_name)
@@ -940,9 +941,9 @@ class PywatershedDerivation:
                     "Calibration seed '%s': unknown method '%s'; using default %.4g",
                     param_name,
                     method_name,
-                    default,
+                    default_val,
                 )
-                value = np.float64(default) if default is not None else np.float64(0.0)
+                value = np.float64(default_val)
             else:
                 # Check if required input variable exists for non-constant methods
                 input_var = params.get("input")
@@ -951,20 +952,46 @@ class PywatershedDerivation:
                         "Calibration seed '%s': input '%s' not in dataset; using default %.4g",
                         param_name,
                         input_var,
-                        default,
+                        default_val,
                     )
-                    value = np.float64(default) if default is not None else np.float64(0.0)
+                    value = np.float64(default_val)
                 else:
-                    value = method_fn(ds, params)
+                    try:
+                        value = method_fn(ds, params)
+                    except KeyError as exc:
+                        raise ValueError(
+                            f"Calibration seed '{param_name}': method '{method_name}' "
+                            f"requires parameter {exc} missing from 'params' dict. "
+                            f"Available keys: {sorted(params.keys())}. "
+                            f"Check calibration_seeds.yml entry for '{param_name}'."
+                        ) from exc
 
             # Expand scalar to array if nhru dimension exists
             if nhru > 0 and np.ndim(value) == 0:
                 value = np.full(nhru, value, dtype=np.float64)
 
             # Clip to range
+            if len(val_range) != 2:
+                raise ValueError(
+                    f"Calibration seed '{param_name}': 'range' must have exactly "
+                    f"2 elements [min, max], got {val_range}"
+                )
             rmin, rmax = val_range
             if rmin is not None or rmax is not None:
                 value = np.clip(value, rmin, rmax)
+
+            # Check for NaN in computed values
+            if np.ndim(value) >= 1:
+                nan_count = int(np.count_nonzero(np.isnan(value)))
+                if nan_count > 0:
+                    logger.warning(
+                        "Calibration seed '%s': %d/%d HRU(s) have NaN values "
+                        "(likely from NaN in input '%s')",
+                        param_name,
+                        nan_count,
+                        int(np.size(value)),
+                        params.get("input", "N/A"),
+                    )
 
             # Add to dataset
             dims: tuple[str, ...] = ("nhru",) if np.ndim(value) >= 1 else ()

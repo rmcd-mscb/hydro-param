@@ -1415,6 +1415,53 @@ class TestDeriveCalibrationSeeds:
         for seed_name in constant_seeds:
             assert seed_name in ds, f"Constant seed '{seed_name}' missing from output"
 
+    def test_constant_seed_values(self, derivation: PywatershedDerivation) -> None:
+        """Constant seeds have correct values from YAML."""
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        np.testing.assert_allclose(ds["smidx_exp"].values, 0.3)
+        np.testing.assert_allclose(ds["dday_intcp"].values, -40.0)
+        np.testing.assert_allclose(ds["ssr2gw_exp"].values, 1.0)
+        np.testing.assert_allclose(ds["fastcoef_sq"].values, 0.8)
+
+    def test_malformed_params_raises(
+        self,
+        derivation: PywatershedDerivation,
+        tmp_path: Path,
+    ) -> None:
+        """Missing params key in YAML raises ValueError with context."""
+        import shutil
+
+        import yaml
+
+        bundled_dir = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "hydro_param"
+            / "data"
+            / "lookup_tables"
+        )
+        for f in bundled_dir.iterdir():
+            shutil.copy(f, tmp_path / f.name)
+
+        seeds_path = tmp_path / "calibration_seeds.yml"
+        with open(seeds_path) as f:
+            data = yaml.safe_load(f)
+        # Remove required 'value' key from a constant seed
+        data["mapping"]["smidx_exp"]["params"] = {}
+        with open(seeds_path, "w") as f:
+            yaml.dump(data, f)
+
+        sir = xr.Dataset(coords={"nhm_id": [1]})
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            lookup_tables_dir=tmp_path,
+        )
+        with pytest.raises(ValueError, match="smidx_exp"):
+            derivation.derive(ctx)
+
     def test_linear_seed_carea_max(self, derivation: PywatershedDerivation) -> None:
         """carea_max = 0.6 * hru_percent_imperv + 0.2."""
         sir = xr.Dataset(
