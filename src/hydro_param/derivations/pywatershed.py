@@ -1358,7 +1358,7 @@ class PywatershedDerivation:
         svp_min = _sat_vp(monthly_tmin)  # (12, nhru)
 
         # Guard against division by zero
-        svp_max_safe = np.where(svp_max < 1e-6, 1e-6, svp_max)
+        svp_max_safe = np.maximum(svp_max, 1e-6)
         jh_coef = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
         jh_coef = np.clip(jh_coef, 0.005, 0.06)
 
@@ -1380,6 +1380,10 @@ class PywatershedDerivation:
             elev_ft = ds["hru_elev"].values
             jh_coef_hru = july_jh + 0.00001 * elev_ft
         else:
+            logger.info(
+                "hru_elev not in dataset; computing jh_coef_hru without "
+                "elevation adjustment.",
+            )
             jh_coef_hru = july_jh
 
         jh_coef_hru = np.clip(jh_coef_hru, 0.005, 0.06)
@@ -1419,21 +1423,47 @@ class PywatershedDerivation:
         nhru = monthly_tmin.shape[1]
         freezing = 32.0  # °F
 
-        # transp_beg: first month (1-indexed) where tmin > freezing
-        transp_beg = np.full(nhru, 4, dtype=np.int32)  # default April
-        for hru in range(nhru):
-            for month_idx in range(12):
-                if monthly_tmin[month_idx, hru] > freezing:
-                    transp_beg[hru] = month_idx + 1  # 1-indexed
-                    break
+        # Check for NaN in monthly tmin
+        nan_count = int(np.count_nonzero(np.isnan(monthly_tmin)))
+        if nan_count:
+            logger.warning(
+                "monthly_tmin contains %d NaN values across %d HRUs x 12 months; "
+                "affected HRUs will use default transp_beg/transp_end values.",
+                nan_count,
+                nhru,
+            )
 
-        # transp_end: first month after June (7+) where tmin < freezing
-        transp_end = np.full(nhru, 10, dtype=np.int32)  # default October
-        for hru in range(nhru):
-            for month_idx in range(6, 12):  # July onward
-                if monthly_tmin[month_idx, hru] < freezing:
-                    transp_end[hru] = month_idx + 1  # 1-indexed
-                    break
+        # transp_beg: first month (1-indexed) where tmin > freezing (vectorized)
+        above_freezing = monthly_tmin > freezing  # (12, nhru) boolean
+        has_warm_month = above_freezing.any(axis=0)
+        transp_beg = np.where(
+            has_warm_month, np.argmax(above_freezing, axis=0) + 1, 4
+        ).astype(np.int32)
+
+        fallback_beg = int(nhru - np.count_nonzero(has_warm_month))
+        if fallback_beg > 0:
+            logger.warning(
+                "transp_beg: %d of %d HRUs never exceeded freezing in any "
+                "month; using default transp_beg=4 for those HRUs.",
+                fallback_beg,
+                nhru,
+            )
+
+        # transp_end: first month from July onward where tmin < freezing
+        below_freezing_late = monthly_tmin[6:, :] < freezing  # (6, nhru)
+        has_cold_month = below_freezing_late.any(axis=0)
+        transp_end = np.where(
+            has_cold_month, np.argmax(below_freezing_late, axis=0) + 7, 10
+        ).astype(np.int32)
+
+        fallback_end = int(nhru - np.count_nonzero(has_cold_month))
+        if fallback_end > 0:
+            logger.warning(
+                "transp_end: %d of %d HRUs never dropped below freezing "
+                "Jul-Dec; using default transp_end=10 for those HRUs.",
+                fallback_end,
+                nhru,
+            )
 
         ds["transp_beg"] = xr.DataArray(
             transp_beg,
@@ -1447,7 +1477,8 @@ class PywatershedDerivation:
         )
 
         logger.info(
-            "Step 11: derived transp_beg (range %d-%d) and transp_end (range %d-%d) for %d HRUs.",
+            "Step 11: derived transp_beg (range %d-%d) and transp_end "
+            "(range %d-%d) for %d HRUs.",
             int(transp_beg.min()),
             int(transp_beg.max()),
             int(transp_end.min()),
