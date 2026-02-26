@@ -114,8 +114,8 @@ def _compute_t(
     -------
     ndarray, shape (ndoy, nhru)
         Half-day hour angle in radians.  Clamped to ``pi`` (24 h
-        daylight) when ``tan(lat) * tan(decl) < -1`` (perpetual
-        daylight) and to ``0`` when ``> 1`` (polar night).
+        daylight) when ``tan(lat) * tan(decl) > 1`` (perpetual
+        daylight) and to ``0`` when ``< -1`` (polar night).
 
     Warnings
     --------

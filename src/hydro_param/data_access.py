@@ -62,7 +62,7 @@ def _cell_sizes_meters(
     Convert raster cell spacing to meters so that gradient calculations
     produce physically correct slope and aspect values regardless of the
     source CRS. For geographic CRS (degrees), apply a latitude-dependent
-    scale factor using the WGS-84 meridional approximation (111,320 m/deg).
+    scale factor using a WGS-84 approximation (111,320 m/deg).
 
     Parameters
     ----------
@@ -289,8 +289,7 @@ def query_stac_items(
     queries when multiple variables share the same STAC collection within
     a single processing batch.
 
-    This function was extracted from :func:`fetch_stac_cog` in PR #72 to
-    enable STAC query reuse across variables, reducing redundant network
+    Enables STAC query reuse across variables, reducing redundant network
     calls during batch processing.
 
     Parameters

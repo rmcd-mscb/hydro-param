@@ -175,11 +175,6 @@ class ZonalProcessor:
         gdptools ``ZonalGen`` handles CRS alignment internally by
         reprojecting the target polygons into the source raster CRS.
         No manual CRS transformation is needed in hydro-param.
-
-        When requested statistics are not available in the gdptools output
-        (e.g., requesting ``"median"`` from an engine that only supports
-        ``"mean"``), a warning is logged and available statistics are
-        returned.
         """
         import rioxarray  # noqa: F401
         from gdptools import UserTiffData, ZonalGen

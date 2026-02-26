@@ -94,9 +94,10 @@ class DerivedVariableSpec(BaseModel):
         Name of the source ``VariableSpec`` this is derived from (e.g.,
         ``"elevation"``).
     method : str
-        Derivation method identifier (e.g., ``"slope_degrees"``,
-        ``"aspect_degrees"``).  Must be recognized by
-        ``hydro_param.data_access.derive_terrain()``.
+        Derivation method passed to the derivation function (e.g.,
+        ``"horn"`` for Horn 1981 finite-difference terrain analysis).
+        The derivation function is selected by variable ``name`` via
+        ``hydro_param.data_access.DERIVATION_FUNCTIONS``.
     units : str
         Units of the derived variable (e.g., ``"degrees"``).
     long_name : str

@@ -475,9 +475,9 @@ def run_cmd(config: Path, *, registry: Path | None = None, resume: bool = False)
     """Execute the generic parameterization pipeline.
 
     Run stages 1--5 (resolve fabric, resolve datasets, compute weights,
-    process datasets, format output) to produce a raw Standardized
-    Internal Representation (SIR) with source units and source variable
-    names.  This command is model-agnostic; use ``pywatershed run`` for
+    process datasets, normalize output) to produce a normalized
+    Standardized Internal Representation (SIR) with canonical variable
+    names and converted units.  This command is model-agnostic; use ``pywatershed run`` for
     model-specific post-processing.
 
     Parameters

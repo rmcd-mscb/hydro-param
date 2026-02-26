@@ -104,7 +104,7 @@ nav:
           - api/derivations-pywatershed.md
           - api/formatters-pywatershed.md
           - api/pywatershed-config.md
-      - CLI:
+      - Utilities:
           - api/cli.md
           - api/solar.md
   - Architecture:

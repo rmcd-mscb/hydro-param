@@ -23,7 +23,7 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 13. Defaults --- standard PRMS default values and initial conditions
 14. Calibration seeds --- physically-based initial values for calibration parameters
 
-Steps 12 (routing parameters) is not yet implemented.
+Step 12 (routing parameters) is not yet implemented.
 
 References
 ----------
