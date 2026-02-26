@@ -2675,6 +2675,99 @@ class TestDeriveWaterbody:
         # Should get ~50% coverage after reprojection
         assert ds["dprst_frac"].values[0] == pytest.approx(0.5, abs=0.05)
 
+    def test_missing_ftype_column_raises(self, derivation, waterbody_sir, waterbody_fabric):
+        """Waterbodies without 'ftype' column raise KeyError."""
+        wb_no_ftype = gpd.GeoDataFrame(
+            {
+                "comid": [101],
+                "geometry": [Polygon([(0, 0), (50, 0), (50, 100), (0, 100)])],
+            },
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(
+            sir=waterbody_sir,
+            fabric=waterbody_fabric,
+            waterbodies=wb_no_ftype,
+        )
+        ds = xr.Dataset()
+        ds = derivation._derive_geometry(ctx, ds)
+        with pytest.raises(KeyError, match="ftype"):
+            derivation._derive_waterbody(ctx, ds)
+
+    def test_fabric_none_with_waterbodies(self, derivation, waterbody_sir, sample_waterbodies):
+        """When fabric=None but waterbodies provided, assign defaults."""
+        ctx = DerivationContext(
+            sir=waterbody_sir,
+            fabric=None,
+            waterbodies=sample_waterbodies,
+        )
+        ds = xr.Dataset()
+        ds["hru_area"] = xr.DataArray(np.array([2.47, 2.47]), dims="nhru")
+        ds = derivation._derive_waterbody(ctx, ds)
+
+        np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
+        np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
+        np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
+
+    def test_waterbodies_outside_all_hrus(self, derivation, waterbody_sir, waterbody_fabric):
+        """Waterbodies that don't overlap any HRU produce defaults."""
+        distant_wb = gpd.GeoDataFrame(
+            {
+                "comid": [601],
+                "ftype": ["LakePond"],
+                "geometry": [Polygon([(9000, 9000), (9100, 9000), (9100, 9100), (9000, 9100)])],
+            },
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(
+            sir=waterbody_sir,
+            fabric=waterbody_fabric,
+            waterbodies=distant_wb,
+        )
+        ds = xr.Dataset()
+        ds = derivation._derive_geometry(ctx, ds)
+        ds = derivation._derive_waterbody(ctx, ds)
+
+        np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
+        np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
+        np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
+
+    def test_below_50_percent_is_land(self, derivation, waterbody_sir, waterbody_fabric):
+        """HRU with <50% coverage is type=1 (land)."""
+        wb_under_half = gpd.GeoDataFrame(
+            {
+                "comid": [701],
+                "ftype": ["LakePond"],
+                # 49m of 100m = 49% — clearly below threshold
+                "geometry": [Polygon([(0, 0), (49, 0), (49, 100), (0, 100)])],
+            },
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(
+            sir=waterbody_sir,
+            fabric=waterbody_fabric,
+            waterbodies=wb_under_half,
+        )
+        ds = xr.Dataset()
+        ds = derivation._derive_geometry(ctx, ds)
+        ds = derivation._derive_waterbody(ctx, ds)
+
+        assert ds["dprst_frac"].values[0] == pytest.approx(0.49, abs=0.02)
+        assert ds["hru_type"].values[0] == 1
+
+    def test_missing_hru_area_uses_defaults(self, derivation, waterbody_sir, waterbody_fabric):
+        """Missing hru_area in dataset falls back to defaults with warning."""
+        ctx = DerivationContext(
+            sir=waterbody_sir,
+            fabric=waterbody_fabric,
+            waterbodies=None,
+        )
+        ds = xr.Dataset(coords={"nhru": [1, 2]})  # No hru_area
+        ds = derivation._derive_waterbody(ctx, ds)
+
+        np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
+        np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
+
 
 class TestDeriveIntegrationWaterbody:
     """Integration test: full derive() with waterbody data."""

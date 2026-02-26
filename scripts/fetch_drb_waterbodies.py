@@ -8,13 +8,18 @@ Usage:
     pixi run -e dev python scripts/fetch_drb_waterbodies.py
 """
 
+import logging
 from pathlib import Path
 
 import geopandas as gpd
 from pynhd import WaterData
 
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     data_dir = Path("data/pywatershed_gis/drb_2yr")
     fabric_path = data_dir / "nhru.gpkg"
     output_path = data_dir / "waterbodies.gpkg"
@@ -23,13 +28,13 @@ def main() -> None:
     fabric = gpd.read_file(fabric_path)
     fabric_4326 = fabric.to_crs("EPSG:4326")
     bounds = tuple(fabric_4326.total_bounds)
-    print(f"Fabric: {len(fabric)} HRUs, CRS={fabric.crs}")
-    print(f"Query bbox (WGS84): {bounds}")
+    logger.info("Fabric: %d HRUs, CRS=%s", len(fabric), fabric.crs)
+    logger.info("Query bbox (WGS84): %s", bounds)
 
     # Fetch NHDPlus waterbodies
     wd = WaterData("nhdwaterbody")
     wb = wd.bybox(bounds)
-    print(f"Fetched {len(wb)} waterbodies")
+    logger.info("Fetched %d waterbodies", len(wb))
 
     # Keep useful columns for step 6 derivation
     keep_cols = [
@@ -48,15 +53,15 @@ def main() -> None:
 
     # Reproject to match fabric CRS
     wb = wb.to_crs(fabric.crs)
-    print(f"Reprojected to {wb.crs}")
+    logger.info("Reprojected to %s", wb.crs)
 
     # Summary stats
-    print(f"\nWaterbody types (ftype):\n{wb['ftype'].value_counts().to_string()}")
-    print(f"\nArea stats (km²):\n{wb['areasqkm'].describe().to_string()}")
+    logger.info("Waterbody types (ftype):\n%s", wb["ftype"].value_counts().to_string())
+    logger.info("Area stats (km²):\n%s", wb["areasqkm"].describe().to_string())
 
     # Save
     wb.to_file(output_path, driver="GPKG")
-    print(f"\nSaved {len(wb)} waterbodies to {output_path}")
+    logger.info("Saved %d waterbodies to %s", len(wb), output_path)
 
 
 if __name__ == "__main__":

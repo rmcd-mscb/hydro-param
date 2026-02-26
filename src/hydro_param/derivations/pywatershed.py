@@ -63,9 +63,9 @@ _DEFAULTS: dict[str, float] = {
     # Transpiration timing
     "transp_beg": 4,  # April
     "transp_end": 10,  # October
-    # Depression storage
-    "dprst_frac": 0.0,
-    "dprst_area_max": 0.0,
+    # Depression storage — hru_type only; dprst_frac and dprst_area_max are
+    # always set by _derive_waterbody (or _waterbody_defaults), so no scalar
+    # fallback is needed here.
     "hru_type": 1,
 }
 
@@ -879,6 +879,24 @@ class PywatershedDerivation:
         nhru = ds.sizes.get("nhru", 0)
         id_field = ctx.fabric_id_field
 
+        # Guard: hru_area must exist from step 1
+        if "hru_area" not in ds:
+            logger.warning("Step 6 requires 'hru_area' from step 1 (not found); using defaults")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Guard: fabric required for overlay
+        fabric = ctx.fabric
+        if fabric is None:
+            logger.warning("No fabric provided; using defaults for step 6")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Guard: id_field must exist in fabric
+        if id_field not in fabric.columns:
+            raise KeyError(
+                f"Fabric GeoDataFrame missing id_field '{id_field}' "
+                f"(found: {sorted(fabric.columns.tolist())})"
+            )
+
         # Fallback: no waterbody data
         if ctx.waterbodies is None:
             logger.warning("No waterbody data provided; using defaults for step 6")
@@ -891,14 +909,9 @@ class PywatershedDerivation:
             )
 
         # Filter to LakePond and Reservoir only
-        wb = ctx.waterbodies[ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})].copy()
+        wb = ctx.waterbodies[ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})]
         if wb.empty:
             logger.info("No LakePond/Reservoir waterbodies found; using defaults for step 6")
-            return self._waterbody_defaults(ds, nhru)
-
-        fabric = ctx.fabric
-        if fabric is None:
-            logger.warning("No fabric provided; using defaults for step 6")
             return self._waterbody_defaults(ds, nhru)
 
         # Ensure matching CRS
@@ -906,12 +919,24 @@ class PywatershedDerivation:
             logger.info("Reprojecting waterbodies from %s to %s", wb.crs, fabric.crs)
             wb = wb.to_crs(fabric.crs)
 
+        # Warn if CRS is geographic (area computation will be wrong)
+        if fabric.crs is not None and not fabric.crs.is_projected:
+            logger.warning(
+                "Fabric CRS %s is geographic — area computations may be inaccurate. "
+                "Use a projected CRS (e.g. EPSG:5070) for reliable results.",
+                fabric.crs,
+            )
+
         # Polygon overlay: intersection of fabric x waterbodies
-        intersections = gpd.overlay(
-            fabric[[id_field, "geometry"]],
-            wb[["geometry"]],
-            how="intersection",
-        )
+        try:
+            intersections = gpd.overlay(
+                fabric[[id_field, "geometry"]],
+                wb[["geometry"]],
+                how="intersection",
+            )
+        except Exception:
+            logger.exception("gpd.overlay failed in step 6; using defaults")
+            return self._waterbody_defaults(ds, nhru)
 
         if intersections.empty:
             logger.info("No waterbody-HRU intersections found; using defaults for step 6")
