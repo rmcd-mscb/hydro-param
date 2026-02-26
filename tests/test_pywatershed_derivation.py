@@ -2541,7 +2541,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         # HRU 1: 60% LakePond coverage (SwampMarsh excluded)
         assert ds["dprst_frac"].values[0] == pytest.approx(0.6, abs=0.01)
@@ -2563,7 +2563,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         assert ds["hru_type"].values[0] == 2  # 60% > 50%
         assert ds["hru_type"].values[1] == 1  # 30% < 50%
@@ -2577,7 +2577,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
         np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
@@ -2600,7 +2600,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
 
@@ -2621,7 +2621,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         # Only 80m of 100m HRU covered (80%)
         assert ds["dprst_frac"].values[0] == pytest.approx(0.8, abs=0.01)
@@ -2647,7 +2647,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         # 20m + 20m = 40m of 100m → 40%
         assert ds["dprst_frac"].values[0] == pytest.approx(0.4, abs=0.01)
@@ -2670,7 +2670,7 @@ class TestDeriveWaterbody:
         )
         ds = xr.Dataset()
         ds = derivation._derive_geometry(ctx, ds)
-        ds = derivation._derive_waterbody(ds, ctx)
+        ds = derivation._derive_waterbody(ctx, ds)
 
         # Should get ~50% coverage after reprojection
         assert ds["dprst_frac"].values[0] == pytest.approx(0.5, abs=0.05)
