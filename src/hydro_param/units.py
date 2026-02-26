@@ -1,8 +1,29 @@
 """Unit conversion registry for hydrologic parameterization.
 
-Centralizes all unit conversions (m→ft, mm→in, C→F, etc.) to prevent
-bugs from scattered inline magic numbers. Used by both derivation
-plugins and output formatters.
+Centralize all unit conversions (m to ft, mm to in, C to F, etc.) in a
+single registry to prevent bugs from scattered inline magic numbers.
+Used by both derivation plugins and output formatters.
+
+Hydrologic models often require specific unit systems.  For example,
+PRMS/pywatershed uses imperial units internally (feet, inches, degrees
+Fahrenheit, acres), while source datasets typically provide data in SI
+units (metres, millimetres, degrees Celsius, square metres).  This
+module provides a declarative registry so that conversion logic is defined
+once and applied consistently.
+
+Notes
+-----
+Conversions are registered at module import time.  The ``convert()``
+function is the primary public interface -- callers should never need to
+access the internal registry dict directly.
+
+All conversion functions are vectorized (they accept and return NumPy
+arrays), enabling efficient batch application over large feature sets.
+
+See Also
+--------
+hydro_param.sir : SIR normalization, which uses a separate conversion
+    mechanism for source-to-canonical transforms (log10, Kelvin).
 """
 
 from __future__ import annotations
@@ -16,7 +37,24 @@ from numpy.typing import NDArray
 
 @dataclass(frozen=True)
 class UnitConversion:
-    """A registered unit conversion."""
+    """Represent a single registered unit conversion.
+
+    Immutable record binding a source/target unit pair to a vectorized
+    conversion function.
+
+    Parameters
+    ----------
+    from_unit : str
+        Source unit identifier (e.g., ``"m"``, ``"C"``, ``"mm"``).
+    to_unit : str
+        Target unit identifier (e.g., ``"ft"``, ``"F"``, ``"in"``).
+    fn : Callable[[NDArray], NDArray]
+        Vectorized conversion function.  Must accept a NumPy array of
+        float values and return a NumPy array of the same shape.
+    description : str
+        Human-readable description of the conversion (e.g.,
+        ``"meters to feet"``).
+    """
 
     from_unit: str
     to_unit: str
@@ -34,18 +72,27 @@ def register(
     fn: Callable[[NDArray[np.floating]], NDArray[np.floating]],
     description: str = "",
 ) -> None:
-    """Register a unit conversion function.
+    """Register a unit conversion function in the module-level registry.
+
+    Add a new ``(from_unit, to_unit) -> fn`` mapping.  If the pair already
+    exists, the previous registration is silently overwritten.
 
     Parameters
     ----------
-    from_unit
-        Source unit identifier (e.g., ``"m"``, ``"C"``).
-    to_unit
-        Target unit identifier (e.g., ``"ft"``, ``"F"``).
-    fn
-        Vectorized conversion function accepting and returning NumPy arrays.
-    description
-        Human-readable description of the conversion.
+    from_unit : str
+        Source unit identifier (e.g., ``"m"``, ``"C"``, ``"W/m2"``).
+    to_unit : str
+        Target unit identifier (e.g., ``"ft"``, ``"F"``, ``"Langleys/day"``).
+    fn : Callable[[NDArray], NDArray]
+        Vectorized conversion function.  Must accept a NumPy float array
+        and return a NumPy float array of the same shape.
+    description : str
+        Human-readable description (e.g., ``"meters to feet"``).  Used by
+        ``list_conversions()`` for introspection.
+
+    Examples
+    --------
+    >>> register("km", "mi", lambda v: v * 0.621371, "kilometers to miles")
     """
     _CONVERSIONS[(from_unit, to_unit)] = UnitConversion(
         from_unit=from_unit, to_unit=to_unit, fn=fn, description=description
@@ -57,26 +104,35 @@ def convert(
     from_unit: str,
     to_unit: str,
 ) -> NDArray[np.floating]:
-    """Apply a registered unit conversion.
+    """Apply a registered unit conversion to an array of values.
+
+    If ``from_unit == to_unit``, return the input array unchanged (no-op
+    passthrough).  Otherwise, look up the registered conversion function
+    and apply it element-wise.
 
     Parameters
     ----------
-    values
-        Array of values to convert.
-    from_unit
-        Source unit identifier.
-    to_unit
-        Target unit identifier.
+    values : NDArray[np.floating]
+        Array of values to convert, in ``from_unit``.
+    from_unit : str
+        Source unit identifier (e.g., ``"m"``, ``"C"``).
+    to_unit : str
+        Target unit identifier (e.g., ``"ft"``, ``"F"``).
 
     Returns
     -------
-    NDArray
-        Converted values.
+    NDArray[np.floating]
+        Converted values in ``to_unit``.  Same shape as input.
 
     Raises
     ------
     KeyError
-        If no conversion is registered for the given unit pair.
+        If no conversion is registered for the ``(from_unit, to_unit)`` pair.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> convert(np.array([100.0]), "m", "ft")  # 100 m -> 328.084 ft
     """
     if from_unit == to_unit:
         return values
@@ -87,12 +143,16 @@ def convert(
 
 
 def list_conversions() -> list[tuple[str, str, str]]:
-    """List all registered conversions.
+    """List all registered unit conversions for introspection.
+
+    Useful for CLI ``datasets info`` output, debugging, and verifying that
+    expected conversions are available before running a pipeline.
 
     Returns
     -------
     list[tuple[str, str, str]]
-        List of ``(from_unit, to_unit, description)`` tuples.
+        List of ``(from_unit, to_unit, description)`` tuples, one per
+        registered conversion, in insertion order.
     """
     return [(c.from_unit, c.to_unit, c.description) for c in _CONVERSIONS.values()]
 

@@ -1,11 +1,28 @@
-"""pywatershed run configuration: Pydantic models + YAML loader.
+"""Define the pywatershed run configuration schema and YAML loader.
 
-Dedicated config schema for generating a complete pywatershed model
-setup. Separate from ``PipelineConfig`` because it represents a
-different workflow (model setup vs. generic zonal statistics).
+Provide Pydantic models that validate the YAML configuration for the
+``hydro-param pywatershed run`` command.  This schema is separate from
+``PipelineConfig`` because it represents a model-specific workflow
+(complete pywatershed model setup) rather than generic zonal statistics.
 
-See docs/reference/pywatershed_parameterization_guide.md §2B for the
-proposed structure.
+The configuration covers seven sections: domain geometry, simulation
+time period, climate forcing source, source dataset selections,
+processing options, manual parameter overrides, calibration seed
+generation, and output file layout.
+
+Notes
+-----
+This config is translated into a generic ``PipelineConfig`` by
+``cli._translate_pws_to_pipeline()`` for pipeline phases 1--5.
+Model-specific post-processing (derivation, unit conversion, output
+formatting) is driven directly from this config in phase 2.
+
+See Also
+--------
+docs/reference/pywatershed_parameterization_guide.md : Section 2B describes
+    the proposed config structure.
+hydro_param.config.PipelineConfig : Generic pipeline configuration.
+hydro_param.cli._translate_pws_to_pipeline : Config translation logic.
 """
 
 from __future__ import annotations
@@ -19,7 +36,43 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class PwsDomainConfig(BaseModel):
-    """Domain specification for pywatershed setup."""
+    """Define the spatial domain for pywatershed model setup.
+
+    Specify how the model domain is extracted (bounding box, HUC,
+    pour point, or BANDIT) and where the pre-existing fabric and
+    segment GeoPackage/GeoParquet files are located.
+
+    Attributes
+    ----------
+    source : {"geospatial_fabric", "custom"}
+        Whether to use the USGS Geospatial Fabric or a custom fabric.
+    gf_version : str
+        Geospatial Fabric version (default ``"1.1"``).
+    extraction_method : {"bbox", "huc", "pour_point", "bandit"}
+        Method for subsetting the domain.
+    bbox : list[float] or None
+        Bounding box as ``[minx, miny, maxx, maxy]`` in EPSG:4326.
+    huc_id : str or None
+        HUC identifier for HUC-based extraction.
+    pour_point : list[float] or None
+        Pour point as ``[x, y]`` in EPSG:4326.
+    fabric_path : Path or None
+        Path to the pre-existing HRU fabric file (GeoPackage or
+        GeoParquet).  Required when ``source="custom"``.
+    segment_path : Path or None
+        Path to the segment/flowline fabric file for routing topology.
+    id_field : str
+        Feature ID column name in the fabric (default ``"nhm_id"``).
+    segment_id_field : str
+        Segment ID column name in the segment fabric (default
+        ``"nhm_seg"``).
+
+    Notes
+    -----
+    hydro-param does NOT fetch or subset fabrics.  The ``fabric_path``
+    must point to a pre-existing file produced by pynhd, pygeohydro,
+    or similar upstream tools.
+    """
 
     source: Literal["geospatial_fabric", "custom"] = "geospatial_fabric"
     gf_version: str = "1.1"
@@ -34,6 +87,7 @@ class PwsDomainConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_extraction(self) -> PwsDomainConfig:
+        """Validate that required fields are present for the chosen extraction method."""
         if self.extraction_method == "bbox":
             if self.bbox is None:
                 raise ValueError("bbox extraction requires 'bbox' field")
@@ -52,7 +106,19 @@ class PwsDomainConfig(BaseModel):
 
 
 class PwsTimeConfig(BaseModel):
-    """Simulation time period."""
+    """Define the simulation time period for pywatershed.
+
+    Attributes
+    ----------
+    start : str
+        Simulation start date in ISO format (e.g., ``"1980-10-01"``).
+        Typically a water-year boundary for PRMS.
+    end : str
+        Simulation end date in ISO format (e.g., ``"1982-09-30"``).
+    timestep : {"daily"}
+        Temporal resolution.  Only daily is currently supported, which
+        matches PRMS's native timestep.
+    """
 
     start: str  # ISO date, e.g. "1980-10-01"
     end: str
@@ -60,7 +126,30 @@ class PwsTimeConfig(BaseModel):
 
 
 class PwsClimateConfig(BaseModel):
-    """Climate forcing specification."""
+    """Specify the climate forcing source and variables for PRMS.
+
+    PRMS requires three Climate-by-HRU (CBH) time series: precipitation,
+    maximum temperature, and minimum temperature.  These are area-weighted
+    means of gridded climate data over each HRU polygon.
+
+    Attributes
+    ----------
+    source : {"daymet_v4", "gridmet", "conus404_ba"}
+        Climate dataset to use.  ``"gridmet"`` is accessed via OPeNDAP
+        (ClimRCatData strategy); ``"daymet_v4"`` and ``"conus404_ba"``
+        use the NHGF STAC temporal pathway.
+    method : {"area_weighted_mean"}
+        Aggregation method for zonal statistics.
+    variables : list[str]
+        PRMS-facing variable names: ``["prcp", "tmax", "tmin"]``.
+        These are mapped to source-specific names (e.g., ``pr``,
+        ``tmmx``, ``tmmn`` for gridMET) during pipeline translation.
+
+    Notes
+    -----
+    The gridMET copy on the USGS GDP STAC is not kept up to date.
+    Use the ``climr_cat`` strategy (OPeNDAP) for gridMET access.
+    """
 
     source: Literal["daymet_v4", "gridmet", "conus404_ba"] = "daymet_v4"
     method: Literal["area_weighted_mean"] = "area_weighted_mean"
@@ -68,7 +157,26 @@ class PwsClimateConfig(BaseModel):
 
 
 class PwsDatasetSources(BaseModel):
-    """Dataset source selections by category."""
+    """Select source datasets by category for pywatershed parameterization.
+
+    Each attribute names a dataset in the hydro-param registry.  The
+    defaults match the standard NHM-PRMS configuration.
+
+    Attributes
+    ----------
+    topography : str
+        DEM dataset name for elevation, slope, and aspect zonal stats.
+        Default ``"dem_3dep_10m"`` (USGS 3DEP 1/3 arc-second).
+    landcover : str
+        Land cover dataset name for categorical fractions.  Default
+        ``"nlcd_legacy"`` (local GeoTIFF).  Use ``"nlcd_osn_lndcov"``
+        for NHGF STAC access.
+    soils : str
+        Soils dataset name.  Default ``"polaris_30m"`` (POLARIS 30m).
+    hydrography : str or None
+        Hydrography dataset name (e.g., NHDPlus).  Not yet used in
+        the automated pipeline.
+    """
 
     topography: str = "dem_3dep_10m"
     landcover: str = "nlcd_legacy"
@@ -77,7 +185,23 @@ class PwsDatasetSources(BaseModel):
 
 
 class PwsProcessingConfig(BaseModel):
-    """Processing options."""
+    """Configure processing options for the zonal statistics engine.
+
+    Attributes
+    ----------
+    zonal_method : {"exactextract", "serial"}
+        Zonal statistics engine.  ``"exactextract"`` uses the
+        exactextract C++ library via gdptools for fast, exact
+        coverage-weighted statistics.  ``"serial"`` is a slower
+        pure-Python fallback.
+    batch_size : int
+        Number of HRU features per spatial batch.  Must be > 0.
+        Larger batches reduce STAC query overhead but increase
+        per-batch memory usage.
+    n_workers : int
+        Number of parallel workers.  Must be >= 1.  Currently only
+        ``1`` is supported (serial processing).
+    """
 
     zonal_method: Literal["exactextract", "serial"] = "exactextract"
     batch_size: int = Field(default=500, gt=0)
@@ -85,14 +209,47 @@ class PwsProcessingConfig(BaseModel):
 
 
 class PwsParameterOverrides(BaseModel):
-    """Manual parameter value overrides."""
+    """Specify manual overrides for derived parameter values.
+
+    Allow users to inject known-good values (e.g., from calibration)
+    that bypass the standard derivation pipeline.  Overrides are
+    applied after all other derivation steps complete.
+
+    Attributes
+    ----------
+    values : dict[str, float | list[float]]
+        Parameter name to scalar or per-HRU value mapping.  Scalars
+        are broadcast to all HRUs.  List values must match the number
+        of HRUs in the fabric.
+    from_file : Path or None
+        Path to a NetCDF or CSV file containing override values.
+        Not yet implemented.
+    """
 
     values: dict[str, float | list[float]] = Field(default_factory=dict)
     from_file: Path | None = None
 
 
 class PwsCalibrationConfig(BaseModel):
-    """Calibration seed generation options."""
+    """Configure calibration seed generation for PRMS parameters.
+
+    PRMS calibration parameters (e.g., ``carea_max``, ``soil_moist_max``,
+    ``K_coef``) need physically plausible initial values.  This config
+    controls whether and how those seeds are generated.
+
+    Attributes
+    ----------
+    generate_seeds : bool
+        Whether to generate calibration seed values.  Default ``True``.
+    seed_method : {"physically_based", "all_defaults"}
+        ``"physically_based"`` derives seeds from GIS data (e.g.,
+        ``carea_max`` from impervious fraction).  ``"all_defaults"``
+        uses PRMS default values for all calibration parameters.
+    preserve_from_existing : list[str]
+        Parameter names to preserve from an existing parameter file
+        rather than re-deriving.  Useful for retaining calibrated
+        values during fabric updates.
+    """
 
     generate_seeds: bool = True
     seed_method: Literal["physically_based", "all_defaults"] = "physically_based"
@@ -100,7 +257,35 @@ class PwsCalibrationConfig(BaseModel):
 
 
 class PwsOutputConfig(BaseModel):
-    """Output specification for pywatershed files."""
+    """Specify output file layout for pywatershed model setup.
+
+    Control the directory structure and filenames for the four output
+    components: static parameters, climate forcing, solar tables, and
+    simulation control.
+
+    Attributes
+    ----------
+    path : Path
+        Root output directory.  Created if it does not exist.
+        Default ``"./output"``.
+    format : {"netcdf", "prms_text"}
+        Output format.  ``"netcdf"`` produces CF-1.8 compliant files
+        loadable by pywatershed.  ``"prms_text"`` is not yet
+        implemented.
+    parameter_file : str
+        Filename for static parameters (default ``"parameters.nc"``).
+    forcing_dir : str
+        Subdirectory for climate forcing files (default ``"forcing"``).
+    control_file : str
+        Filename for simulation control (default ``"control.yml"``).
+    soltab_file : str
+        Filename for solar radiation tables (default ``"soltab.nc"``).
+
+    Notes
+    -----
+    The legacy config key ``cbh_dir`` is accepted with a deprecation
+    warning and mapped to ``forcing_dir``.
+    """
 
     path: Path = Path("./output")
     format: Literal["netcdf", "prms_text"] = "netcdf"
@@ -112,7 +297,7 @@ class PwsOutputConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_cbh_dir(cls, values: dict) -> dict:
-        """Accept legacy ``cbh_dir`` key with a deprecation warning."""
+        """Map legacy ``cbh_dir`` to ``forcing_dir`` with a deprecation warning."""
         if isinstance(values, dict) and "cbh_dir" in values:
             if "forcing_dir" not in values:
                 warnings.warn(
@@ -128,11 +313,44 @@ class PwsOutputConfig(BaseModel):
 
 
 class PywatershedRunConfig(BaseModel):
-    """Top-level configuration for pywatershed model setup.
+    """Define the top-level configuration for pywatershed model setup.
 
-    Specifies everything needed for hydro-param to generate a complete
-    pywatershed model: domain, time period, climate forcing, datasets,
-    processing, overrides, calibration, and output.
+    Specify everything needed for hydro-param to generate a complete
+    pywatershed (NHM-PRMS) model: spatial domain, simulation time
+    period, climate forcing source, source dataset selections,
+    processing engine options, manual parameter overrides, calibration
+    seed generation, and output file layout.
+
+    This config is loaded from a YAML file by ``load_pywatershed_config()``
+    and consumed by ``cli.pws_run_cmd()`` to drive the two-phase workflow.
+
+    Attributes
+    ----------
+    target_model : {"pywatershed"}
+        Target model identifier (fixed to ``"pywatershed"``).
+    version : str
+        Config schema version (default ``"2.0"``).
+    domain : PwsDomainConfig
+        Spatial domain specification.
+    time : PwsTimeConfig
+        Simulation time period.
+    climate : PwsClimateConfig
+        Climate forcing configuration.
+    datasets : PwsDatasetSources
+        Source dataset selections by category.
+    processing : PwsProcessingConfig
+        Zonal statistics engine and batching options.
+    parameter_overrides : PwsParameterOverrides
+        Manual parameter value overrides.
+    calibration : PwsCalibrationConfig
+        Calibration seed generation options.
+    output : PwsOutputConfig
+        Output directory structure and filenames.
+
+    See Also
+    --------
+    load_pywatershed_config : YAML loader for this schema.
+    hydro_param.cli.pws_run_cmd : Two-phase workflow consumer.
     """
 
     target_model: Literal["pywatershed"] = "pywatershed"
@@ -148,7 +366,12 @@ class PywatershedRunConfig(BaseModel):
 
 
 def load_pywatershed_config(path: str | Path) -> PywatershedRunConfig:
-    """Load and validate a pywatershed run config from YAML.
+    """Load and validate a pywatershed run configuration from YAML.
+
+    Parse the YAML file and construct a fully validated
+    ``PywatershedRunConfig`` with Pydantic's strict type coercion
+    and cross-field validation (e.g., bbox requires 4 coordinates,
+    custom domain requires fabric_path).
 
     Parameters
     ----------
@@ -158,7 +381,17 @@ def load_pywatershed_config(path: str | Path) -> PywatershedRunConfig:
     Returns
     -------
     PywatershedRunConfig
-        Validated configuration.
+        Validated configuration ready for ``pws_run_cmd()``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *path* does not exist.
+    yaml.YAMLError
+        If the file contains invalid YAML.
+    pydantic.ValidationError
+        If the config fails schema validation (missing required
+        fields, type mismatches, cross-field constraint violations).
     """
     with open(path) as f:
         raw = yaml.safe_load(f)

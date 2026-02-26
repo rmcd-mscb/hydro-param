@@ -1,11 +1,29 @@
-"""Swift (1976) clear-sky potential solar radiation on sloped surfaces.
+"""Compute Swift (1976) clear-sky potential solar radiation on sloped surfaces.
 
-Ports pywatershed's ``PRMSSolarGeometry.compute_soltab()`` into a standalone
-pure-function module.  The algorithm computes potential clear-sky solar
-radiation on sloped and horizontal surfaces for every day of the year (1--366).
+Port pywatershed's ``PRMSSolarGeometry.compute_soltab()`` into a standalone
+pure-function module for use in hydro-param's derivation step 9 (soltab).
+The algorithm computes potential clear-sky direct-beam solar radiation on
+sloped and horizontal surfaces for every day of the year (1--366) using
+the equivalent-slope method of Lee (1963) with Swift's (1976) extensions.
 
-Output units are Langleys (cal/cm2/day) for radiation and hours for sunlight
-duration.
+The module is vectorised over HRUs: all public functions accept arrays of
+shape ``(nhru,)`` for slope, aspect, and latitude, and return arrays of
+shape ``(366, nhru)`` -- one row per day of the year.
+
+Units
+-----
+- Radiation: Langleys (cal/cm\ :sup:`2`/day)
+- Sunlight duration: hours
+- Slope: decimal fraction (rise/run)
+- Aspect: degrees clockwise from north
+- Latitude: decimal degrees
+
+Notes
+-----
+This is a faithful port of the Fortran-origin algorithm preserved in
+pywatershed's Python codebase.  Array aliasing behaviour (e.g.,
+``t3 = t7`` sharing the same ndarray) is intentionally replicated to
+match pywatershed's results exactly.
 
 References
 ----------
@@ -13,6 +31,10 @@ Swift, L.W., 1976, Algorithm for solar radiation on mountain slopes:
     Water Resources Research, v. 12, no. 1, p. 108--112.
 Lee, R., 1963, Evaluation of solar beam irradiation as a climatic parameter
     of mountain watersheds: Colorado State University Hydrology Papers, no. 2.
+
+See Also
+--------
+hydro_param.derivations.pywatershed : Derivation step 9 calls ``compute_soltab``.
 """
 
 from __future__ import annotations
@@ -72,21 +94,33 @@ def _compute_t(
     lats: NDArray[np.floating],
     decl: NDArray[np.floating],
 ) -> NDArray[np.floating]:
-    """Compute sunrise/sunset hour angles.
+    """Compute sunrise/sunset half-day hour angles for each day and HRU.
+
+    For a given latitude (or equivalent slope latitude) and solar
+    declination, compute the hour angle at which the sun rises/sets.
+    The result is the half-day length in radians: sunrise occurs at
+    ``-t`` and sunset at ``+t``.
 
     Parameters
     ----------
     lats : ndarray, shape (nhru,)
-        Latitude-like angles in radians (may be equivalent slope latitude).
+        Latitude-like angles in radians.  May be true latitude for
+        horizontal surfaces or equivalent slope latitude (Lee 1963,
+        eq. 13) for tilted surfaces.
     decl : ndarray, shape (ndoy,)
-        Solar declination for each day of the year in radians.
+        Solar declination for each day of the year, in radians.
 
     Returns
     -------
     ndarray, shape (ndoy, nhru)
-        Half-day hour angle (radians).  Sunrise occurs at ``-t``,
-        sunset at ``+t``.  Clamped to *pi* for perpetual daylight
-        and *0* for polar night.
+        Half-day hour angle in radians.  Clamped to ``pi`` (24 h
+        daylight) when ``tan(lat) * tan(decl) < -1`` (perpetual
+        daylight) and to ``0`` when ``> 1`` (polar night).
+
+    Warnings
+    --------
+    Logs a warning if any NaN values remain after clamping, which
+    typically indicates NaN in the latitude input.
     """
     nhru = len(lats)
     lats_mat = np.tile(-1.0 * np.tan(lats), (NDOY, 1))
@@ -117,27 +151,34 @@ def _func3(
     x: NDArray[np.floating],
     y: NDArray[np.floating],
 ) -> NDArray[np.floating]:
-    """Swift (1976) equation 6 — potential radiation integral.
+    """Evaluate Swift (1976) equation 6 -- potential radiation integral.
 
-    Integrates extraterrestrial direct-beam radiation from hour angle *y*
-    to *x* on an equivalent tilted surface defined by latitude *w* and
-    longitude offset *v* (Lee 1963, eqs. 12--13).
+    Integrate extraterrestrial direct-beam radiation from hour angle *y*
+    to *x* on an equivalent tilted surface defined by equivalent slope
+    latitude *w* and longitude offset *v* (Lee 1963, eqs. 12--13).
+    The integral accounts for Earth-Sun distance variation via the
+    precomputed ``r1`` array.
 
     Parameters
     ----------
     v : ndarray, shape (nhru,)
-        Longitude offset of equivalent slope.
+        Longitude offset of equivalent slope (radians).
     w : ndarray, shape (nhru,)
-        Equivalent slope latitude.
+        Equivalent slope latitude (radians).
     x : ndarray, shape (ndoy, nhru)
-        Upper hour-angle bound.
+        Upper hour-angle integration bound (radians).
     y : ndarray, shape (ndoy, nhru)
-        Lower hour-angle bound.
+        Lower hour-angle integration bound (radians).
 
     Returns
     -------
     ndarray, shape (ndoy, nhru)
-        Potential solar radiation between hour angles *y* and *x*.
+        Potential solar radiation between hour angles *y* and *x*,
+        in Langleys (cal/cm2/day).
+
+    References
+    ----------
+    Swift, L.W., 1976, eq. 6; Lee, R., 1963, eqs. 12--13.
     """
     nhru = len(v)
     vv = np.tile(v, (NDOY, 1))
@@ -161,26 +202,44 @@ def _compute_soltab_core(
     aspects: NDArray[np.floating],
     lats: NDArray[np.floating],
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    """Core soltab computation for a single surface configuration.
+    """Compute potential solar radiation for a single surface configuration.
 
-    This is a faithful port of ``PRMSSolarGeometry.compute_soltab`` from
-    pywatershed.
+    Implement the core Swift (1976) / Lee (1963) algorithm for one
+    surface type (sloped or horizontal).  This is a faithful port of
+    ``PRMSSolarGeometry.compute_soltab`` from pywatershed, including
+    the array-aliasing behaviour for hour-angle clipping and the
+    wrap-around corrections for slopes where sunrise/sunset hour angles
+    extend beyond the horizontal bounds.
+
+    For flat surfaces (slope < ``_DNEARZERO``), the sloped-surface
+    result is overridden with the horizontal-surface computation.
+    Negative radiation values are clamped to zero with a warning if
+    they exceed 1% of total elements (indicating possible input errors).
 
     Parameters
     ----------
     slopes : ndarray, shape (nhru,)
-        Slope as decimal fraction (rise/run).
+        Slope as decimal fraction (rise/run), non-negative.
     aspects : ndarray, shape (nhru,)
-        Aspect in degrees (0 = north, 180 = south).
+        Aspect in degrees clockwise from north (0 = north, 180 = south).
     lats : ndarray, shape (nhru,)
-        Latitude in decimal degrees.
+        Latitude in decimal degrees, range [-90, 90].
 
     Returns
     -------
-    solt : ndarray, shape (ndoy, nhru)
-        Potential clear-sky solar radiation (Langleys, cal/cm2/day).
-    sunh : ndarray, shape (ndoy, nhru)
-        Hours of direct sunlight.
+    solt : ndarray, shape (366, nhru)
+        Potential clear-sky solar radiation in Langleys (cal/cm2/day).
+    sunh : ndarray, shape (366, nhru)
+        Hours of direct sunlight on the surface.
+
+    Notes
+    -----
+    The array-aliasing pattern (``t3 = t7``, ``t2 = t6``) replicates
+    pywatershed's Fortran-origin mutation semantics.  Clipping ``t3``
+    also clips ``t7`` because they share the same underlying ndarray.
+    The subsequent ``t6 = t6 + _TWO_PI`` and ``t7 = t7 - _TWO_PI``
+    then create *new* arrays for the wrap-around correction, breaking
+    the alias.
     """
     nhru = len(slopes)
 
@@ -305,35 +364,64 @@ def compute_soltab(
     aspects: NDArray[np.floating],
     lats: NDArray[np.floating],
 ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
-    """Compute potential clear-sky solar radiation tables.
+    """Compute potential clear-sky solar radiation tables for PRMS.
 
-    Implements the Swift (1976) algorithm for potential solar radiation on
-    sloped and horizontal surfaces for every day of the year (1--366).
+    Implement the Swift (1976) algorithm for potential direct-beam solar
+    radiation on sloped and horizontal surfaces for every day of the
+    year (1--366).  This is the public entry point for derivation
+    step 9 (soltab) in the pywatershed parameterization pipeline.
+
+    The function runs the core algorithm twice: once for horizontal
+    surfaces (zero slope, zero aspect) and once for the actual sloped
+    surfaces.  Both results are needed by PRMS -- the horizontal
+    radiation is used as a reference for computing the slope correction
+    factor.
 
     Parameters
     ----------
     slopes : ndarray, shape (nhru,)
-        Slope as decimal fraction (rise / run), non-negative.
+        Slope as decimal fraction (rise/run), non-negative.  Values
+        above 10.0 trigger a warning since they likely indicate
+        degree input rather than fractional.
     aspects : ndarray, shape (nhru,)
         Aspect in degrees, 0--360 clockwise from north (0 = north,
-        180 = south).
+        180 = south).  Flat HRUs conventionally use aspect = 0.
     lats : ndarray, shape (nhru,)
         Latitude in decimal degrees, range [-90, 90].
 
     Returns
     -------
-    soltab_potsw : ndarray, shape (ndoy, nhru)
-        Potential solar radiation on the sloped surface (Langleys).
-    soltab_horad_potsw : ndarray, shape (ndoy, nhru)
-        Potential solar radiation on a horizontal surface (Langleys).
-    soltab_sunhrs : ndarray, shape (ndoy, nhru)
+    soltab_potsw : ndarray, shape (366, nhru)
+        Potential solar radiation on the sloped surface
+        (Langleys, cal/cm2/day).
+    soltab_horad_potsw : ndarray, shape (366, nhru)
+        Potential solar radiation on a horizontal surface
+        (Langleys, cal/cm2/day).
+    soltab_sunhrs : ndarray, shape (366, nhru)
         Hours of direct sunlight on the sloped surface.
 
     Raises
     ------
     ValueError
         If input arrays have mismatched lengths, are empty, contain NaN,
-        or have out-of-range values.
+        or have out-of-range values (latitude outside [-90, 90] or
+        negative slopes).
+
+    Notes
+    -----
+    Input validation is strict: NaN values, mismatched array lengths,
+    and out-of-range latitudes all raise ``ValueError`` rather than
+    producing silently incorrect output.  Slopes > 10 produce a warning
+    but do not error, in case extreme terrain is intentional.
+
+    References
+    ----------
+    Swift, L.W., 1976, Algorithm for solar radiation on mountain slopes:
+        Water Resources Research, v. 12, no. 1, p. 108--112.
+
+    See Also
+    --------
+    hydro_param.derivations.pywatershed : Step 9 calls this function.
     """
     # --- Input validation ---
     if len(slopes) != len(aspects) or len(slopes) != len(lats):

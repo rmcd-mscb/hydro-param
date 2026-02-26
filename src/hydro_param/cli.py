@@ -1,14 +1,39 @@
 """CLI entry point for hydro-param.
 
-Commands:
-    hydro-param init [project-dir]       — scaffold a project directory
-    hydro-param datasets list            — list available datasets
-    hydro-param datasets info <name>     — show dataset details
-    hydro-param datasets download <name> — download dataset files
-    hydro-param run <config>             — execute the pipeline
-    hydro-param pywatershed run <config> — generate pywatershed model setup
+Provide the top-level ``hydro-param`` console script and all subcommands
+using the cyclopts framework.  The CLI is the primary user interface for
+configuration-driven hydrologic parameterization workflows.
 
-See design.md §11.9 for the full CLI specification.
+Commands
+--------
+hydro-param init [project-dir]
+    Scaffold a project directory with standard layout.
+hydro-param datasets list
+    List available datasets grouped by category.
+hydro-param datasets info <name>
+    Show full details for a single dataset.
+hydro-param datasets download <name>
+    Download dataset files via AWS CLI.
+hydro-param run <config>
+    Execute the generic parameterization pipeline (stages 1--5).
+hydro-param pywatershed run <config>
+    Generate a complete pywatershed model setup (two-phase workflow).
+hydro-param pywatershed validate <param_file>
+    Validate a pywatershed parameter NetCDF file.
+
+Notes
+-----
+All model-specific logic (unit conversions, variable renaming, derivation)
+lives in plugin modules (``derivations/pywatershed.py``,
+``formatters/pywatershed.py``).  The generic ``run`` command produces a raw
+Standardized Internal Representation (SIR); the ``pywatershed run`` command
+adds a second phase of model-specific post-processing.
+
+See Also
+--------
+docs/design.md : Full architecture and CLI specification (§11.9).
+hydro_param.pipeline : Generic 5-stage pipeline orchestrator.
+hydro_param.derivations.pywatershed : pywatershed derivation plugin.
 """
 
 from __future__ import annotations
@@ -39,13 +64,43 @@ pws_app = app.command(App(name="pywatershed", help="pywatershed model setup."))
 
 
 def _load_registry(registry: Path | None) -> DatasetRegistry:
-    """Load the dataset registry, falling back to the default."""
+    """Load the dataset registry, falling back to the bundled default.
+
+    Parameters
+    ----------
+    registry
+        Path to a custom registry YAML file or directory.  When ``None``,
+        uses the default registry shipped with hydro-param.
+
+    Returns
+    -------
+    DatasetRegistry
+        Loaded and validated dataset registry.
+    """
     path = registry if registry is not None else DEFAULT_REGISTRY
     return load_registry(path)
 
 
 def _access_status(entry: DatasetEntry) -> str:
-    """Return a human-readable access status string."""
+    """Return a human-readable access status string for a dataset entry.
+
+    Classify the dataset's availability as one of ``"local"``,
+    ``"download required"``, ``"not configured"``, ``"remote"``, or
+    ``"not yet available"`` based on its access strategy and source
+    configuration.
+
+    Parameters
+    ----------
+    entry
+        A dataset entry from the registry.
+
+    Returns
+    -------
+    str
+        One of ``"local"``, ``"download required"``, ``"not configured"``,
+        ``"remote"``, ``"not yet available"``, or the raw strategy name
+        as a fallback.
+    """
     if entry.strategy == "local_tiff":
         if entry.source is not None:
             return "local"
@@ -68,12 +123,18 @@ def _access_status(entry: DatasetEntry) -> str:
 
 @datasets_app.command(name="list")
 def datasets_list(*, registry: Path | None = None) -> None:
-    """Display datasets grouped by category.
+    """Display all registered datasets grouped by category.
+
+    Print a formatted table of datasets to stdout, showing name,
+    description, access strategy, and availability status.  Datasets
+    are grouped under their category heading (e.g., Topography,
+    Land Cover, Soils).
 
     Parameters
     ----------
     registry
-        Path to a custom registry YAML file or directory.
+        Path to a custom registry YAML file or directory.  When
+        omitted, the bundled default registry is used.
     """
     reg = _load_registry(registry)
 
@@ -98,14 +159,25 @@ def datasets_list(*, registry: Path | None = None) -> None:
 
 @datasets_app.command(name="info")
 def datasets_info(name: str, *, registry: Path | None = None) -> None:
-    """Show full details for a dataset.
+    """Show full details for a single dataset.
+
+    Print comprehensive information including description, strategy,
+    CRS, variables (continuous and derived), download instructions,
+    and a pipeline config snippet for easy copy-paste.
 
     Parameters
     ----------
     name
-        Dataset name as it appears in the registry.
+        Dataset name as it appears in the registry (e.g.,
+        ``"dem_3dep_10m"``, ``"nlcd_osn_lndcov"``).
     registry
-        Path to a custom registry YAML file or directory.
+        Path to a custom registry YAML file or directory.  When
+        omitted, the bundled default registry is used.
+
+    Raises
+    ------
+    SystemExit
+        If the dataset name is not found in the registry (exit code 1).
     """
     reg = _load_registry(registry)
     try:
@@ -205,22 +277,47 @@ def datasets_download(
     variables: str | None = None,
     registry: Path | None = None,
 ) -> None:
-    """Download dataset files via AWS CLI.
+    """Download dataset files via the AWS CLI.
+
+    Fetch remote dataset files (typically from S3) using ``aws s3 cp``.
+    Supports single-file, multi-file (explicit file list), and
+    template-based (URL pattern with year/variable placeholders)
+    download configurations.
+
+    When run inside an initialised hydro-param project (detected via
+    ``.hydro-param`` marker), files are automatically routed to the
+    ``data/<category>/`` subdirectory.
 
     Parameters
     ----------
     name
-        Dataset name as it appears in the registry.
+        Dataset name as it appears in the registry (e.g.,
+        ``"polaris_30m"``, ``"nlcd_legacy"``).
     dest
         Destination directory for downloaded files.  When omitted inside
         an initialised project, files are routed to ``data/<category>/``
-        automatically.
+        automatically.  Otherwise defaults to the current directory.
     years
         Comma-separated list of years to download (multi-file datasets).
+        Example: ``"2019,2020,2021"``.
     variables
-        Comma-separated list of variables/products to download (multi-file datasets).
+        Comma-separated list of variables/products to download
+        (multi-file datasets).  Example: ``"silt,sand,clay"``.
     registry
-        Path to a custom registry YAML file or directory.
+        Path to a custom registry YAML file or directory.  When
+        omitted, the bundled default registry is used.
+
+    Raises
+    ------
+    SystemExit
+        If the dataset is not found, has no download info, AWS CLI is
+        not installed, or a download fails (exit code 1).
+
+    Notes
+    -----
+    Requires the AWS CLI (``aws``) to be installed and available on
+    ``PATH``.  For requester-pays buckets (e.g., ``s3://usgs-landcover``),
+    valid AWS credentials are needed.  Anonymous access is used otherwise.
     """
     reg = _load_registry(registry)
     try:
@@ -266,7 +363,24 @@ def datasets_download(
 
 
 def _download_single_file(url: str, dest: Path, *, requester_pays: bool = False) -> None:
-    """Download a single file via aws s3 cp."""
+    """Download a single file from S3 via ``aws s3 cp``.
+
+    Parameters
+    ----------
+    url
+        Full S3 URL (e.g., ``s3://bucket/path/to/file.tif``).
+    dest
+        Local destination directory.  The filename is extracted from the
+        URL's last path component.
+    requester_pays
+        If ``True``, pass ``--request-payer=requester`` to ``aws s3 cp``.
+        Otherwise, use ``--no-sign-request`` for anonymous access.
+
+    Raises
+    ------
+    SystemExit
+        If the ``aws s3 cp`` command exits with a non-zero return code.
+    """
     filename = url.rsplit("/", 1)[-1]
     dest_path = dest / filename
     print(f"Downloading: {url}")
@@ -291,7 +405,32 @@ def _download_multi_file(
     years_str: str | None,
     variables_str: str | None,
 ) -> None:
-    """Download selected files from a multi-file or template dataset."""
+    """Download selected files from a multi-file or template dataset.
+
+    Expand the download specification (explicit file list or URL
+    template) with optional year and variable filters, then download
+    each matching file via ``_download_single_file``.
+
+    Parameters
+    ----------
+    name
+        Dataset name (used in error messages).
+    entry
+        Registry entry with download configuration.
+    dest
+        Local destination directory for downloaded files.
+    years_str
+        Comma-separated year filter (e.g., ``"2019,2020"``), or
+        ``None`` to download all available years.
+    variables_str
+        Comma-separated variable filter (e.g., ``"silt,clay"``), or
+        ``None`` to download all available variables.
+
+    Raises
+    ------
+    SystemExit
+        If no files match the given filters or a download fails.
+    """
     assert entry.download is not None  # guaranteed by caller
     dl = entry.download
 
@@ -333,17 +472,37 @@ def _download_multi_file(
 
 @app.command(name="run")
 def run_cmd(config: Path, *, registry: Path | None = None, resume: bool = False) -> None:
-    """Execute the parameterization pipeline.
+    """Execute the generic parameterization pipeline.
+
+    Run stages 1--5 (resolve fabric, resolve datasets, compute weights,
+    process datasets, format output) to produce a raw Standardized
+    Internal Representation (SIR) with source units and source variable
+    names.  This command is model-agnostic; use ``pywatershed run`` for
+    model-specific post-processing.
 
     Parameters
     ----------
     config
-        Path to the pipeline YAML config.
+        Path to the pipeline YAML config file (e.g.,
+        ``configs/examples/delaware_2yr.yml``).
     registry
         Path to a custom dataset registry YAML file or directory.
+        When omitted, the bundled default registry is used.
     resume
-        Skip datasets whose outputs are already complete and inputs
-        haven't changed (manifest-based).
+        Enable manifest-based resume: skip datasets whose outputs are
+        already complete and whose config fingerprint has not changed.
+        Compares SHA-256 fingerprints of dataset request + registry
+        entry + processing options.
+
+    Raises
+    ------
+    SystemExit
+        If the pipeline raises any exception (exit code 1).
+
+    See Also
+    --------
+    hydro_param.pipeline.run_pipeline_from_config : Pipeline entry point.
+    hydro_param.manifest : Manifest-based resume logic.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -378,19 +537,29 @@ def init_cmd(
 ) -> None:
     """Scaffold a new hydro-param project directory.
 
-    Creates a standard directory structure with a template pipeline
-    configuration, data directories organised by dataset category,
-    and a .gitignore.
+    Create a standard directory structure with a template pipeline
+    configuration, data directories organised by dataset category
+    (e.g., ``data/topography/``, ``data/soils/``), and a ``.gitignore``.
+    A ``.hydro-param`` marker file is written to identify the project
+    root for automatic path resolution in other commands (e.g.,
+    ``datasets download`` auto-routes files to ``data/<category>/``).
 
     Parameters
     ----------
     project_dir
         Directory to initialise.  Defaults to the current directory.
     force
-        Re-initialise an existing project (creates missing directories,
-        refreshes marker, but preserves existing pipeline.yml).
+        Re-initialise an existing project: create missing directories
+        and refresh the marker file, but preserve any existing
+        ``pipeline.yml``.
     registry
-        Path to a custom registry for category discovery.
+        Path to a custom registry YAML for category discovery.  When
+        omitted, the bundled default registry is used to determine
+        which ``data/<category>/`` subdirectories to create.
+
+    See Also
+    --------
+    hydro_param.project.init_project : Implementation of project scaffolding.
     """
     init_project(project_dir, force=force, registry_path=registry)
 
@@ -405,10 +574,45 @@ def _translate_pws_to_pipeline(
 ) -> PipelineConfig:
     """Translate a PywatershedRunConfig into a generic PipelineConfig.
 
-    Maps the model-specific schema onto the generic pipeline config so
-    stages 1-5 can produce a raw SIR + temporal data.  No model-specific
-    transforms (derivation, renaming, unit conversion) are included —
-    those happen in ``pws_run_cmd()`` after the pipeline completes.
+    Map the pywatershed-specific configuration schema onto the generic
+    pipeline config so stages 1--5 can produce a raw SIR and temporal
+    data.  This is the bridge between the model-specific user interface
+    and the model-agnostic pipeline engine.
+
+    No model-specific transforms (derivation, variable renaming, unit
+    conversion) are included in the translated config -- those happen
+    in ``pws_run_cmd()`` after the pipeline completes (two-phase
+    separation).
+
+    Parameters
+    ----------
+    pws_config
+        A validated ``PywatershedRunConfig`` instance (typed as
+        ``object`` to avoid circular imports at module level).
+
+    Returns
+    -------
+    PipelineConfig
+        Generic pipeline configuration ready for
+        ``run_pipeline_from_config()``.
+
+    Raises
+    ------
+    ValueError
+        If required fields (e.g., ``fabric_path``) are missing.
+    NotImplementedError
+        If an unsupported extraction method is requested.
+
+    Notes
+    -----
+    Climate variable names are mapped from PRMS user-facing names
+    (``prcp``, ``tmax``, ``tmin``) to registry/gdptools source names
+    (``pr``, ``tmmx``, ``tmmn``) for the pipeline request.  The reverse
+    mapping happens during pywatershed post-processing.
+
+    See Also
+    --------
+    pws_run_cmd : Two-phase pywatershed workflow that calls this function.
     """
     from hydro_param.config import (
         DatasetRequest,
@@ -521,20 +725,46 @@ def _translate_pws_to_pipeline(
 def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     """Generate a complete pywatershed model setup.
 
-    Two-phase workflow:
+    Execute the full two-phase workflow to produce all files needed
+    for a pywatershed (NHM-PRMS) simulation:
 
-    1. **Generic pipeline** — runs stages 1-5 to produce a raw SIR
-       (source units, source variable names) + temporal data.
-    2. **pywatershed post-processing** — derives PRMS parameters,
-       merges temporal data with renaming/unit conversion, and writes
-       output files (parameters.nc, forcing/, control.yml).
+    1. **Generic pipeline** (phase 1) -- run stages 1--5 to produce a
+       raw SIR (source units, source variable names) and temporal
+       climate data files.
+    2. **pywatershed post-processing** (phase 2) -- derive PRMS
+       parameters from the SIR (geometry, topology, topography,
+       landcover, lookups, defaults), merge temporal data with
+       variable renaming and unit conversion (K to C, mm to in),
+       and write output files.
+
+    Output files produced:
+
+    - ``parameters.nc`` -- static PRMS parameters loadable by
+      ``pws.Parameters.from_netcdf()``
+    - ``forcing/<var>.nc`` -- one file per climate variable (prcp,
+      tmax, tmin) in PRMS units (inches, degrees F)
+    - ``soltab.nc`` -- potential solar radiation tables (nhru x 366)
+    - ``control.yml`` -- simulation time period configuration
 
     Parameters
     ----------
     config
-        Path to a pywatershed run config YAML.
+        Path to a pywatershed run config YAML file.  See
+        ``PywatershedRunConfig`` for the expected schema.
     registry
         Path to a custom dataset registry YAML file or directory.
+        When omitted, the bundled default registry is used.
+
+    Raises
+    ------
+    SystemExit
+        If config loading or either pipeline phase fails (exit code 1).
+
+    See Also
+    --------
+    hydro_param.pywatershed_config.PywatershedRunConfig : Config schema.
+    hydro_param.derivations.pywatershed.PywatershedDerivation : Derivation plugin.
+    hydro_param.formatters.pywatershed.PywatershedFormatter : Output formatter.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -628,15 +858,28 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 def pws_validate_cmd(
     param_file: Path,
 ) -> None:
-    """Validate a pywatershed parameter file.
+    """Validate a pywatershed parameter file against metadata constraints.
 
-    Checks that required parameters are present and values fall
-    within valid ranges.
+    Check that required PRMS parameters are present and that values
+    fall within the valid ranges defined in the bundled
+    ``parameter_metadata.yml``.  Print a summary of issues found or
+    a success message.
 
     Parameters
     ----------
     param_file
-        Path to a pywatershed parameter NetCDF file.
+        Path to a pywatershed parameter NetCDF file (e.g.,
+        ``output/parameters.nc``).
+
+    Raises
+    ------
+    SystemExit
+        If the file cannot be opened (exit code 1) or validation
+        finds any issues (exit code 1).
+
+    See Also
+    --------
+    PywatershedFormatter.validate : Underlying validation logic.
     """
     import xarray as xr
 
@@ -667,5 +910,10 @@ def pws_validate_cmd(
 
 
 def main() -> None:
-    """CLI entry point called by the ``hydro-param`` console script."""
+    """Invoke the cyclopts CLI application.
+
+    This is the entry point registered as the ``hydro-param`` console
+    script in ``pyproject.toml``.  Delegates to the cyclopts ``App``
+    for argument parsing and command dispatch.
+    """
     app()

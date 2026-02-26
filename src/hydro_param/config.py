@@ -1,7 +1,18 @@
-"""Pipeline configuration: Pydantic models + YAML loader.
+"""Pipeline configuration: Pydantic models and YAML loader.
 
-Declarative config schema matching design.md section 11.6.
-Configs say *what* to compute, not *how*.
+Define the declarative configuration schema for the hydro-param pipeline,
+matching design.md section 11.6.  Configs express *what* to compute (target
+fabric, datasets, statistics, output format) but never *how* -- all processing
+logic lives in Python code, not in YAML.
+
+The schema is validated at load time by Pydantic v2 so that invalid configs
+fail fast with clear error messages before any data is fetched.
+
+See Also
+--------
+hydro_param.pipeline : Orchestrator that consumes these config objects.
+hydro_param.dataset_registry : Registry that resolves dataset names referenced
+    in :class:`DatasetRequest`.
 """
 
 from __future__ import annotations
@@ -15,7 +26,32 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class TargetFabricConfig(BaseModel):
-    """Target fabric (polygon mesh) specification."""
+    """Specify the target polygon fabric to parameterize.
+
+    The target fabric is the spatial mesh (catchments, HRUs, grid cells) whose
+    features receive zonal statistics from source datasets.  The fabric must be
+    a pre-existing geospatial file -- hydro-param does not fetch or subset
+    fabrics (use pynhd/pygeohydro upstream).
+
+    Parameters
+    ----------
+    path : Path
+        Path to the fabric file (GeoPackage, GeoParquet, or Shapefile).
+    id_field : str
+        Column name containing unique feature identifiers.  This becomes the
+        index/dimension name in all output files and the SIR xarray Dataset.
+    crs : str
+        Coordinate reference system of the fabric file as an EPSG string.
+        Defaults to ``"EPSG:4326"`` (WGS 84).
+
+    Notes
+    -----
+    The ``id_field`` propagates through the entire pipeline: it controls the
+    xarray dimension name in the SIR, the CSV index column, and the feature
+    matching in the pywatershed derivation plugin.  Typical values are
+    ``"nhm_id"`` (pywatershed/NHM), ``"featureid"`` (NHDPlus), or
+    ``"hru_id"`` (custom fabrics).
+    """
 
     path: Path
     id_field: str
@@ -23,7 +59,32 @@ class TargetFabricConfig(BaseModel):
 
 
 class DomainConfig(BaseModel):
-    """Spatial domain specification."""
+    """Define the spatial domain that restricts which fabric features are processed.
+
+    When a domain is configured, stage 1 clips the target fabric to the
+    specified extent before any data fetching or zonal statistics.  When
+    omitted, the full fabric extent is used.
+
+    Only ``type="bbox"`` is currently implemented; HUC and gage-based
+    subsetting are planned.
+
+    Parameters
+    ----------
+    type : {"bbox", "huc2", "huc4", "gage"}
+        Domain specification method.
+    bbox : list[float] or None
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326 (degrees).
+        Required when ``type="bbox"``.
+    id : str or None
+        Identifier for HUC or gage-based domains (e.g., HUC-2 code or
+        USGS gage ID).  Required when ``type`` is ``"huc2"``, ``"huc4"``,
+        or ``"gage"``.
+
+    Raises
+    ------
+    ValueError
+        If the required field for the chosen ``type`` is missing.
+    """
 
     type: Literal["bbox", "huc2", "huc4", "gage"]
     bbox: list[float] | None = None
@@ -31,6 +92,7 @@ class DomainConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_domain(self) -> DomainConfig:
+        """Ensure the correct field is provided for the chosen domain type."""
         if self.type == "bbox" and self.bbox is None:
             raise ValueError("bbox domain requires 'bbox' field")
         if self.type in ("huc2", "huc4", "gage") and self.id is None:
@@ -39,7 +101,47 @@ class DomainConfig(BaseModel):
 
 
 class DatasetRequest(BaseModel):
-    """A dataset + variable selection from the pipeline config."""
+    """Request a dataset and its variables for pipeline processing.
+
+    Each entry in the ``datasets:`` list of a pipeline YAML config becomes one
+    ``DatasetRequest``.  The ``name`` is resolved against the dataset registry
+    to obtain fetch strategy, STAC collection, CRS, and variable metadata.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name as it appears in the registry (e.g., ``"dem_3dep_10m"``).
+    source : Path or None
+        Local file path override for ``local_tiff`` datasets.  When set, this
+        takes precedence over the registry-level ``source`` field.
+    variables : list[str]
+        Variable names to extract (e.g., ``["elevation", "slope"]``).
+        Empty list means no variables requested (unusual but valid).
+    statistics : list[str]
+        Zonal statistics to compute for each variable.  Defaults to
+        ``["mean"]``.  Common values: ``"mean"``, ``"majority"``,
+        ``"minority"``, ``"sum"``, ``"min"``, ``"max"``, ``"median"``.
+    year : int or list[int] or None
+        Year(s) for multi-year static datasets (e.g., NLCD annual).  When a
+        list is provided, the pipeline iterates over each year and produces
+        year-suffixed output keys (e.g., ``"land_cover_2019"``).  Valid range:
+        1900--2100.
+    time_period : list[str] or None
+        ``[start, end]`` ISO date strings (``"YYYY-MM-DD"``) for temporal
+        datasets (e.g., gridMET, SNODAS).  Required when the registry marks
+        the dataset as ``temporal: true``.
+
+    Raises
+    ------
+    ValueError
+        If ``year`` list is empty, a year is outside 1900--2100, or
+        ``time_period`` dates are invalid or out of order.
+
+    See Also
+    --------
+    hydro_param.dataset_registry.DatasetEntry : Registry metadata resolved
+        from ``name``.
+    """
 
     name: str
     source: Path | None = None
@@ -55,6 +157,7 @@ class DatasetRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_year(self) -> DatasetRequest:
+        """Validate year values are within 1900--2100."""
         if self.year is None:
             return self
         if isinstance(self.year, list) and len(self.year) == 0:
@@ -67,6 +170,7 @@ class DatasetRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_time_period(self) -> DatasetRequest:
+        """Validate time_period dates are valid ISO format and in order."""
         if self.time_period is not None:
             start_str, end_str = self.time_period
             try:
@@ -82,7 +186,21 @@ class DatasetRequest(BaseModel):
 
 
 class OutputConfig(BaseModel):
-    """Output specification."""
+    """Configure pipeline output location and format.
+
+    Parameters
+    ----------
+    path : Path
+        Directory for output files.  Created automatically if it does not
+        exist.  Subdirectories are created per dataset category (e.g.,
+        ``topography/``, ``soils/``).  Defaults to ``"./output"``.
+    format : {"netcdf", "parquet"}
+        File format for temporal output.  Static per-variable files are
+        always written as CSV.  Defaults to ``"netcdf"``.
+    sir_name : str
+        Human-readable name for the output, used in CF-1.8 metadata
+        attributes and log messages.  Defaults to ``"result"``.
+    """
 
     path: Path = Path("./output")
     format: Literal["netcdf", "parquet"] = "netcdf"
@@ -90,7 +208,42 @@ class OutputConfig(BaseModel):
 
 
 class ProcessingConfig(BaseModel):
-    """Processing options."""
+    """Control processing engine, batching, fault tolerance, and networking.
+
+    Parameters
+    ----------
+    engine : {"exactextract", "serial"}
+        Zonal statistics engine.  ``"exactextract"`` uses the
+        exactextract C++ library via gdptools for fast, coverage-weighted
+        statistics.  ``"serial"`` is a pure-Python fallback.  Defaults to
+        ``"exactextract"``.
+    failure_mode : {"strict", "tolerant"}
+        How to handle feature-level processing failures.  ``"strict"``
+        raises immediately; ``"tolerant"`` logs failed features to CSV and
+        continues.  Defaults to ``"strict"``.
+    batch_size : int
+        Maximum number of features per spatial batch.  KD-tree recursive
+        bisection groups nearby features to minimize data fetch extent.
+        Must be > 0.  Defaults to 500.
+    resume : bool
+        When ``True``, skip datasets whose outputs are already current
+        (checked via the pipeline manifest fingerprint).  Defaults to
+        ``False``.
+    sir_validation : {"tolerant", "strict"}
+        SIR validation mode for stage 5.  ``"strict"`` raises on any
+        validation warning; ``"tolerant"`` logs warnings and continues.
+        Defaults to ``"tolerant"``.
+    network_timeout : int
+        Timeout in seconds for GDAL HTTP operations (COG/vsicurl access).
+        Applied to both ``GDAL_HTTP_TIMEOUT`` and
+        ``GDAL_HTTP_CONNECTTIMEOUT`` environment variables.  Must be > 0.
+        Defaults to 120.
+
+    Notes
+    -----
+    The ``failure_mode`` parameter is not yet wired into the stage 4
+    processing loop -- it is reserved for future fault-tolerance support.
+    """
 
     engine: Literal["exactextract", "serial"] = "exactextract"
     # TODO: Wire failure_mode into stage4 error handling (continue-on-failure with logging)
@@ -102,7 +255,30 @@ class ProcessingConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    """Top-level pipeline configuration."""
+    """Top-level pipeline configuration loaded from a YAML file.
+
+    This is the root model that :func:`load_config` deserializes.  It
+    composes all sub-configs and is consumed by every pipeline stage.
+
+    Parameters
+    ----------
+    target_fabric : TargetFabricConfig
+        Polygon mesh to parameterize.
+    domain : DomainConfig or None
+        Optional spatial subsetting.  When ``None``, the full fabric
+        extent is used.
+    datasets : list[DatasetRequest]
+        One or more datasets to process.
+    output : OutputConfig
+        Output location and format.
+    processing : ProcessingConfig
+        Engine, batching, and fault-tolerance settings.
+
+    See Also
+    --------
+    load_config : Load and validate a YAML file into this model.
+    hydro_param.pipeline.run_pipeline : Execute the pipeline from a config path.
+    """
 
     target_fabric: TargetFabricConfig
     domain: DomainConfig | None = None
@@ -112,7 +288,33 @@ class PipelineConfig(BaseModel):
 
 
 def load_config(path: str | Path) -> PipelineConfig:
-    """Load and validate a pipeline YAML config file."""
+    """Load and validate a pipeline YAML config file.
+
+    Parse the YAML file at *path* and return a fully validated
+    :class:`PipelineConfig`.  Pydantic model validators run during
+    construction, so any schema violations raise immediately with
+    descriptive error messages.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to a YAML pipeline configuration file.
+
+    Returns
+    -------
+    PipelineConfig
+        Validated pipeline configuration ready for
+        :func:`~hydro_param.pipeline.run_pipeline_from_config`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If *path* does not exist.
+    yaml.YAMLError
+        If the file is not valid YAML.
+    pydantic.ValidationError
+        If the YAML content does not match the config schema.
+    """
     with open(path) as f:
         raw = yaml.safe_load(f)
     return PipelineConfig(**raw)

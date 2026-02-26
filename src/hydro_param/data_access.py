@@ -1,8 +1,30 @@
 """Data access: STAC COG loading, local GeoTIFF loading, terrain derivation.
 
-Handles fetching source data from various backends (STAC, local files)
-and deriving variables (slope, aspect from elevation). See design.md
-sections 6.12 and 11.4 for access strategy details.
+Provide unified functions for fetching raster source data from multiple
+backends (Planetary Computer STAC, local GeoTIFFs, remote VRTs via GDAL
+vsicurl) and for deriving terrain variables (slope, aspect) from elevation
+grids using pure numpy.
+
+The module supports three of the five processing strategies defined in the
+pipeline architecture:
+
+- ``stac_cog`` -- :func:`fetch_stac_cog` via Planetary Computer or USGS GDP STAC
+- ``local_tiff`` -- :func:`fetch_local_tiff` for local files or HTTP(S) COGs
+- ``climr_cat`` -- :func:`build_climr_cat_dict` for ClimateR-Catalog OPeNDAP
+
+The remaining two strategies (``nhgf_stac`` static and temporal) are handled
+directly in :mod:`hydro_param.processing` via gdptools ``NHGFStacTiffData``
+and ``NHGFStacData`` classes.
+
+See Also
+--------
+design.md : Sections 6.12 (local data preference) and 11.4 (access strategies).
+hydro_param.processing : Zonal statistics and temporal aggregation.
+
+References
+----------
+.. [1] design.md section 6.12 -- Local data over remote services.
+.. [2] design.md section 11.4 -- Data access strategy details.
 """
 
 from __future__ import annotations
@@ -37,17 +59,35 @@ def _cell_sizes_meters(
 ) -> tuple[float, float]:
     """Compute cell sizes in meters from coordinate arrays.
 
+    Convert raster cell spacing to meters so that gradient calculations
+    produce physically correct slope and aspect values regardless of the
+    source CRS. For geographic CRS (degrees), apply a latitude-dependent
+    scale factor using the WGS-84 meridional approximation (111,320 m/deg).
+
     Parameters
     ----------
-    y_coords, x_coords : np.ndarray
-        1-D coordinate arrays.
+    y_coords : np.ndarray
+        1-D array of y (latitude or northing) coordinates.
+    x_coords : np.ndarray
+        1-D array of x (longitude or easting) coordinates.
     is_geographic : bool
-        True if coordinates are in degrees (geographic CRS).
+        True if coordinates are in degrees (geographic CRS such as
+        EPSG:4269 or EPSG:4326). False for projected CRS where
+        native units are already meters.
 
     Returns
     -------
-    dy_m, dx_m : float
-        Cell sizes in meters.
+    dy_m : float
+        Cell size in the y direction, in meters.
+    dx_m : float
+        Cell size in the x direction, in meters.
+
+    Notes
+    -----
+    The latitude correction uses ``cos(center_lat)`` to approximate the
+    east-west distance at the centroid latitude. This is adequate for the
+    small spatial extents of individual processing batches but would
+    introduce error for continent-scale grids.
     """
     dy = float(np.abs(np.median(np.diff(y_coords))))
     dx = float(np.abs(np.median(np.diff(x_coords))))
@@ -70,16 +110,25 @@ def derive_slope(
     x_coord: str = "x",
     y_coord: str = "y",
 ) -> xr.DataArray:
-    """Compute slope in degrees from an elevation DataArray.
+    """Compute terrain slope in degrees from an elevation DataArray.
 
-    Uses Horn (1981) method via numpy.gradient.
+    Derive slope from a DEM raster using the Horn (1981) finite-difference
+    method implemented via ``numpy.gradient``. The result is used by
+    pywatershed derivation step 3 (topography) for parameters such as
+    ``hru_slope``.
+
+    Elevation units do not matter for slope computation as long as they
+    are consistent with the cell size (both converted to meters internally
+    via :func:`_cell_sizes_meters`).
 
     Parameters
     ----------
     elevation : xr.DataArray
-        2-D elevation raster with spatial coordinates.
+        2-D elevation raster with spatial coordinates. May be in any CRS;
+        geographic CRS coordinates (degrees) are automatically converted
+        to meters for gradient computation.
     method : str
-        Derivation method. Only ``"horn"`` is supported.
+        Derivation method. Only ``"horn"`` is currently supported.
     x_coord : str
         Name of the x coordinate dimension in the DataArray.
     y_coord : str
@@ -88,7 +137,30 @@ def derive_slope(
     Returns
     -------
     xr.DataArray
-        Slope in degrees, same shape and coordinates as input.
+        Slope in degrees [0, 90], with the same shape, coordinates, and
+        CRS as the input elevation. Output attributes include
+        ``units="degrees"`` and ``long_name="Terrain slope"``.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is not ``"horn"``.
+
+    Notes
+    -----
+    The Horn method computes slope as ``arctan(sqrt(dz/dx² + dz/dy²))``,
+    where the partial derivatives are estimated by ``numpy.gradient``
+    using second-order central differences.
+
+    References
+    ----------
+    .. [1] Horn, B.K.P. (1981). "Hill shading and the reflectance map."
+       Proceedings of the IEEE, 69(1), 14-47.
+
+    See Also
+    --------
+    derive_aspect : Compute terrain aspect from the same elevation input.
+    _cell_sizes_meters : Convert coordinate spacing to meters.
     """
     if method != "horn":
         raise ValueError(f"Unsupported slope method: {method}")
@@ -118,14 +190,24 @@ def derive_aspect(
     x_coord: str = "x",
     y_coord: str = "y",
 ) -> xr.DataArray:
-    """Compute aspect in degrees (clockwise from north) from elevation.
+    """Compute terrain aspect in degrees clockwise from north.
+
+    Derive aspect (downslope direction) from a DEM raster using the Horn
+    (1981) finite-difference method. The result is used by pywatershed
+    derivation step 3 (topography) for parameters such as ``hru_aspect``.
+
+    Aspect is measured as a compass bearing: 0 degrees = north, 90 = east,
+    180 = south, 270 = west. Flat areas where both partial derivatives are
+    zero will have an aspect of 0 degrees (north by convention).
 
     Parameters
     ----------
     elevation : xr.DataArray
-        2-D elevation raster with spatial coordinates.
+        2-D elevation raster with spatial coordinates. May be in any CRS;
+        geographic CRS coordinates (degrees) are automatically converted
+        to meters for gradient computation.
     method : str
-        Derivation method. Only ``"horn"`` is supported.
+        Derivation method. Only ``"horn"`` is currently supported.
     x_coord : str
         Name of the x coordinate dimension in the DataArray.
     y_coord : str
@@ -134,7 +216,31 @@ def derive_aspect(
     Returns
     -------
     xr.DataArray
-        Aspect in degrees [0, 360), same shape and coordinates.
+        Aspect in degrees [0, 360), with the same shape, coordinates, and
+        CRS as the input elevation. Output attributes include
+        ``units="degrees"`` and ``long_name="Terrain aspect (clockwise
+        from north)"``.
+
+    Raises
+    ------
+    ValueError
+        If ``method`` is not ``"horn"``.
+
+    Notes
+    -----
+    Aspect is computed as ``atan2(-dz/dx, -dz/dy)`` (negated gradients
+    give the descent direction), then converted from mathematical angle
+    to compass bearing by adding 360 and taking modulo 360.
+
+    References
+    ----------
+    .. [1] Horn, B.K.P. (1981). "Hill shading and the reflectance map."
+       Proceedings of the IEEE, 69(1), 14-47.
+
+    See Also
+    --------
+    derive_slope : Compute terrain slope from the same elevation input.
+    _cell_sizes_meters : Convert coordinate spacing to meters.
     """
     if method != "horn":
         raise ValueError(f"Unsupported aspect method: {method}")
@@ -175,23 +281,50 @@ def query_stac_items(
     entry: DatasetEntry,
     bbox: list[float],
 ) -> list[Any]:
-    """Query a STAC catalog and return matching items.
+    """Query a STAC catalog and return matching items for a bounding box.
 
-    Handles client creation, optional Planetary Computer signing,
-    search, and GSD filtering. The returned items can be passed to
-    ``fetch_stac_cog(..., items=...)`` to avoid repeated queries.
+    Handle client creation, optional Planetary Computer signing, spatial
+    search, and GSD (ground sample distance) filtering. The returned items
+    can be passed to ``fetch_stac_cog(..., items=...)`` to avoid repeated
+    queries when multiple variables share the same STAC collection within
+    a single processing batch.
+
+    This function was extracted from :func:`fetch_stac_cog` in PR #72 to
+    enable STAC query reuse across variables, reducing redundant network
+    calls during batch processing.
 
     Parameters
     ----------
     entry : DatasetEntry
-        Registry entry with ``strategy="stac_cog"``.
+        Registry entry with ``strategy="stac_cog"``. Must have non-None
+        ``catalog_url`` and ``collection`` fields.
     bbox : list[float]
-        ``[west, south, east, north]`` in EPSG:4326.
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326
+        decimal degrees.
 
     Returns
     -------
-    list
-        Matching STAC items (signed if required).
+    list[Any]
+        Matching STAC items (signed if ``entry.sign`` is set). Items are
+        ``pystac.Item`` objects suitable for asset access.
+
+    Raises
+    ------
+    ValueError
+        If ``entry.catalog_url`` or ``entry.collection`` is None.
+    RuntimeError
+        If no STAC items match the given collection and bounding box.
+
+    Notes
+    -----
+    When ``entry.gsd`` is set, items are filtered to those matching the
+    target ground sample distance (e.g., 10 m for 3DEP 1/3 arc-second).
+    If no items match the GSD filter, all unfiltered items are returned
+    with a warning.
+
+    See Also
+    --------
+    fetch_stac_cog : Load and mosaic COG data from the returned items.
     """
     import pystac_client
 
@@ -246,30 +379,63 @@ def fetch_stac_cog(
     asset_key: str | None = None,
     items: list[Any] | None = None,
 ) -> xr.DataArray:
-    """Query a STAC catalog and load COG(s) clipped to the bounding box.
+    """Load Cloud Optimized GeoTIFF(s) from a STAC catalog, clipped to bbox.
 
-    Handles multi-tile mosaicing when a bounding box spans multiple
-    STAC items.
+    Fetch one or more COG tiles from a STAC collection (e.g., 3DEP on
+    Planetary Computer, gNATSGO rasters), clip each to the bounding box,
+    and mosaic them into a single DataArray. This is the primary data
+    loader for the ``stac_cog`` processing strategy.
+
+    Multi-tile mosaicing is handled automatically when a bounding box
+    spans multiple STAC items (common at DEM tile boundaries).
 
     Parameters
     ----------
     entry : DatasetEntry
-        Registry entry with ``strategy="stac_cog"``.
+        Registry entry with ``strategy="stac_cog"``. Must have non-None
+        ``catalog_url`` and ``collection`` fields.
     bbox : list[float]
-        ``[west, south, east, north]`` in EPSG:4326.
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326
+        decimal degrees. Typically comes from
+        :func:`hydro_param.pipeline._buffered_bbox`.
     asset_key : str or None
         Per-variable STAC asset key override. When not ``None``, this is
         used instead of ``entry.asset_key``. Necessary for collections
         like ``gnatsgo-rasters`` where each variable is a separate named
-        asset (i.e., there is no single ``data`` asset).
-    items : list or None
+        asset (e.g., ``"sandtotal_r"``) rather than a single ``"data"``
+        asset.
+    items : list[Any] or None
         Pre-fetched STAC items from :func:`query_stac_items`. When
-        provided, the STAC query is skipped entirely.
+        provided, the STAC query is skipped entirely, saving redundant
+        network calls when processing multiple variables from the same
+        collection within a batch.
 
     Returns
     -------
     xr.DataArray
-        Raster data clipped to the bounding box.
+        2-D raster data clipped to the bounding box, in the source CRS
+        (typically EPSG:4269 for 3DEP, EPSG:5070 for gNATSGO). The band
+        dimension is squeezed out.
+
+    Raises
+    ------
+    KeyError
+        If ``asset_key`` (or ``entry.asset_key``) is not found in any
+        STAC item. The error message lists available data assets.
+    RuntimeError
+        If no data remains after clipping all tiles to the bounding box.
+
+    Notes
+    -----
+    Tiles that do not overlap the bounding box after precise clipping are
+    silently skipped (logged at DEBUG level). This is expected when STAC
+    search returns items whose coarse footprints overlap but whose actual
+    data does not.
+
+    See Also
+    --------
+    query_stac_items : Pre-query STAC items for reuse across variables.
+    fetch_local_tiff : Load data from local GeoTIFF files.
     """
     import rioxarray  # noqa: F401
 
@@ -330,11 +496,11 @@ def fetch_stac_cog(
 
 
 def _is_remote_url(source: str) -> bool:
-    """Check if a source string is a remote HTTP(S) URL.
+    """Return True if the source string is an HTTP or HTTPS URL.
 
     Only HTTP/HTTPS URLs are supported for direct remote access via GDAL
-    vsicurl. Other remote schemes (s3://, gs://) require different GDAL
-    virtual filesystem handlers and are not handled here.
+    vsicurl. Other remote schemes (``s3://``, ``gs://``) require different
+    GDAL virtual filesystem handlers and are not handled here.
     """
     return source.startswith(("http://", "https://"))
 
@@ -346,42 +512,62 @@ def fetch_local_tiff(
     dataset_name: str = "unknown",
     variable_source: str | None = None,
 ) -> xr.DataArray:
-    """Load a local GeoTIFF (or remote VRT/COG) clipped to the bounding box.
+    """Load a local GeoTIFF or remote COG/VRT clipped to a bounding box.
 
-    Reads the file referenced by ``variable_source`` (per-variable override),
-    ``entry.source`` (dataset-level), or raises an error if neither is set.
-    Remote HTTP(S) URLs are opened directly via GDAL vsicurl — no local
-    file existence check is performed.
+    Read a raster file referenced by ``variable_source`` (per-variable
+    override) or ``entry.source`` (dataset-level default), clip it to the
+    bounding box, and return a 2-D DataArray. This is the primary data
+    loader for the ``local_tiff`` processing strategy.
 
-    Note: The function name ``fetch_local_tiff`` corresponds to the
-    ``strategy="local_tiff"`` enum value in the registry schema. The strategy
-    supports both local paths and remote HTTP(S) URLs via GDAL vsicurl.
+    Despite the name, this function supports both local file paths and
+    remote HTTP(S) URLs (opened via GDAL vsicurl). The function name
+    matches the ``strategy="local_tiff"`` enum value in the dataset
+    registry schema.
+
+    Source resolution order:
+
+    1. ``variable_source`` (per-variable override, e.g., for POLARIS where
+       each soil property is a separate file)
+    2. ``entry.source`` (dataset-level path from pipeline config)
+    3. Raise ``ValueError`` with download instructions if available
 
     Parameters
     ----------
     entry : DatasetEntry
         Registry entry with ``strategy="local_tiff"``.
     bbox : list[float]
-        ``[west, south, east, north]`` in EPSG:4326.
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326
+        decimal degrees.
     dataset_name : str
-        Dataset name for use in error messages.
+        Dataset name for use in error messages and download instructions.
     variable_source : str or None
         Per-variable source path or URL. Takes precedence over
-        ``entry.source`` when set.
+        ``entry.source`` when set. Common for datasets where each
+        variable is stored in a separate file (e.g., POLARIS soil
+        properties).
 
     Returns
     -------
     xr.DataArray
-        Raster data clipped to the bounding box.
+        2-D raster data clipped to the bounding box, in the source CRS.
+        The band dimension is squeezed out.
 
     Raises
     ------
     ValueError
-        If no source is available (neither variable_source nor entry.source).
+        If no source is available (neither ``variable_source`` nor
+        ``entry.source``). The error message includes download
+        instructions when ``entry.download`` metadata is available.
     FileNotFoundError
-        If the source is a local path that does not exist.
+        If the source is a local path that does not exist on disk.
     RuntimeError
-        If no data remains after clipping to the bounding box.
+        If no data remains after clipping to the bounding box, or if
+        a remote URL fails to open.
+
+    See Also
+    --------
+    fetch_stac_cog : Load data from STAC-cataloged COGs.
+    save_to_geotiff : Write a DataArray back to GeoTIFF format.
     """
     import rioxarray  # noqa: F401
     from rioxarray.exceptions import NoDataInBounds
@@ -461,19 +647,40 @@ def fetch_local_tiff(
 
 
 def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
-    """Save an xarray DataArray as a GeoTIFF.
+    """Write an xarray DataArray to a GeoTIFF file.
+
+    Save raster data as a single-band GeoTIFF via rioxarray. This is used
+    by the pipeline to cache intermediate raster results (e.g., clipped
+    source data for a batch) before passing them to gdptools ZonalGen.
+
+    The function temporarily removes ``_FillValue`` from attributes and
+    encoding to avoid conflicts with rioxarray's internal encoding, then
+    restores them afterward. This avoids a full ``.copy()`` of the
+    DataArray, which was identified as a memory bottleneck in PR #72.
 
     Parameters
     ----------
     da : xr.DataArray
-        Raster data with CRS information.
+        Raster data with CRS information (via rioxarray accessor).
     path : Path
-        Output file path.
+        Output file path. Parent directory must exist.
 
     Returns
     -------
     Path
-        The output path (same as input).
+        The output path (same as input), for convenience in chaining.
+
+    Notes
+    -----
+    Uses a sentinel-based pop/restore pattern instead of ``da.copy()``
+    to avoid doubling memory usage for large rasters (e.g., gNATSGO
+    tiles at ~1.25 GB each). See PR #72 for the memory optimization
+    rationale.
+
+    See Also
+    --------
+    fetch_local_tiff : Load a GeoTIFF back into a DataArray.
+    fetch_stac_cog : Load COG data from STAC.
     """
     import rioxarray  # noqa: F401
 
@@ -500,17 +707,33 @@ def save_to_geotiff(da: xr.DataArray, path: Path) -> Path:
 def load_climr_catalog(
     catalog_url: str = CLIMR_CATALOG_URL,
 ) -> pd.DataFrame:
-    """Load the ClimateR-Catalog parquet file.
+    """Load the ClimateR-Catalog as a pandas DataFrame.
+
+    Fetch and parse the ClimateR-Catalog parquet file, which indexes
+    1,700+ climate and environmental datasets with OPeNDAP endpoints.
+    The catalog is used by the ``climr_cat`` processing strategy to
+    resolve variable-level metadata for gdptools ``ClimRCatData``.
 
     Parameters
     ----------
     catalog_url : str
-        URL to the catalog parquet file.
+        URL to the catalog parquet file. Defaults to the June 2024
+        release from the mikejohnson51/climateR-catalogs repository.
 
     Returns
     -------
     pd.DataFrame
-        The full ClimateR catalog.
+        The full ClimateR catalog with columns including ``id``,
+        ``variable``, ``URL``, ``units``, and spatial metadata.
+
+    References
+    ----------
+    .. [1] Johnson, J.M. climateR-catalogs.
+       https://github.com/mikejohnson51/climateR-catalogs
+
+    See Also
+    --------
+    build_climr_cat_dict : Build per-variable dicts from the loaded catalog.
     """
     logger.info("Loading ClimateR catalog from %s", catalog_url)
     return pd.read_parquet(catalog_url)
@@ -521,26 +744,42 @@ def build_climr_cat_dict(
     catalog_id: str,
     variable_names: list[str],
 ) -> dict[str, dict[str, Any]]:
-    """Build ``source_cat_dict`` for ``ClimRCatData`` from the catalog.
+    """Build a ``source_cat_dict`` for gdptools ``ClimRCatData``.
+
+    Extract per-variable metadata rows from the ClimateR-Catalog and
+    format them as the dictionary structure expected by gdptools
+    ``ClimRCatData`` constructor. Each entry contains the OPeNDAP URL,
+    variable name, CRS, and spatial extent needed for data access.
 
     Parameters
     ----------
     catalog : pd.DataFrame
-        Full ClimateR catalog (from :func:`load_climr_catalog`).
+        Full ClimateR catalog loaded by :func:`load_climr_catalog`.
     catalog_id : str
-        Dataset identifier in the catalog (e.g. ``"gridmet"``).
+        Dataset identifier in the catalog (e.g., ``"gridmet"`` for
+        gridMET via OPeNDAP, ``"daymet"`` for Daymet).
     variable_names : list[str]
-        Variables to extract (e.g. ``["pr", "tmmx"]``).
+        Variables to extract (e.g., ``["pr", "tmmx"]`` for gridMET
+        precipitation and max temperature).
 
     Returns
     -------
     dict[str, dict[str, Any]]
-        Mapping of variable name → catalog row dict.
+        Mapping of variable name to catalog row as a dictionary. Each
+        value contains all columns from the catalog for that variable,
+        ready for ``ClimRCatData(source_cat_dict=...)``.
 
     Raises
     ------
     ValueError
-        If a variable is not found in the catalog for the given id.
+        If ``catalog_id`` is not found in the catalog, or if any
+        variable in ``variable_names`` is not available for the given
+        catalog ID. The error message lists available options.
+
+    See Also
+    --------
+    load_climr_catalog : Load the catalog DataFrame.
+    TemporalProcessor.process_climr_cat : Use the dict for temporal processing.
     """
     if catalog_id not in catalog["id"].values:
         available_ids = sorted(catalog["id"].unique())

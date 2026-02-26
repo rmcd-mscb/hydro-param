@@ -1,8 +1,26 @@
-"""Pipeline manifest for resume support.
+"""Manage the pipeline manifest for incremental resume support.
 
-Records what config produced each output file so that re-runs with
-``resume: true`` can skip datasets whose outputs are already complete
-and inputs haven't changed.
+Record which configuration produced each output file so that re-runs
+with ``resume: true`` can skip datasets whose outputs are already
+complete and whose inputs (config, registry entry, processing options)
+have not changed.
+
+The manifest is stored as ``.manifest.yml`` in the output directory
+and tracks per-dataset SHA-256 fingerprints, output file paths, and
+completion timestamps.  A separate fabric fingerprint detects when
+the target fabric file has changed, invalidating all cached results.
+
+Notes
+-----
+The manifest uses cheap file-metadata proxies (filename, mtime, size)
+for fabric identity and content-based SHA-256 hashing for dataset
+configuration identity.  This avoids hashing large GeoPackage files
+while still detecting config changes reliably.
+
+See Also
+--------
+hydro_param.pipeline : Pipeline orchestrator that reads/writes manifests.
+hydro_param.cli.run_cmd : CLI ``--resume`` flag that enables manifest use.
 """
 
 from __future__ import annotations
@@ -31,10 +49,27 @@ _SUPPORTED_VERSION = 1
 
 
 class ManifestEntry(BaseModel):
-    """A single dataset's entry in the pipeline manifest.
+    """Represent a single dataset's record in the pipeline manifest.
 
-    Keys in ``static_files`` and ``temporal_files`` are variable/result
-    names; values are paths relative to the output directory.
+    Track the configuration fingerprint, output file paths, and
+    completion timestamp for one dataset.  Used to determine whether
+    a dataset can be skipped during resume runs.
+
+    Attributes
+    ----------
+    fingerprint : str
+        SHA-256 fingerprint of the dataset request, registry entry,
+        variable specs, and processing config.  Format:
+        ``"sha256:<hex>"``.
+    static_files : dict[str, str]
+        Mapping of variable/result names to output file paths
+        relative to the output directory.
+    temporal_files : dict[str, str]
+        Mapping of temporal variable names to output file paths
+        relative to the output directory.
+    completed_at : datetime
+        UTC timestamp when processing completed.  Defaults to
+        ``datetime.min`` for incomplete or legacy entries.
     """
 
     fingerprint: str
@@ -45,14 +80,32 @@ class ManifestEntry(BaseModel):
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
-        """Accept ISO strings and empty strings (legacy/partial manifests)."""
+        """Parse ISO date strings and accept empty strings for legacy manifests."""
         if isinstance(v, str):
             return datetime.fromisoformat(v) if v else datetime.min
         return v
 
 
 class PipelineManifest(BaseModel):
-    """Pipeline manifest recording what config produced each output file."""
+    """Record what configuration produced each output file.
+
+    The manifest is the top-level structure persisted as
+    ``.manifest.yml`` in the output directory.  It contains a fabric
+    fingerprint (to detect fabric changes) and per-dataset entries
+    (to detect config changes and verify output completeness).
+
+    Attributes
+    ----------
+    version : int
+        Manifest schema version.  Must equal ``_SUPPORTED_VERSION``
+        (currently 1).  Incompatible versions cause a validation error.
+    fabric_fingerprint : str
+        Fingerprint of the target fabric file (format:
+        ``"{filename}|{mtime}|{size}"``).  Empty string for new
+        manifests.
+    entries : dict[str, ManifestEntry]
+        Per-dataset manifest entries, keyed by dataset name.
+    """
 
     version: int = _SUPPORTED_VERSION
     fabric_fingerprint: str = ""
@@ -61,19 +114,38 @@ class PipelineManifest(BaseModel):
     @field_validator("version")
     @classmethod
     def _check_version(cls, v: int) -> int:
+        """Reject manifest versions that don't match the current schema."""
         if v != _SUPPORTED_VERSION:
             raise ValueError(f"Unsupported manifest version {v} (expected {_SUPPORTED_VERSION})")
         return v
 
     def save(self, output_dir: Path) -> None:
-        """Write manifest to ``{output_dir}/.manifest.yml``."""
+        """Write the manifest to ``{output_dir}/.manifest.yml``.
+
+        Parameters
+        ----------
+        output_dir
+            Output directory.  Created if it does not exist.
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
         data = self.model_dump(mode="json")
         manifest_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
     def is_fabric_current(self, expected_fingerprint: str) -> bool:
-        """Check whether the fabric fingerprint matches."""
+        """Check whether the stored fabric fingerprint matches the expected value.
+
+        Parameters
+        ----------
+        expected_fingerprint
+            Fingerprint computed from the current fabric file via
+            ``fabric_fingerprint()``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the fingerprints match (fabric unchanged).
+        """
         return self.fabric_fingerprint == expected_fingerprint
 
     def is_dataset_current(
@@ -82,11 +154,31 @@ class PipelineManifest(BaseModel):
         fingerprint: str,
         output_dir: Path,
     ) -> bool:
-        """Check whether a dataset's outputs are still valid.
+        """Check whether a dataset's outputs are still valid for reuse.
 
-        Returns ``True`` when the dataset is present in the manifest,
-        the fingerprint matches, AND all listed output files exist on
-        disk.  Returns ``False`` for unknown datasets.
+        A dataset is considered current when all three conditions hold:
+
+        1. The dataset name exists in the manifest.
+        2. The stored fingerprint matches the computed fingerprint
+           (no config changes).
+        3. All listed output files (static and temporal) exist on disk.
+
+        Parameters
+        ----------
+        ds_name
+            Dataset name as it appears in the pipeline config.
+        fingerprint
+            SHA-256 fingerprint computed from the current dataset
+            request, registry entry, variable specs, and processing
+            config via ``dataset_fingerprint()``.
+        output_dir
+            Output directory used to resolve relative file paths.
+
+        Returns
+        -------
+        bool
+            ``True`` if the dataset can be skipped (outputs are
+            current); ``False`` if it needs reprocessing.
         """
         if ds_name not in self.entries:
             return False
@@ -103,11 +195,30 @@ class PipelineManifest(BaseModel):
 
 
 def load_manifest(output_dir: Path) -> PipelineManifest | None:
-    """Load a manifest from disk, returning ``None`` if missing or corrupt.
+    """Load a manifest from disk, returning ``None`` if absent or corrupt.
 
-    I/O and permission errors are raised (not swallowed) so the caller
-    can surface actionable diagnostics.  Only YAML parse errors and
-    schema validation errors result in a ``None`` return.
+    Attempt to read and parse ``.manifest.yml`` from the output
+    directory.  Filesystem errors (permissions, I/O) propagate to the
+    caller for actionable diagnostics.  YAML parse errors and Pydantic
+    validation failures are caught, logged as warnings, and result in
+    a ``None`` return (triggering full reprocessing).
+
+    Parameters
+    ----------
+    output_dir
+        Directory containing ``.manifest.yml``.
+
+    Returns
+    -------
+    PipelineManifest or None
+        Loaded manifest, or ``None`` if the file does not exist or
+        fails to parse/validate.
+
+    Raises
+    ------
+    OSError
+        If the file exists but cannot be read (permissions, disk
+        errors).
     """
     manifest_path = output_dir / MANIFEST_FILENAME
     if not manifest_path.exists():
@@ -131,13 +242,34 @@ def load_manifest(output_dir: Path) -> PipelineManifest | None:
 def fabric_fingerprint(config: PipelineConfig) -> str:
     """Compute a fingerprint for the target fabric file.
 
-    Returns ``"{filename}|{mtime}|{size}"`` as a cheap proxy for
-    content identity without hashing large GeoPackages.
+    Return ``"{filename}|{mtime}|{size}"`` as a cheap proxy for
+    content identity without hashing large GeoPackage files.
 
-    Note: mtime changes when a file is copied or restored from backup,
-    causing unnecessary reprocessing even if content is identical.
-    This is acceptable for MVP but may warrant content-based hashing
-    for large production workflows.
+    Parameters
+    ----------
+    config
+        Pipeline configuration containing the ``target_fabric.path``.
+
+    Returns
+    -------
+    str
+        Fingerprint string in the format ``"{filename}|{mtime}|{size}"``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the fabric file does not exist at the configured path.
+
+    Notes
+    -----
+    The mtime-based fingerprint changes when a file is copied or
+    restored from backup, causing unnecessary reprocessing even if
+    content is identical.  This is acceptable for MVP but may warrant
+    content-based hashing for large production workflows.
+
+    This function deliberately avoids hashing geometry coordinates,
+    consistent with the project's cache-by-stable-ID principle (see
+    CLAUDE.md architectural decision 7).
     """
     path = config.target_fabric.path
     try:
@@ -156,14 +288,41 @@ def dataset_fingerprint(
     var_specs: list[VariableSpec | DerivedVariableSpec],
     processing: ProcessingConfig,
 ) -> str:
-    """Compute a SHA-256 fingerprint for a dataset request.
+    """Compute a SHA-256 fingerprint for a dataset processing request.
 
-    Captures the fields that affect processing output so that any
-    config change triggers reprocessing.
+    Serialize all fields that affect processing output into a canonical
+    JSON representation and hash it with SHA-256.  Any change to the
+    dataset request, registry entry metadata, variable specifications,
+    or processing options will produce a different fingerprint,
+    triggering reprocessing on resume.
 
-    Deliberately excluded (do not affect output content):
+    Parameters
+    ----------
+    ds_req
+        Dataset request from the pipeline config (name, variables,
+        statistics, year, time_period, source override).
+    entry
+        Registry entry for the dataset (strategy, source paths, CRS,
+        STAC collection, etc.).
+    var_specs
+        Resolved variable specifications (band numbers, categorical
+        flags) and derived variable specifications (source, method).
+    processing
+        Processing config (engine type, batch size).
+
+    Returns
+    -------
+    str
+        Fingerprint in the format ``"sha256:<64-char-hex>"``.
+
+    Notes
+    -----
+    Deliberately excluded fields (do not affect output content):
     ``resume``, ``failure_mode``, ``description``, ``download``,
-    ``year_range`` (informational).
+    ``year_range`` (informational only).
+
+    The JSON serialization uses sorted keys and compact separators
+    to ensure deterministic output across Python versions.
     """
     canonical: dict[str, object] = {
         "ds_req": {
@@ -220,7 +379,31 @@ def make_manifest_entry(
     temporal_files: dict[str, Path],
     output_dir: Path,
 ) -> ManifestEntry:
-    """Create a ManifestEntry with paths relative to output_dir."""
+    """Create a ManifestEntry with paths stored relative to the output directory.
+
+    Convert absolute file paths to relative paths for portability
+    (the output directory can be moved without invalidating the
+    manifest) and stamp the entry with the current UTC time.
+
+    Parameters
+    ----------
+    fingerprint
+        SHA-256 fingerprint for the dataset configuration (from
+        ``dataset_fingerprint()``).
+    static_files
+        Mapping of variable names to absolute paths for static
+        output files.
+    temporal_files
+        Mapping of variable names to absolute paths for temporal
+        output files.
+    output_dir
+        Root output directory used to compute relative paths.
+
+    Returns
+    -------
+    ManifestEntry
+        Entry ready for insertion into ``PipelineManifest.entries``.
+    """
     return ManifestEntry(
         fingerprint=fingerprint,
         static_files={k: str(v.relative_to(output_dir)) for k, v in static_files.items()},
