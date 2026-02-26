@@ -129,6 +129,7 @@ ruff = "*"
 mypy = "*"
 pre-commit = "*"
 ipykernel = ">=7.2.0,<8"
+pynhd = ">=0.19.4,<0.20"
 
 [tool.pixi.feature.dev.tasks]
 test = "pytest tests/ --cov=src/hydro_param --cov-report=term-missing"
