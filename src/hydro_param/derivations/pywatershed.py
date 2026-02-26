@@ -943,7 +943,10 @@ class PywatershedDerivation:
             ds["jh_coef"] = xr.DataArray(
                 np.full((nhru, 12), _DEFAULTS["jh_coef"]),
                 dims=("nhru", "nmonths"),
-                attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient (default)"},
+                attrs={
+                    "units": "per_degF_per_day",
+                    "long_name": "Jensen-Haise PET coefficient (default)",
+                },
             )
 
         # Special handling for transp_beg/transp_end (integer, per-HRU)
@@ -1257,9 +1260,7 @@ class PywatershedDerivation:
             else:
                 merged = chunks[0]
 
-            dataset_cfg = self._detect_forcing_dataset(
-                source_name, merged, datasets_config
-            )
+            dataset_cfg = self._detect_forcing_dataset(source_name, merged, datasets_config)
             if dataset_cfg is None:
                 continue
 
@@ -1308,9 +1309,7 @@ class PywatershedDerivation:
         """
         normals = self._compute_monthly_normals(ctx)
         if normals is None:
-            logger.info(
-                "No temporal data for PET coefficients; deferring to defaults."
-            )
+            logger.info("No temporal data for PET coefficients; deferring to defaults.")
             return ds
 
         monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
@@ -1376,9 +1375,7 @@ class PywatershedDerivation:
         """
         normals = self._compute_monthly_normals(ctx)
         if normals is None:
-            logger.info(
-                "No temporal data for transpiration timing; deferring to defaults."
-            )
+            logger.info("No temporal data for transpiration timing; deferring to defaults.")
             return ds
 
         _monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F

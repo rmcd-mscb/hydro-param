@@ -2081,15 +2081,17 @@ class TestDerivePetCoefficients:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef should have shape (nhru, 12)."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2106,15 +2108,17 @@ class TestDerivePetCoefficients:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef_hru should have shape (nhru,)."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2131,15 +2135,17 @@ class TestDerivePetCoefficients:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef values should be in [0.005, 0.06]."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2166,15 +2172,17 @@ class TestDerivePetCoefficients:
         sir_topography: xr.Dataset,
     ) -> None:
         """Without temporal data, jh_coef/jh_coef_hru use defaults."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         # Defaults set by _apply_defaults (step 13)
@@ -2192,15 +2200,17 @@ class TestDeriveTranspTiming:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg should have shape (nhru,)."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2217,15 +2227,17 @@ class TestDeriveTranspTiming:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_end should have shape (nhru,)."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2242,15 +2254,17 @@ class TestDeriveTranspTiming:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg and transp_end should be integers in [1, 12]."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2269,15 +2283,17 @@ class TestDeriveTranspTiming:
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg should be before transp_end for temperate climates."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2357,15 +2373,17 @@ class TestDeriveTranspTiming:
         sir_topography: xr.Dataset,
     ) -> None:
         """Without temporal data, transp_beg/end use defaults."""
-        sir = xr.merge([
-            sir_topography,
-            xr.Dataset(
-                {
-                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                },
-                coords={"nhm_id": [1, 2, 3]},
-            ),
-        ])
+        sir = xr.merge(
+            [
+                sir_topography,
+                xr.Dataset(
+                    {
+                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                    },
+                    coords={"nhm_id": [1, 2, 3]},
+                ),
+            ]
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "transp_beg" in ds
@@ -2373,3 +2391,76 @@ class TestDeriveTranspTiming:
         # Defaults: beg=4, end=10
         np.testing.assert_array_equal(ds["transp_beg"].values, [4, 4, 4])
         np.testing.assert_array_equal(ds["transp_end"].values, [10, 10, 10])
+
+
+class TestDeriveIntegrationPetTransp:
+    """Integration test: full derive() produces PET and transpiration params."""
+
+    def test_full_pipeline_with_temporal_produces_all_params(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Full derive() with temporal data produces all PET/transp params."""
+        import pandas as pd
+
+        rng = np.random.default_rng(42)
+        nhru = 2
+
+        def _make_ds(year: int) -> xr.Dataset:
+            times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+            ntime = len(times)
+            return xr.Dataset(
+                {
+                    "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
+                    "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
+                    "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
+                    "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
+                    "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
+                },
+                coords={"time": times, "nhm_id": [1, 2]},
+            )
+
+        temporal = {
+            "gridmet_2020": _make_ds(2020),
+            "gridmet_2021": _make_ds(2021),
+        }
+
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([200.0, 800.0])),
+                "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0, 90.0])),
+                "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0])),
+                "land_cover": ("nhm_id", np.array([42, 71])),
+                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
+                "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0])),
+                "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
+                "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
+                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
+                "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal,
+        )
+        ds = derivation.derive(ctx)
+
+        # PET params
+        assert "jh_coef" in ds
+        assert ds["jh_coef"].dims == ("nhru", "nmonths")
+        assert ds["jh_coef"].shape == (2, 12)
+        assert "jh_coef_hru" in ds
+        assert ds["jh_coef_hru"].shape == (2,)
+
+        # Transpiration params
+        assert "transp_beg" in ds
+        assert "transp_end" in ds
+        assert ds["transp_beg"].shape == (2,)
+        assert ds["transp_end"].shape == (2,)
+        assert np.all(ds["transp_beg"].values >= 1)
+        assert np.all(ds["transp_end"].values <= 12)
