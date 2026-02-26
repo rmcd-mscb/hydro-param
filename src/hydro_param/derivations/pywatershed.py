@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, and 14.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, and 14.
 """
 
 from __future__ import annotations
@@ -189,9 +189,9 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 10 (PET
-    coefficients), 11 (transpiration timing), 13 (defaults), and
-    14 (calibration seeds).
+    5 (soils), 6 (waterbody overlay), 7 (forcing), 8 (lookup tables),
+    9 (soltab), 10 (PET coefficients), 11 (transpiration timing),
+    13 (defaults), and 14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -235,6 +235,9 @@ class PywatershedDerivation:
 
         # Step 5: Soils parameters (soil_type, soil_moist_max, soil_rechr_max_frac)
         ds = self._derive_soils(context, ds)
+
+        # Step 6: Waterbody overlay (dprst_frac, dprst_area_max, hru_type)
+        ds = self._derive_waterbody(ds, context)
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
