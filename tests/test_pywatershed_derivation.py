@@ -1995,3 +1995,77 @@ class TestMergeTemporalDeprecation:
         ds = xr.Dataset({"x": ("nhru", [1.0])})
         with pytest.warns(DeprecationWarning, match="deprecated"):
             merge_temporal_into_derived(ds, {})
+
+
+class TestSatVp:
+    """Tests for saturation vapor pressure helper."""
+
+    def test_freezing_point(self) -> None:
+        """sat_vp at 32°F (0°C) should be ~6.11 hPa."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        result = _sat_vp(np.array([32.0]))
+        np.testing.assert_allclose(result, 6.1078, atol=0.01)
+
+    def test_boiling_point(self) -> None:
+        """sat_vp at 212°F (100°C) should be ~1013 hPa."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        result = _sat_vp(np.array([212.0]))
+        np.testing.assert_allclose(result, 1013.0, rtol=0.02)
+
+    def test_vectorized(self) -> None:
+        """sat_vp works on arrays."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        temps = np.array([32.0, 50.0, 68.0, 86.0])
+        result = _sat_vp(temps)
+        assert result.shape == (4,)
+        assert np.all(np.diff(result) > 0), "sat_vp should increase with temperature"
+
+
+class TestComputeMonthlyNormals:
+    """Tests for monthly climate normals computation."""
+
+    def test_returns_none_without_temporal(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        """No temporal data -> returns None."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        result = derivation._compute_monthly_normals(ctx)
+        assert result is None
+
+    def test_returns_monthly_arrays(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """With temporal data, returns (tmax, tmin) each shape (12, nhru)."""
+        ctx = DerivationContext(
+            sir=sir_topography,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        result = derivation._compute_monthly_normals(ctx)
+        assert result is not None
+        monthly_tmax, monthly_tmin = result
+        assert monthly_tmax.shape == (12, 3)
+        assert monthly_tmin.shape == (12, 3)
+
+    def test_units_are_fahrenheit(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """Output normals should be in °F (converted from °C)."""
+        ctx = DerivationContext(
+            sir=sir_topography,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        monthly_tmax, monthly_tmin = derivation._compute_monthly_normals(ctx)
+        # gridMET tmmx_C_mean is uniform(10, 35) °C -> 50-95°F range
+        assert np.all(monthly_tmax > 40.0), "Expected °F values (>40)"
+        assert np.all(monthly_tmax < 100.0), "Expected °F values (<100)"

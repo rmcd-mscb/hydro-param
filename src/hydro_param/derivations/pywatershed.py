@@ -71,6 +71,25 @@ _SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
 }
 
 
+def _sat_vp(temp_f: np.ndarray) -> np.ndarray:
+    """Saturation vapor pressure (hPa) from temperature in °F.
+
+    Uses the Magnus formula (Alduchov & Eskridge 1996).
+
+    Parameters
+    ----------
+    temp_f
+        Temperature in degrees Fahrenheit.
+
+    Returns
+    -------
+    np.ndarray
+        Saturation vapor pressure in hectopascals (hPa).
+    """
+    temp_c = (temp_f - 32.0) * 5.0 / 9.0
+    return 6.1078 * np.exp(17.269 * temp_c / (temp_c + 237.3))
+
+
 def merge_temporal_into_derived(
     derived: xr.Dataset,
     temporal: dict[str, xr.Dataset],
@@ -1166,6 +1185,77 @@ class PywatershedDerivation:
             )
             return datasets_config[best_match]
 
+        return None
+
+    # ------------------------------------------------------------------
+    # Climate normals helpers (steps 10, 11)
+    # ------------------------------------------------------------------
+
+    def _compute_monthly_normals(
+        self,
+        ctx: DerivationContext,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Compute monthly mean tmax and tmin from temporal forcing data.
+
+        Aggregates multi-year daily data into 12 monthly means per HRU,
+        converting from °C to °F.
+
+        Returns
+        -------
+        tuple of (monthly_tmax, monthly_tmin) each shape (12, nhru) in °F,
+        or None if temporal data is unavailable.
+        """
+        if ctx.temporal is None or len(ctx.temporal) == 0:
+            return None
+
+        tables_dir = ctx.resolved_lookup_tables_dir
+        config = self._load_lookup_table("forcing_variables", tables_dir)
+        datasets_config = config["mapping"]
+
+        # Concat multi-year chunks by base name
+        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        for ds_name, tds in ctx.temporal.items():
+            base_name = re.sub(r"_\d{4}$", "", ds_name)
+            chunks_by_source.setdefault(base_name, []).append(tds)
+
+        for source_name, chunks in chunks_by_source.items():
+            if len(chunks) > 1:
+                chunks.sort(key=lambda c: c["time"].values[0])
+                merged = xr.concat(chunks, dim="time")
+            else:
+                merged = chunks[0]
+
+            dataset_cfg = self._detect_forcing_dataset(
+                source_name, merged, datasets_config
+            )
+            if dataset_cfg is None:
+                continue
+
+            # Find tmax and tmin SIR variable names
+            tmax_sir = dataset_cfg.get("tmax", {}).get("sir_name")
+            tmin_sir = dataset_cfg.get("tmin", {}).get("sir_name")
+
+            if tmax_sir is None or tmin_sir is None:
+                continue
+            if tmax_sir not in merged or tmin_sir not in merged:
+                continue
+
+            # Group by month, compute mean, convert C -> F
+            tmax_monthly = merged[tmax_sir].groupby("time.month").mean(dim="time")
+            tmin_monthly = merged[tmin_sir].groupby("time.month").mean(dim="time")
+
+            tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
+            tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
+
+            logger.info(
+                "Computed monthly climate normals from '%s' (%d timesteps, %d HRUs).",
+                source_name,
+                merged.sizes.get("time", 0),
+                tmax_f.shape[1] if tmax_f.ndim > 1 else 1,
+            )
+            return tmax_f, tmin_f
+
+        logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
         return None
 
     # ------------------------------------------------------------------
