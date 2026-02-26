@@ -63,10 +63,14 @@ _DEFAULTS: dict[str, float] = {
     # Transpiration timing
     "transp_beg": 4,  # April
     "transp_end": 10,  # October
+    # Depression storage
+    "dprst_frac": 0.0,
+    "dprst_area_max": 0.0,
+    "hru_type": 1,
 }
 
 # Parameters with non-scalar defaults handled specially in _apply_defaults
-_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end"})
+_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end", "hru_type"})
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
@@ -865,13 +869,9 @@ class PywatershedDerivation:
             return ds
 
         # Filter to LakePond and Reservoir only
-        wb = ctx.waterbodies[
-            ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})
-        ].copy()
+        wb = ctx.waterbodies[ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})].copy()
         if wb.empty:
-            logger.info(
-                "No LakePond/Reservoir waterbodies found; using defaults for step 6"
-            )
+            logger.info("No LakePond/Reservoir waterbodies found; using defaults for step 6")
             ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
             ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
             ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
@@ -898,9 +898,7 @@ class PywatershedDerivation:
         )
 
         if intersections.empty:
-            logger.info(
-                "No waterbody-HRU intersections found; using defaults for step 6"
-            )
+            logger.info("No waterbody-HRU intersections found; using defaults for step 6")
             ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
             ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
             ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
@@ -1084,6 +1082,14 @@ class PywatershedDerivation:
                     dims=("nhru",),
                     attrs={"units": "integer_month", "long_name": f"{param} (default)"},
                 )
+
+        # Special handling for hru_type (integer, per-HRU)
+        if "hru_type" not in ds:
+            ds["hru_type"] = xr.DataArray(
+                np.full(nhru, int(_DEFAULTS["hru_type"]), dtype=np.int32),
+                dims=("nhru",),
+                attrs={"units": "none", "long_name": "HRU type (default)"},
+            )
 
         for param_name, default_val in _DEFAULTS.items():
             if param_name in _DEFAULTS_SPECIAL:

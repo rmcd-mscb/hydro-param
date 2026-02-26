@@ -2549,12 +2549,8 @@ class TestDeriveWaterbody:
         assert ds["dprst_frac"].values[1] == pytest.approx(0.3, abs=0.01)
 
         # Area in acres: 6000 m² and 3000 m²
-        assert ds["dprst_area_max"].values[0] == pytest.approx(
-            6000.0 / 4046.8564224, abs=0.01
-        )
-        assert ds["dprst_area_max"].values[1] == pytest.approx(
-            3000.0 / 4046.8564224, abs=0.01
-        )
+        assert ds["dprst_area_max"].values[0] == pytest.approx(6000.0 / 4046.8564224, abs=0.01)
+        assert ds["dprst_area_max"].values[1] == pytest.approx(3000.0 / 4046.8564224, abs=0.01)
 
     def test_hru_type_threshold(
         self, derivation, waterbody_sir, waterbody_fabric, sample_waterbodies
@@ -2572,9 +2568,7 @@ class TestDeriveWaterbody:
         assert ds["hru_type"].values[0] == 2  # 60% > 50%
         assert ds["hru_type"].values[1] == 1  # 30% < 50%
 
-    def test_no_waterbodies_fallback(
-        self, derivation, waterbody_sir, waterbody_fabric
-    ):
+    def test_no_waterbodies_fallback(self, derivation, waterbody_sir, waterbody_fabric):
         """When waterbodies=None, assign defaults."""
         ctx = DerivationContext(
             sir=waterbody_sir,
@@ -2589,9 +2583,7 @@ class TestDeriveWaterbody:
         np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
         np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
 
-    def test_swamp_only_fallback(
-        self, derivation, waterbody_sir, waterbody_fabric
-    ):
+    def test_swamp_only_fallback(self, derivation, waterbody_sir, waterbody_fabric):
         """When only SwampMarsh waterbodies exist, assign defaults."""
         swamp = gpd.GeoDataFrame(
             {
@@ -2612,9 +2604,7 @@ class TestDeriveWaterbody:
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
 
-    def test_partial_overlap(
-        self, derivation, waterbody_sir, waterbody_fabric
-    ):
+    def test_partial_overlap(self, derivation, waterbody_sir, waterbody_fabric):
         """Waterbody extending beyond HRU — only clipped area counted."""
         big_wb = gpd.GeoDataFrame(
             {
@@ -2638,9 +2628,7 @@ class TestDeriveWaterbody:
         # HRU 2 has no overlap
         assert ds["dprst_frac"].values[1] == pytest.approx(0.0, abs=0.01)
 
-    def test_multiple_waterbodies_per_hru(
-        self, derivation, waterbody_sir, waterbody_fabric
-    ):
+    def test_multiple_waterbodies_per_hru(self, derivation, waterbody_sir, waterbody_fabric):
         """Two waterbodies in one HRU — areas summed."""
         wb1 = Polygon([(0, 0), (20, 0), (20, 100), (0, 100)])
         wb2 = Polygon([(40, 0), (60, 0), (60, 100), (40, 100)])
@@ -2664,9 +2652,7 @@ class TestDeriveWaterbody:
         # 20m + 20m = 40m of 100m → 40%
         assert ds["dprst_frac"].values[0] == pytest.approx(0.4, abs=0.01)
 
-    def test_crs_mismatch_auto_reproject(
-        self, derivation, waterbody_sir, waterbody_fabric
-    ):
+    def test_crs_mismatch_auto_reproject(self, derivation, waterbody_sir, waterbody_fabric):
         """Waterbodies in different CRS are reprojected to fabric CRS."""
         wb_5070 = gpd.GeoDataFrame(
             {
@@ -2688,3 +2674,43 @@ class TestDeriveWaterbody:
 
         # Should get ~50% coverage after reprojection
         assert ds["dprst_frac"].values[0] == pytest.approx(0.5, abs=0.05)
+
+
+class TestDeriveIntegrationWaterbody:
+    """Integration test: full derive() with waterbody data."""
+
+    def test_full_derive_with_waterbodies(self, derivation, waterbody_fabric):
+        """Full pipeline produces waterbody params when waterbodies provided."""
+        sir = xr.Dataset(
+            {
+                "hru_area_m2": ("nhm_id", np.array([10000.0, 10000.0])),
+                "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0])),
+                "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
+                "hru_lat": ("nhm_id", np.array([42.0, 41.5])),
+                "land_cover": ("nhm_id", np.array([42, 71])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        wb = gpd.GeoDataFrame(
+            {
+                "comid": [101],
+                "ftype": ["LakePond"],
+                "geometry": [Polygon([(0, 0), (70, 0), (70, 100), (0, 100)])],
+            },
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=waterbody_fabric,
+            waterbodies=wb,
+        )
+        ds = derivation.derive(ctx)
+
+        assert "dprst_frac" in ds
+        assert "dprst_area_max" in ds
+        assert "hru_type" in ds
+        assert ds["dprst_frac"].shape == (2,)
+        assert ds["hru_type"].dtype == np.int32
+        # HRU 1 should have 70% lake coverage → type 2
+        assert ds["hru_type"].values[0] == 2
