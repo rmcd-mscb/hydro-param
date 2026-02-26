@@ -89,13 +89,14 @@ def sir_full(
 @pytest.fixture()
 def temporal_gridmet() -> dict[str, xr.Dataset]:
     """Synthetic SIR-normalized temporal data mimicking gridMET output."""
+    import pandas as pd
+
     nhru = 3
-    ntime_2020 = 366
-    ntime_2021 = 365
     rng = np.random.default_rng(42)
 
-    def _make_ds(ntime: int) -> xr.Dataset:
-        times = np.arange(ntime)
+    def _make_ds(year: int) -> xr.Dataset:
+        times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+        ntime = len(times)
         return xr.Dataset(
             {
                 "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
@@ -108,8 +109,8 @@ def temporal_gridmet() -> dict[str, xr.Dataset]:
         )
 
     return {
-        "gridmet_2020": _make_ds(ntime_2020),
-        "gridmet_2021": _make_ds(ntime_2021),
+        "gridmet_2020": _make_ds(2020),
+        "gridmet_2021": _make_ds(2021),
     }
 
 
