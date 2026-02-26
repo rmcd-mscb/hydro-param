@@ -120,8 +120,70 @@ When executing an approved plan (e.g., from `/superpowers:writing-plans` or `/su
 - Type hints on all public functions
 - Pydantic models for config validation
 - pytest for testing; use `pytest.importorskip()` for tests requiring optional deps (rioxarray, gdptools)
-- NumPy-style docstrings
+- NumPy-style docstrings (see Docstring Requirements below)
 - Logging via Python stdlib `logging`, not print statements
+
+### Docstring Requirements
+
+Write thorough NumPy-style docstrings. This code is maintained by domain scientists and physical reviewers who need to understand intent, not just interface.
+
+**Scope:**
+- **Public functions, classes, methods:** Full docstrings always.
+- **Private (`_foo`) methods:** Full docstrings when logic is non-trivial (algorithmic steps, unit conversions, GIS operations). Simple helpers get a one-line summary.
+
+**Required sections** (include all that apply):
+
+```
+Summary line (imperative mood, one line).
+
+Extended description explaining *why* this exists, the approach taken,
+and any domain context a maintainer would need.
+
+Parameters
+----------
+param_name : type
+    Description including units, valid ranges, and defaults.
+
+Returns
+-------
+type
+    Description including units and structure.
+
+Raises
+------
+ExceptionType
+    When and why this is raised.
+
+Notes
+-----
+Implementation details, algorithm references, unit conversion
+rationale, or caveats that aren't obvious from the code.
+
+Examples
+--------
+>>> short_usage_example()
+expected_output
+
+References
+----------
+Citation or link to the source algorithm, paper, or PRMS documentation.
+
+See Also
+--------
+related_function : Brief note on relationship.
+
+Warnings
+--------
+Known limitations, precision issues, or conditions where results
+may be unreliable.
+```
+
+**Guidelines:**
+- Always document units (feet, acres, m², °F, etc.) in parameter and return descriptions.
+- For derivation steps, reference the step number and source (e.g., "Step 6 per `pywatershed_dataset_param_map.yml`").
+- For unit conversions, document both the source and target units and the conversion factor.
+- Include Examples when they help a reader understand usage or expected behavior, not just when they're easy to write.
+- Omit sections that genuinely don't apply (e.g., no Raises if nothing is raised), but err on the side of including Notes and References.
 
 ## Common Tasks
 
