@@ -60,6 +60,9 @@ _DEFAULTS: dict[str, float] = {
     # PET (Jensen-Haise)
     "jh_coef": 0.014,
     "jh_coef_hru": 0.014,
+    # Transpiration timing
+    "transp_beg": 4,  # April
+    "transp_end": 10,  # October
 }
 
 # Default imperv_stor_max by cov_type (inches)
@@ -234,6 +237,9 @@ class PywatershedDerivation:
 
         # Step 10: PET coefficients (Jensen-Haise)
         ds = self._derive_pet_coefficients(context, ds)
+
+        # Step 11: Transpiration timing (frost-free period)
+        ds = self._derive_transp_timing(context, ds)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
@@ -940,8 +946,18 @@ class PywatershedDerivation:
                 attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient (default)"},
             )
 
+        # Special handling for transp_beg/transp_end (integer, per-HRU)
+        for param in ("transp_beg", "transp_end"):
+            if param not in ds:
+                ds[param] = xr.DataArray(
+                    np.full(nhru, int(_DEFAULTS[param]), dtype=np.int32),
+                    dims=("nhru",),
+                    attrs={"units": "integer_month", "long_name": f"{param} (default)"},
+                )
+
+        _SKIP_IN_LOOP = {"jh_coef", "transp_beg", "transp_end"}
         for param_name, default_val in _DEFAULTS.items():
-            if param_name == "jh_coef":
+            if param_name in _SKIP_IN_LOOP:
                 continue  # handled above
             if param_name not in ds:
                 ds[param_name] = xr.DataArray(
@@ -1338,6 +1354,70 @@ class PywatershedDerivation:
 
         logger.info(
             "Step 10: derived jh_coef (%d HRUs x 12 months) and jh_coef_hru.",
+            nhru,
+        )
+        return ds
+
+    # ------------------------------------------------------------------
+    # Step 11: Transpiration timing (frost-free period)
+    # ------------------------------------------------------------------
+
+    def _derive_transp_timing(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Step 11: Derive transpiration onset/offset from monthly tmin.
+
+        Computes ``transp_beg`` and ``transp_end`` (integer months) by
+        detecting the frost-free period from monthly minimum temperature
+        normals.  Falls back to step 13 defaults when no temporal data
+        is available.
+        """
+        normals = self._compute_monthly_normals(ctx)
+        if normals is None:
+            logger.info(
+                "No temporal data for transpiration timing; deferring to defaults."
+            )
+            return ds
+
+        _monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
+        nhru = monthly_tmin.shape[1]
+        freezing = 32.0  # °F
+
+        # transp_beg: first month (1-indexed) where tmin > freezing
+        transp_beg = np.full(nhru, 4, dtype=np.int32)  # default April
+        for hru in range(nhru):
+            for month_idx in range(12):
+                if monthly_tmin[month_idx, hru] > freezing:
+                    transp_beg[hru] = month_idx + 1  # 1-indexed
+                    break
+
+        # transp_end: first month after June (7+) where tmin < freezing
+        transp_end = np.full(nhru, 10, dtype=np.int32)  # default October
+        for hru in range(nhru):
+            for month_idx in range(6, 12):  # July onward
+                if monthly_tmin[month_idx, hru] < freezing:
+                    transp_end[hru] = month_idx + 1  # 1-indexed
+                    break
+
+        ds["transp_beg"] = xr.DataArray(
+            transp_beg,
+            dims=("nhru",),
+            attrs={"units": "integer_month", "long_name": "Month transpiration begins"},
+        )
+        ds["transp_end"] = xr.DataArray(
+            transp_end,
+            dims=("nhru",),
+            attrs={"units": "integer_month", "long_name": "Month transpiration ends"},
+        )
+
+        logger.info(
+            "Step 11: derived transp_beg (range %d-%d) and transp_end (range %d-%d) for %d HRUs.",
+            int(transp_beg.min()),
+            int(transp_beg.max()),
+            int(transp_end.min()),
+            int(transp_end.max()),
             nhru,
         )
         return ds

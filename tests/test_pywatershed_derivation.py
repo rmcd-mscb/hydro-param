@@ -2180,3 +2180,196 @@ class TestDerivePetCoefficients:
         # Defaults set by _apply_defaults (step 13)
         assert "jh_coef" in ds
         assert "jh_coef_hru" in ds
+
+
+class TestDeriveTranspTiming:
+    """Tests for step 11: transpiration timing derivation."""
+
+    def test_transp_beg_shape(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """transp_beg should have shape (nhru,)."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert "transp_beg" in ds
+        assert ds["transp_beg"].shape == (3,)
+
+    def test_transp_end_shape(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """transp_end should have shape (nhru,)."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert "transp_end" in ds
+        assert ds["transp_end"].shape == (3,)
+
+    def test_values_are_valid_months(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """transp_beg and transp_end should be integers in [1, 12]."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert np.all(ds["transp_beg"].values >= 1)
+        assert np.all(ds["transp_beg"].values <= 12)
+        assert np.all(ds["transp_end"].values >= 1)
+        assert np.all(ds["transp_end"].values <= 12)
+
+    def test_beg_before_end(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """transp_beg should be before transp_end for temperate climates."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert np.all(ds["transp_beg"].values < ds["transp_end"].values)
+
+    def test_warm_climate_early_onset(self, derivation: PywatershedDerivation) -> None:
+        """Warm climate (all tmin > 32°F) -> transp_beg = 1 (January)."""
+        import pandas as pd
+
+        nhru = 1
+        times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 30.0)),
+                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 15.0)),
+                },
+                coords={"time": times, "nhm_id": [1]},
+            )
+        }
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([100.0])),
+                "slope_deg_mean": ("nhm_id", np.array([5.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                "hru_lat": ("nhm_id", np.array([30.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
+        ds = derivation.derive(ctx)
+        assert ds["transp_beg"].values[0] == 1
+
+    def test_cold_climate_late_onset(self, derivation: PywatershedDerivation) -> None:
+        """Cold climate with short growing season -> later transp_beg."""
+        import pandas as pd
+
+        nhru = 1
+        times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        # Cold: tmin < 0°C (32°F) for Jan-May, warm Jun-Aug, cold Sep-Dec
+        tmin_values = np.full((len(times), nhru), -5.0)  # °C, well below freezing
+        # Warm only in summer months (Jun=152, Jul, Aug=243)
+        tmin_values[152:244, :] = 10.0  # °C, above freezing
+
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "tmmx_C_mean": (("time", "nhm_id"), tmin_values + 15.0),
+                    "tmmn_C_mean": (("time", "nhm_id"), tmin_values),
+                },
+                coords={"time": times, "nhm_id": [1]},
+            )
+        }
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([2000.0])),
+                "slope_deg_mean": ("nhm_id", np.array([10.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                "hru_lat": ("nhm_id", np.array([45.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
+        ds = derivation.derive(ctx)
+        # June onset (month 6) expected
+        assert ds["transp_beg"].values[0] >= 5
+        assert ds["transp_end"].values[0] <= 10
+
+    def test_fallback_without_temporal(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Without temporal data, transp_beg/end use defaults."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "transp_beg" in ds
+        assert "transp_end" in ds
+        # Defaults: beg=4, end=10
+        np.testing.assert_array_equal(ds["transp_beg"].values, [4, 4, 4])
+        np.testing.assert_array_equal(ds["transp_end"].values, [10, 10, 10])
