@@ -65,6 +65,9 @@ _DEFAULTS: dict[str, float] = {
     "transp_end": 10,  # October
 }
 
+# Parameters with non-scalar defaults handled specially in _apply_defaults
+_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end"})
+
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
 
@@ -962,9 +965,8 @@ class PywatershedDerivation:
                     attrs={"units": "integer_month", "long_name": f"{param} (default)"},
                 )
 
-        _SKIP_IN_LOOP = {"jh_coef", "transp_beg", "transp_end"}
         for param_name, default_val in _DEFAULTS.items():
-            if param_name in _SKIP_IN_LOOP:
+            if param_name in _DEFAULTS_SPECIAL:
                 continue  # handled above
             if param_name not in ds:
                 ds[param_name] = xr.DataArray(
@@ -1381,8 +1383,7 @@ class PywatershedDerivation:
             jh_coef_hru = july_jh + 0.00001 * elev_ft
         else:
             logger.info(
-                "hru_elev not in dataset; computing jh_coef_hru without "
-                "elevation adjustment.",
+                "hru_elev not in dataset; computing jh_coef_hru without elevation adjustment.",
             )
             jh_coef_hru = july_jh
 
@@ -1436,9 +1437,9 @@ class PywatershedDerivation:
         # transp_beg: first month (1-indexed) where tmin > freezing (vectorized)
         above_freezing = monthly_tmin > freezing  # (12, nhru) boolean
         has_warm_month = above_freezing.any(axis=0)
-        transp_beg = np.where(
-            has_warm_month, np.argmax(above_freezing, axis=0) + 1, 4
-        ).astype(np.int32)
+        transp_beg = np.where(has_warm_month, np.argmax(above_freezing, axis=0) + 1, 4).astype(
+            np.int32
+        )
 
         fallback_beg = int(nhru - np.count_nonzero(has_warm_month))
         if fallback_beg > 0:
@@ -1477,8 +1478,7 @@ class PywatershedDerivation:
         )
 
         logger.info(
-            "Step 11: derived transp_beg (range %d-%d) and transp_end "
-            "(range %d-%d) for %d HRUs.",
+            "Step 11: derived transp_beg (range %d-%d) and transp_end (range %d-%d) for %d HRUs.",
             int(transp_beg.min()),
             int(transp_beg.max()),
             int(transp_end.min()),

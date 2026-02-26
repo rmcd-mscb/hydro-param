@@ -65,6 +65,12 @@ def sir_geometry() -> xr.Dataset:
 
 
 @pytest.fixture()
+def sir_topo_with_area(sir_topography: xr.Dataset, sir_geometry: xr.Dataset) -> xr.Dataset:
+    """Synthetic SIR with topography + geometry (area) data."""
+    return xr.merge([sir_topography, sir_geometry])
+
+
+@pytest.fixture()
 def sir_soils() -> xr.Dataset:
     """Synthetic SIR with soil data (gNATSGO-like)."""
     return xr.Dataset(
@@ -2077,23 +2083,12 @@ class TestDerivePetCoefficients:
     def test_jh_coef_shape(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef should have shape (nhru, 12)."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2104,23 +2099,12 @@ class TestDerivePetCoefficients:
     def test_jh_coef_hru_shape(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef_hru should have shape (nhru,)."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2131,23 +2115,12 @@ class TestDerivePetCoefficients:
     def test_jh_coef_in_valid_range(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """jh_coef values should be in [0.005, 0.06]."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2169,24 +2142,15 @@ class TestDerivePetCoefficients:
     def test_fallback_without_temporal(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
     ) -> None:
         """Without temporal data, jh_coef/jh_coef_hru use defaults."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
-        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ctx = DerivationContext(sir=sir_topo_with_area, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         # Defaults set by _apply_defaults (step 13)
         assert "jh_coef" in ds
+        assert ds["jh_coef"].shape == (3, 12)
+        assert ds["jh_coef"].dims == ("nhru", "nmonths")
         assert "jh_coef_hru" in ds
 
 
@@ -2196,23 +2160,12 @@ class TestDeriveTranspTiming:
     def test_transp_beg_shape(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg should have shape (nhru,)."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2223,23 +2176,12 @@ class TestDeriveTranspTiming:
     def test_transp_end_shape(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_end should have shape (nhru,)."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2250,23 +2192,12 @@ class TestDeriveTranspTiming:
     def test_values_are_valid_months(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg and transp_end should be integers in [1, 12]."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2279,23 +2210,12 @@ class TestDeriveTranspTiming:
     def test_beg_before_end(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
         """transp_beg should be before transp_end for temperate climates."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
         ctx = DerivationContext(
-            sir=sir,
+            sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
             temporal=temporal_gridmet,
         )
@@ -2370,21 +2290,10 @@ class TestDeriveTranspTiming:
     def test_fallback_without_temporal(
         self,
         derivation: PywatershedDerivation,
-        sir_topography: xr.Dataset,
+        sir_topo_with_area: xr.Dataset,
     ) -> None:
         """Without temporal data, transp_beg/end use defaults."""
-        sir = xr.merge(
-            [
-                sir_topography,
-                xr.Dataset(
-                    {
-                        "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
-                    },
-                    coords={"nhm_id": [1, 2, 3]},
-                ),
-            ]
-        )
-        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ctx = DerivationContext(sir=sir_topo_with_area, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "transp_beg" in ds
         assert "transp_end" in ds
@@ -2464,3 +2373,108 @@ class TestDeriveIntegrationPetTransp:
         assert ds["transp_end"].shape == (2,)
         assert np.all(ds["transp_beg"].values >= 1)
         assert np.all(ds["transp_end"].values <= 12)
+
+
+class TestClimateNormalsEdgeCases:
+    """Edge-case tests for climate normals and derived parameters."""
+
+    def test_all_months_frozen_uses_defaults(self, derivation: PywatershedDerivation) -> None:
+        """Arctic HRU where tmin never exceeds freezing -> default transp_beg=4."""
+        import pandas as pd
+
+        times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -10.0)),
+                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -20.0)),
+                },
+                coords={"time": times, "nhm_id": [1]},
+            )
+        }
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([3000.0])),
+                "slope_deg_mean": ("nhm_id", np.array([10.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                "hru_lat": ("nhm_id", np.array([70.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
+        ds = derivation.derive(ctx)
+        # Never thaws -> default April
+        assert ds["transp_beg"].values[0] == 4
+
+    def test_never_freezes_after_june_uses_default_end(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Tropical HRU where tmin never drops below freezing -> default transp_end=10."""
+        import pandas as pd
+
+        times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 35.0)),
+                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 20.0)),
+                },
+                coords={"time": times, "nhm_id": [1]},
+            )
+        }
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([50.0])),
+                "slope_deg_mean": ("nhm_id", np.array([2.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                "hru_lat": ("nhm_id", np.array([25.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
+        ds = derivation.derive(ctx)
+        # Never freezes -> beg=1 (January), end=10 (default October)
+        assert ds["transp_beg"].values[0] == 1
+        assert ds["transp_end"].values[0] == 10
+
+    def test_normals_returns_none_for_precip_only_temporal(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Temporal data with only precipitation (no tmax/tmin) -> normals is None."""
+        import pandas as pd
+
+        times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+        temporal = {
+            "gridmet_2020": xr.Dataset(
+                {
+                    "pr_mm_mean": (("time", "nhm_id"), np.full((len(times), 1), 5.0)),
+                },
+                coords={"time": times, "nhm_id": [1]},
+            )
+        }
+        sir = xr.Dataset(
+            {
+                "elevation_m_mean": ("nhm_id", np.array([500.0])),
+                "slope_deg_mean": ("nhm_id", np.array([5.0])),
+                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                "hru_lat": ("nhm_id", np.array([42.0])),
+                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+            },
+            coords={"nhm_id": [1]},
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
+        # Normals should return None -> defaults used
+        result = derivation._compute_monthly_normals(ctx)
+        assert result is None
+
+    def test_normals_with_empty_temporal_dict(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Empty temporal dict -> normals returns None."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", temporal={})
+        result = derivation._compute_monthly_normals(ctx)
+        assert result is None
