@@ -40,6 +40,9 @@ class DerivationContext:
         Target HRU polygon GeoDataFrame.
     segments
         Stream segment line GeoDataFrame.
+    waterbodies
+        NHDPlus waterbody polygon GeoDataFrame for depression storage
+        parameters.  When ``None``, step 6 (waterbody overlay) is skipped.
     fabric_id_field
         Column name for HRU identifiers in the fabric.  Must exist as a
         dimension in ``sir``.
@@ -56,6 +59,7 @@ class DerivationContext:
     temporal: dict[str, xr.Dataset] | None = None
     fabric: gpd.GeoDataFrame | None = None
     segments: gpd.GeoDataFrame | None = None
+    waterbodies: gpd.GeoDataFrame | None = None
     fabric_id_field: str = "nhm_id"
     segment_id_field: str | None = None
     config: dict = field(default_factory=dict)
