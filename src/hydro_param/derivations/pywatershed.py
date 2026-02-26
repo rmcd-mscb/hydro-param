@@ -71,6 +71,9 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
 
+# Square metres per acre (exact)
+_M2_PER_ACRE = 4046.8564224
+
 # Calibration seed method dispatch — safe lambdas only, NO eval.
 _SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
     "linear": lambda ds, p: p["scale"] * ds[p["input"]].values + p["offset"],
@@ -819,6 +822,120 @@ class PywatershedDerivation:
                 return np.array(result)
 
         return None
+
+    # ------------------------------------------------------------------
+    # Step 6: Waterbody overlay (depression storage)
+    # ------------------------------------------------------------------
+
+    def _derive_waterbody(
+        self,
+        ds: xr.Dataset,
+        ctx: DerivationContext,
+    ) -> xr.Dataset:
+        """Step 6: Derive depression storage from waterbody overlay.
+
+        Performs polygon-on-polygon overlay of NHDPlus waterbody polygons
+        against HRU fabric to compute depression fraction, area, and HRU
+        type classification.
+
+        Parameters
+        ----------
+        ds
+            In-progress parameter dataset (must contain ``hru_area``).
+        ctx
+            Derivation context (must contain ``fabric`` and ``waterbodies``).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``dprst_frac``, ``dprst_area_max``, and ``hru_type``.
+        """
+        nhru = ds.sizes.get("nhru", 0)
+        id_field = ctx.fabric_id_field
+
+        # Fallback: no waterbody data
+        if ctx.waterbodies is None:
+            logger.warning("No waterbody data provided; using defaults for step 6")
+            ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
+            return ds
+
+        # Filter to LakePond and Reservoir only
+        wb = ctx.waterbodies[
+            ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})
+        ].copy()
+        if wb.empty:
+            logger.info(
+                "No LakePond/Reservoir waterbodies found; using defaults for step 6"
+            )
+            ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
+            return ds
+
+        fabric = ctx.fabric
+        if fabric is None:
+            logger.warning("No fabric provided; using defaults for step 6")
+            ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
+            return ds
+
+        # Ensure matching CRS
+        if wb.crs != fabric.crs:
+            logger.info("Reprojecting waterbodies from %s to %s", wb.crs, fabric.crs)
+            wb = wb.to_crs(fabric.crs)
+
+        # Polygon overlay: intersection of fabric x waterbodies
+        intersections = gpd.overlay(
+            fabric[[id_field, "geometry"]],
+            wb[["geometry"]],
+            how="intersection",
+        )
+
+        if intersections.empty:
+            logger.info(
+                "No waterbody-HRU intersections found; using defaults for step 6"
+            )
+            ds["dprst_frac"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["dprst_area_max"] = xr.DataArray(np.zeros(nhru), dims="nhru")
+            ds["hru_type"] = xr.DataArray(np.ones(nhru, dtype=np.int32), dims="nhru")
+            return ds
+
+        # Compute clipped areas and group by HRU
+        intersections["_clip_area_m2"] = intersections.geometry.area
+        area_by_hru = intersections.groupby(id_field)["_clip_area_m2"].sum()
+
+        # Build arrays aligned to SIR coordinate order
+        hru_ids = ctx.sir[id_field].values
+        clipped_acres = np.zeros(len(hru_ids))
+        for i, hid in enumerate(hru_ids):
+            if hid in area_by_hru.index:
+                clipped_acres[i] = area_by_hru[hid] / _M2_PER_ACRE
+
+        # Compute fraction from hru_area (already in acres from step 1)
+        hru_area_acres = ds["hru_area"].values
+        dprst_frac = np.where(hru_area_acres > 0, clipped_acres / hru_area_acres, 0.0)
+        dprst_frac = np.clip(dprst_frac, 0.0, 1.0)
+
+        # HRU type: 2 (lake) if >50% waterbody, else 1 (land)
+        hru_type = np.where(dprst_frac > 0.5, 2, 1).astype(np.int32)
+
+        ds["dprst_frac"] = xr.DataArray(dprst_frac, dims="nhru")
+        ds["dprst_area_max"] = xr.DataArray(clipped_acres, dims="nhru")
+        ds["hru_type"] = xr.DataArray(hru_type, dims="nhru")
+
+        n_lake = int((hru_type == 2).sum())
+        n_with_water = int((dprst_frac > 0).sum())
+        logger.info(
+            "Step 6 waterbody overlay: %d/%d HRUs with waterbodies, %d lake-type",
+            n_with_water,
+            nhru,
+            n_lake,
+        )
+
+        return ds
 
     # ------------------------------------------------------------------
     # Step 8: Lookup table application
