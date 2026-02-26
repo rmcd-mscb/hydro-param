@@ -1263,6 +1263,11 @@ class PywatershedDerivation:
 
             dataset_cfg = self._detect_forcing_dataset(source_name, merged, datasets_config)
             if dataset_cfg is None:
+                logger.warning(
+                    "Could not match temporal source '%s' to any forcing "
+                    "dataset config for climate normals; skipping.",
+                    source_name,
+                )
                 continue
 
             # Find tmax and tmin SIR variable names
@@ -1270,22 +1275,52 @@ class PywatershedDerivation:
             tmin_sir = dataset_cfg.get("tmin", {}).get("sir_name")
 
             if tmax_sir is None or tmin_sir is None:
+                logger.warning(
+                    "Forcing config for source '%s' is missing tmax and/or "
+                    "tmin sir_name entries; cannot compute climate normals.",
+                    source_name,
+                )
                 continue
             if tmax_sir not in merged or tmin_sir not in merged:
+                logger.warning(
+                    "Temporal source '%s' missing required variables: "
+                    "tmax='%s' (present=%s), tmin='%s' (present=%s).",
+                    source_name,
+                    tmax_sir,
+                    tmax_sir in merged,
+                    tmin_sir,
+                    tmin_sir in merged,
+                )
                 continue
 
             # Group by month, compute mean, convert C -> F
             tmax_monthly = merged[tmax_sir].groupby("time.month").mean(dim="time")
             tmin_monthly = merged[tmin_sir].groupby("time.month").mean(dim="time")
 
+            # Validate full 12-month coverage
+            n_months = tmax_monthly.sizes.get("month", 0)
+            if n_months != 12:
+                logger.warning(
+                    "Temporal source '%s' covers only %d of 12 months; "
+                    "cannot compute reliable monthly normals. Skipping.",
+                    source_name,
+                    n_months,
+                )
+                continue
+
             tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
             tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
+
+            # Ensure 2-D shape (12, nhru) for single-HRU case
+            if tmax_f.ndim == 1:
+                tmax_f = tmax_f[:, np.newaxis]
+                tmin_f = tmin_f[:, np.newaxis]
 
             logger.info(
                 "Computed monthly climate normals from '%s' (%d timesteps, %d HRUs).",
                 source_name,
                 merged.sizes.get("time", 0),
-                tmax_f.shape[1] if tmax_f.ndim > 1 else 1,
+                tmax_f.shape[1],
             )
             return tmax_f, tmin_f
 
