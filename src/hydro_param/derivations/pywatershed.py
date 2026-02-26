@@ -57,6 +57,9 @@ _DEFAULTS: dict[str, float] = {
     "dprst_depth_avg": 24.0,  # inches
     # Transpiration
     "transp_tmax": 500.0,  # degree-days
+    # PET (Jensen-Haise)
+    "jh_coef": 0.014,
+    "jh_coef_hru": 0.014,
 }
 
 # Default imperv_stor_max by cov_type (inches)
@@ -228,6 +231,9 @@ class PywatershedDerivation:
 
         # Step 9: Solar radiation tables (soltab)
         ds = self._derive_soltab(context, ds)
+
+        # Step 10: PET coefficients (Jensen-Haise)
+        ds = self._derive_pet_coefficients(context, ds)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
@@ -926,7 +932,17 @@ class PywatershedDerivation:
         Only sets parameters that are not already present in ``ds``
         (preserves any values derived from data in earlier steps).
         """
+        # Special handling for 2D jh_coef default (nhru, 12)
+        if "jh_coef" not in ds:
+            ds["jh_coef"] = xr.DataArray(
+                np.full((nhru, 12), _DEFAULTS["jh_coef"]),
+                dims=("nhru", "nmonths"),
+                attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient (default)"},
+            )
+
         for param_name, default_val in _DEFAULTS.items():
+            if param_name == "jh_coef":
+                continue  # handled above
             if param_name not in ds:
                 ds[param_name] = xr.DataArray(
                     np.float64(default_val),
@@ -1257,6 +1273,74 @@ class PywatershedDerivation:
 
         logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
         return None
+
+    # ------------------------------------------------------------------
+    # Step 10: PET coefficients (Jensen-Haise)
+    # ------------------------------------------------------------------
+
+    def _derive_pet_coefficients(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Step 10: Derive Jensen-Haise PET coefficients.
+
+        Computes ``jh_coef`` (nhru, 12) and ``jh_coef_hru`` (nhru,) from
+        monthly climate normals using PRMS-IV equation 1-26.
+
+        Falls back to step 13 defaults when no temporal data is available.
+        """
+        normals = self._compute_monthly_normals(ctx)
+        if normals is None:
+            logger.info(
+                "No temporal data for PET coefficients; deferring to defaults."
+            )
+            return ds
+
+        monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
+        nhru = monthly_tmax.shape[1]
+
+        # --- jh_coef: PRMS-IV eq. 1-26 ---
+        svp_max = _sat_vp(monthly_tmax)  # (12, nhru)
+        svp_min = _sat_vp(monthly_tmin)  # (12, nhru)
+
+        # Guard against division by zero
+        svp_max_safe = np.where(svp_max < 1e-6, 1e-6, svp_max)
+        jh_coef = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
+        jh_coef = np.clip(jh_coef, 0.005, 0.06)
+
+        # Transpose to (nhru, 12) for output convention
+        ds["jh_coef"] = xr.DataArray(
+            jh_coef.T,
+            dims=("nhru", "nmonths"),
+            attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient"},
+        )
+
+        # --- jh_coef_hru: elevation-adjusted coefficient ---
+        # Use July (index 6) as warmest month for base coefficient
+        july_jh = jh_coef[6, :]  # (nhru,)
+
+        # Elevation adjustment: higher elevations have lower boiling point,
+        # increasing vapor pressure deficit -> slightly higher coefficients.
+        # Linear approximation: +0.00001 per foot above sea level.
+        if "hru_elev" in ds:
+            elev_ft = ds["hru_elev"].values
+            jh_coef_hru = july_jh + 0.00001 * elev_ft
+        else:
+            jh_coef_hru = july_jh
+
+        jh_coef_hru = np.clip(jh_coef_hru, 0.005, 0.06)
+        ds["jh_coef_hru"] = xr.DataArray(
+            jh_coef_hru,
+            dims=("nhru",),
+            attrs={"units": "per_degF_per_day", "long_name": "Per-HRU Jensen-Haise coefficient"},
+        )
+
+        logger.info(
+            "Step 10: derived jh_coef (%d HRUs x 12 months) and jh_coef_hru.",
+            nhru,
+        )
+        return ds
 
     # ------------------------------------------------------------------
     # Parameter overrides

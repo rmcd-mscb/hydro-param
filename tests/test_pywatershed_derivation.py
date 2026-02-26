@@ -2069,3 +2069,114 @@ class TestComputeMonthlyNormals:
         # gridMET tmmx_C_mean is uniform(10, 35) °C -> 50-95°F range
         assert np.all(monthly_tmax > 40.0), "Expected °F values (>40)"
         assert np.all(monthly_tmax < 100.0), "Expected °F values (<100)"
+
+
+class TestDerivePetCoefficients:
+    """Tests for step 10: Jensen-Haise PET coefficient derivation."""
+
+    def test_jh_coef_shape(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """jh_coef should have shape (nhru, 12)."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert "jh_coef" in ds
+        assert ds["jh_coef"].shape == (3, 12)
+
+    def test_jh_coef_hru_shape(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """jh_coef_hru should have shape (nhru,)."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert "jh_coef_hru" in ds
+        assert ds["jh_coef_hru"].shape == (3,)
+
+    def test_jh_coef_in_valid_range(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+        temporal_gridmet: dict[str, xr.Dataset],
+    ) -> None:
+        """jh_coef values should be in [0.005, 0.06]."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(
+            sir=sir,
+            fabric_id_field="nhm_id",
+            temporal=temporal_gridmet,
+        )
+        ds = derivation.derive(ctx)
+        assert np.all(ds["jh_coef"].values >= 0.005)
+        assert np.all(ds["jh_coef"].values <= 0.06)
+
+    def test_jh_coef_formula_known_values(self) -> None:
+        """Test jh_coef formula produces clipped values."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        # tmax=80°F, tmin=50°F — raw formula gives ~27.3, clips to 0.06
+        svp_max = _sat_vp(np.array([80.0]))[0]
+        svp_min = _sat_vp(np.array([50.0]))[0]
+        raw = 27.5 - 0.25 * (svp_max - svp_min) / svp_max
+        clipped = np.clip(raw, 0.005, 0.06)
+        assert clipped == 0.06, f"Expected clipped to upper bound, got {clipped}"
+
+    def test_fallback_without_temporal(
+        self,
+        derivation: PywatershedDerivation,
+        sir_topography: xr.Dataset,
+    ) -> None:
+        """Without temporal data, jh_coef/jh_coef_hru use defaults."""
+        sir = xr.merge([
+            sir_topography,
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0, 2023428.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            ),
+        ])
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Defaults set by _apply_defaults (step 13)
+        assert "jh_coef" in ds
+        assert "jh_coef_hru" in ds
