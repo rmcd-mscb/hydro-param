@@ -1,8 +1,26 @@
 """SIR normalization: canonical naming, unit conversion, and schema validation.
 
-The Standardized Internal Representation (SIR) normalizes raw gdptools output
-into self-documenting variable names with canonical units. See
-docs/plans/2026-02-23-sir-normalization-design.md for the full design.
+Normalize raw gdptools output into the Standardized Internal Representation
+(SIR) -- self-documenting variable names with canonical SI-like units.  The
+SIR is the boundary between the generic pipeline (stages 1-5) and model
+plugins: plugins consume only SIR data and never see raw gdptools output.
+
+This module handles three concerns:
+
+1. **Naming**: Convert raw source variable names (e.g., ``"elevation"``) into
+   canonical SIR names (e.g., ``"elevation_m_mean"``).
+2. **Unit conversion**: Transform source units to canonical units at the SIR
+   boundary (e.g., log10(cm/hr) to cm/hr, Kelvin to degrees Celsius).
+3. **Validation**: Check completeness, NaN coverage, and value ranges.
+
+References
+----------
+.. [1] docs/plans/2026-02-23-sir-normalization-design.md -- Full design document.
+
+See Also
+--------
+hydro_param.units : Model-specific unit conversions (SI to imperial).
+hydro_param.plugins : Plugin protocols that consume SIR output.
 """
 
 from __future__ import annotations
@@ -50,16 +68,32 @@ _UNIT_TABLE: dict[str, tuple[str, str, str | None]] = {
 def unit_abbreviation(units: str) -> str:
     """Return the canonical abbreviation for a unit string.
 
+    Map a source unit string to a short, filesystem-safe abbreviation for
+    use in SIR variable names.  Known units are looked up in ``_UNIT_TABLE``;
+    unknown units are slugified by replacing non-alphanumeric characters with
+    underscores.
+
     Parameters
     ----------
-    units
+    units : str
         Source unit string from the dataset registry (e.g., ``"m"``,
-        ``"log10(cm/hr)"``, ``"%"``).
+        ``"log10(cm/hr)"``, ``"%"``, ``"W/m2"``).
 
     Returns
     -------
     str
-        Short canonical abbreviation. Empty string for dimensionless.
+        Short canonical abbreviation (e.g., ``"m"``, ``"cm_hr"``,
+        ``"pct"``, ``"W_m2"``).  Empty string for dimensionless
+        quantities (``units=""``).
+
+    Examples
+    --------
+    >>> unit_abbreviation("log10(cm/hr)")
+    'cm_hr'
+    >>> unit_abbreviation("%")
+    'pct'
+    >>> unit_abbreviation("")
+    ''
     """
     if units == "":
         return ""
@@ -74,22 +108,33 @@ def unit_abbreviation(units: str) -> str:
 def canonical_name(name: str, units: str, stat: str) -> str:
     """Generate a canonical SIR variable name.
 
-    Follows the pattern ``<base>_<unit_abbrev>_<stat>``. Dimensionless
-    quantities omit the unit segment: ``<base>_<stat>``.
+    Assemble a self-documenting variable name following the pattern
+    ``<base>_<unit_abbrev>_<stat>``.  Dimensionless quantities omit the
+    unit segment: ``<base>_<stat>``.  All base names are lowercased.
 
     Parameters
     ----------
-    name
-        Base variable name from the dataset registry (e.g., ``"elevation"``).
-    units
-        Source unit string (e.g., ``"m"``, ``"log10(cm/hr)"``).
-    stat
-        Aggregation statistic (e.g., ``"mean"``, ``"min"``, ``"majority"``).
+    name : str
+        Base variable name from the dataset registry (e.g., ``"elevation"``,
+        ``"land_cover"``).
+    units : str
+        Source unit string (e.g., ``"m"``, ``"log10(cm/hr)"``, ``""``).
+    stat : str
+        Aggregation statistic (e.g., ``"mean"``, ``"min"``, ``"majority"``,
+        ``"frac"``).
 
     Returns
     -------
     str
-        Canonical SIR variable name (e.g., ``"elevation_m_mean"``).
+        Canonical SIR variable name (e.g., ``"elevation_m_mean"``,
+        ``"land_cover_frac"``).
+
+    Examples
+    --------
+    >>> canonical_name("elevation", "m", "mean")
+    'elevation_m_mean'
+    >>> canonical_name("land_cover", "", "frac")
+    'land_cover_frac'
     """
     base = name.lower()
     abbrev = unit_abbreviation(units)
@@ -99,7 +144,20 @@ def canonical_name(name: str, units: str, stat: str) -> str:
 
 
 def _unit_info(units: str) -> tuple[str, str, str | None]:
-    """Return (abbreviation, canonical_units, conversion) for a unit string."""
+    """Look up abbreviation, canonical units, and conversion type for a unit string.
+
+    Parameters
+    ----------
+    units : str
+        Source unit string from the dataset registry.
+
+    Returns
+    -------
+    tuple[str, str, str or None]
+        ``(abbreviation, canonical_units, conversion)`` where
+        ``conversion`` is ``None`` for passthrough, ``"log10_to_linear"``
+        for log-transformed units, or ``"K_to_C"`` for Kelvin.
+    """
     if units == "":
         return ("", "", None)
     if units in _UNIT_TABLE:
@@ -111,7 +169,37 @@ def _unit_info(units: str) -> tuple[str, str, str | None]:
 
 @dataclass
 class SIRVariableSchema:
-    """Schema entry for a single SIR variable."""
+    """Describe the expected schema for a single SIR output variable.
+
+    Each schema entry records the mapping from a raw source variable to its
+    canonical SIR name, the unit conversion to apply, and validation
+    constraints.  Used by ``normalize_sir()`` and ``validate_sir()`` to
+    transform and check pipeline output.
+
+    Attributes
+    ----------
+    canonical_name : str
+        Canonical SIR variable name (e.g., ``"elevation_m_mean"``).
+    source_name : str
+        Original variable name from the dataset registry.
+    source_units : str
+        Units of the raw source data (e.g., ``"log10(cm/hr)"``).
+    canonical_units : str
+        Units after SIR normalization (e.g., ``"cm/hr"``).
+    long_name : str
+        Human-readable description for metadata / NetCDF attributes.
+    categorical : bool
+        ``True`` for land-cover or other categorical variables that
+        produce fraction columns rather than continuous statistics.
+    valid_range : tuple[float, float] or None
+        Expected ``(min, max)`` value range for validation.  ``None``
+        to skip range checks.  Categorical fractions use ``(0.0, 1.0)``.
+    conversion : str or None
+        Conversion type to apply: ``None`` (passthrough),
+        ``"log10_to_linear"`` (10^x), or ``"K_to_C"`` (Kelvin to Celsius).
+    temporal : bool
+        ``True`` for time-indexed variables (e.g., gridMET climate data).
+    """
 
     canonical_name: str
     source_name: str
@@ -127,18 +215,36 @@ class SIRVariableSchema:
 def build_sir_schema(
     resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
 ) -> list[SIRVariableSchema]:
-    """Auto-generate SIR schema from stage 2 resolved datasets.
+    """Auto-generate the SIR schema from stage 2 resolved datasets.
+
+    Walk the resolved dataset/variable tuples produced by
+    ``stage2_resolve_datasets()`` and create one ``SIRVariableSchema`` entry
+    per expected output column.  For continuous variables, one entry is
+    created per ``(variable, statistic, year)`` combination.  For categorical
+    variables, a single ``_frac`` entry is created per ``(variable, year)``
+    -- individual fraction columns (e.g., ``land_cover_frac_42``) are
+    generated dynamically during normalization.
 
     Parameters
     ----------
-    resolved
-        Output of ``stage2_resolve_datasets()``: list of
-        ``(DatasetEntry, DatasetRequest, var_specs)`` tuples.
+    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+        Output of ``stage2_resolve_datasets()``.  Each tuple contains:
+
+        - ``DatasetEntry`` -- dataset metadata from the registry.
+        - ``DatasetRequest`` -- user-specified request (statistics, year).
+        - ``list[VariableSpec | DerivedVariableSpec]`` -- resolved variables.
 
     Returns
     -------
     list[SIRVariableSchema]
-        One schema entry per expected SIR output column.
+        One schema entry per expected SIR output column.  Multi-year
+        datasets produce year-suffixed entries (e.g.,
+        ``"elevation_m_mean_2020"``).
+
+    Notes
+    -----
+    The schema is deterministic for a given set of resolved datasets: same
+    input always produces the same schema entries in the same order.
     """
     schema: list[SIRVariableSchema] = []
     for entry, ds_req, var_specs in resolved:
@@ -208,19 +314,37 @@ def apply_conversion(
 ) -> NDArray[np.floating]:
     """Apply a SIR unit conversion to an array of values.
 
+    Transform raw source values into canonical SIR units.  This handles
+    conversions that occur at the pipeline/SIR boundary -- distinct from
+    the model-specific conversions in ``hydro_param.units`` which occur
+    inside derivation plugins.
+
     Parameters
     ----------
-    values
+    values : NDArray[np.floating]
         Input values in source units.
-    conversion
-        Conversion type: ``None`` (passthrough), ``"log10_to_linear"``
-        (10^x), ``"K_to_C"`` (Kelvin to Celsius), or raises
-        ``ValueError`` for unknown types.
+    conversion : str or None
+        Conversion type:
+
+        - ``None`` -- passthrough, return input unchanged.
+        - ``"log10_to_linear"`` -- apply ``10^x`` (e.g., POLARIS
+          log10(cm/hr) to cm/hr).
+        - ``"K_to_C"`` -- subtract 273.15 (Kelvin to degrees Celsius).
 
     Returns
     -------
-    NDArray
-        Converted values in canonical units.
+    NDArray[np.floating]
+        Converted values in canonical SIR units.
+
+    Raises
+    ------
+    ValueError
+        If ``conversion`` is not a recognized conversion type.
+
+    See Also
+    --------
+    hydro_param.units.convert : Model-specific unit conversions (e.g.,
+        metres to feet).
     """
     if conversion is None:
         return values
@@ -237,28 +361,49 @@ def normalize_sir(
     output_dir: Path,
     id_field: str,
 ) -> dict[str, Path]:
-    """Normalize raw per-variable files to canonical SIR format.
+    """Normalize raw per-variable CSV files to canonical SIR format.
 
-    Reads raw CSVs from stage 4, renames columns to canonical names,
-    applies unit conversions, and writes normalized per-variable CSVs
-    to ``output_dir/``.
+    Read raw CSVs produced by stage 4 (gdptools zonal statistics), rename
+    columns to canonical SIR names, apply unit conversions (e.g.,
+    log10-to-linear, Kelvin-to-Celsius), and write normalized per-variable
+    CSVs to ``output_dir/``.
+
+    Categorical variables (e.g., NLCD land cover) have their fraction
+    columns renamed from ``<source>_<class>`` to ``<source>_frac_<class>``.
+    Continuous variables are matched by statistic suffix and renamed to the
+    canonical ``<base>_<unit>_<stat>`` pattern.
 
     Parameters
     ----------
-    raw_files
-        Mapping of source variable key to raw CSV file path
-        (output of stage 4).
-    schema
-        SIR variable schema entries (output of ``build_sir_schema()``).
-    output_dir
-        Directory to write normalized CSV files.
-    id_field
-        Feature ID column name (used as CSV index).
+    raw_files : dict[str, pathlib.Path]
+        Mapping of source variable key (e.g., ``"elevation"``,
+        ``"elevation_2020"``) to raw CSV file path produced by stage 4.
+    schema : list[SIRVariableSchema]
+        SIR variable schema entries from ``build_sir_schema()``.
+    output_dir : pathlib.Path
+        Directory to write normalized CSV files.  Created if absent.
+    id_field : str
+        Feature ID column name from ``target_fabric.id_field`` config
+        (e.g., ``"nhm_id"``).  Used as the CSV index column.
 
     Returns
     -------
-    dict[str, Path]
-        Mapping of canonical name to normalized CSV file path.
+    dict[str, pathlib.Path]
+        Mapping of canonical SIR name to normalized CSV file path.
+        Variables that could not be matched or were missing columns are
+        omitted and logged as warnings.
+
+    Warnings
+    --------
+    Logs a warning for each raw variable that has no matching schema entry
+    or whose expected column is missing from the raw CSV.  A summary
+    warning is logged at the end if any variables were skipped.
+
+    Notes
+    -----
+    Year-suffixed keys (e.g., ``"elevation_2020"``) are matched to their
+    base schema entry by stripping the ``_YYYY`` suffix.  This supports
+    multi-year static datasets where each year produces a separate raw file.
     """
     import pandas as pd
 
@@ -395,25 +540,46 @@ def normalize_sir_temporal(
 ) -> dict[str, Path]:
     """Normalize temporal NetCDF files to canonical SIR format.
 
-    Reads raw temporal NetCDFs from stage 4, renames variables from native
-    source names (OPeNDAP/CF variable names) to canonical SIR names, applies
-    unit conversions, and writes normalized per-variable NetCDFs.
+    Read raw temporal NetCDFs from stage 4 (gdptools WeightGen/AggGen
+    output), rename data variables from native source names (OPeNDAP/CF
+    variable names like ``"daily_mean_shortwave_radiation_at_surface"``)
+    to canonical SIR names, apply unit conversions, and write normalized
+    per-variable NetCDFs.
+
+    A reverse lookup table maps native variable names to their corresponding
+    ``VariableSpec`` and ``SIRVariableSchema`` entries, using the
+    ``native_name`` field from the dataset registry.
 
     Parameters
     ----------
-    temporal_files
-        Mapping of dataset key (e.g. ``"gridmet_2020"``) to raw NetCDF path.
-    schema
-        SIR variable schema entries (from ``build_sir_schema()``).
-    resolved
-        Resolved dataset entries from stage 2.
-    output_dir
-        Directory to write normalized NetCDF files.
+    temporal_files : dict[str, pathlib.Path]
+        Mapping of dataset key (e.g., ``"gridmet_2020"``) to raw NetCDF
+        file path produced by stage 4.
+    schema : list[SIRVariableSchema]
+        SIR variable schema entries from ``build_sir_schema()``.
+    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+        Resolved dataset entries from stage 2.  Used to build the native
+        name reverse lookup.
+    output_dir : pathlib.Path
+        Directory to write normalized NetCDF files.  Created if absent.
 
     Returns
     -------
-    dict[str, Path]
-        Mapping of canonical name to normalized NetCDF file path.
+    dict[str, pathlib.Path]
+        Mapping of canonical name (with year suffix if applicable, e.g.,
+        ``"pr_mm_mean_2020"``) to normalized NetCDF file path.
+
+    Warnings
+    --------
+    Logs a warning if a native variable name appears in multiple
+    ``VariableSpec`` entries (collision), or if a data variable in the
+    raw NetCDF has no matching schema entry.
+
+    Notes
+    -----
+    Year suffixes are extracted from the ``temporal_files`` keys (e.g.,
+    ``"gridmet_2020"`` yields ``"_2020"``) and appended to canonical
+    names to prevent multi-year collisions in the output mapping.
     """
     import xarray as xr
 
@@ -487,7 +653,18 @@ def normalize_sir_temporal(
 
 @dataclass
 class SIRValidationWarning:
-    """A single SIR validation warning."""
+    """Represent a single SIR validation warning.
+
+    Attributes
+    ----------
+    variable : str
+        Canonical variable name or column name that triggered the warning.
+    check_type : str
+        Category of the check: ``"missing"``, ``"nan_coverage"``, or
+        ``"range"``.
+    message : str
+        Human-readable description of the issue.
+    """
 
     variable: str
     check_type: str
@@ -495,7 +672,16 @@ class SIRValidationWarning:
 
 
 class SIRValidationError(Exception):
-    """Raised when SIR validation fails in strict mode."""
+    """Raise when SIR validation fails in strict mode.
+
+    Wraps one or more ``SIRValidationWarning`` instances into a single
+    exception with a formatted multi-line message listing each warning.
+
+    Attributes
+    ----------
+    warnings : list[SIRValidationWarning]
+        All validation warnings that triggered the error.
+    """
 
     def __init__(self, warnings: list[SIRValidationWarning]) -> None:
         self.warnings = warnings
@@ -511,21 +697,46 @@ def validate_sir(
     *,
     strict: bool = False,
 ) -> list[SIRValidationWarning]:
-    """Validate normalized SIR files against schema.
+    """Validate normalized SIR files against the expected schema.
+
+    Perform three categories of checks on the normalized SIR output:
+
+    1. **Completeness** -- every schema variable has a corresponding file.
+    2. **NaN coverage** -- warn if any variable is 100% NaN (likely a
+       processing failure).
+    3. **Value range** -- warn if values fall outside the schema's
+       ``valid_range`` (e.g., fractions outside [0, 1]).
+
+    Temporal NetCDF files (``.nc``) are checked for completeness but
+    skipped for NaN/range checks (CSV-only validation).
 
     Parameters
     ----------
-    sir_files
-        Mapping of canonical name to normalized CSV file path.
-    schema
-        SIR variable schema entries.
-    strict
-        If ``True``, raise ``SIRValidationError`` on any warnings.
+    sir_files : dict[str, pathlib.Path]
+        Mapping of canonical name to normalized file path (CSV or NetCDF).
+    schema : list[SIRVariableSchema]
+        Expected SIR variable schema entries from ``build_sir_schema()``.
+    strict : bool
+        If ``True``, raise ``SIRValidationError`` when any warnings are
+        produced.  Default ``False`` (tolerant mode -- log warnings and
+        continue).
 
     Returns
     -------
     list[SIRValidationWarning]
-        Validation warnings (empty list = valid).
+        Validation warnings.  Empty list means all checks passed.
+
+    Raises
+    ------
+    SIRValidationError
+        If ``strict=True`` and any validation warnings are produced.
+
+    Notes
+    -----
+    This function aligns with the project's fault-tolerance strategy:
+    production runs use ``strict=False`` (warnings are logged but
+    processing continues), while development/debugging uses
+    ``strict=True`` to catch issues early.
     """
     import pandas as pd
 

@@ -1,10 +1,42 @@
 """pywatershed parameter derivation plugin.
 
-Converts SIR physical properties (zonal statistics of raw geospatial
-data) into PRMS/pywatershed model parameters.  Implements the
-derivation pipeline from ``pywatershed_dataset_param_map.yml``.
+Convert SIR physical properties (zonal statistics of raw geospatial data)
+into PRMS/pywatershed model parameters.  This module implements the
+model-specific derivation pipeline defined in
+``docs/reference/pywatershed_dataset_param_map.yml``, transforming
+source-unit geospatial statistics into the internal unit system required
+by PRMS (feet, inches, degrees Fahrenheit, acres).
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, and 14.
+The derivation follows a 15-step DAG.  Steps implemented here:
+
+1. Geometry --- HRU area (acres) and latitude (decimal degrees)
+2. Topology --- segment routing (tosegment, hru_segment, seg_length)
+3. Topography --- elevation (feet), slope (decimal fraction), aspect (degrees)
+4. Land cover --- NLCD reclassification to PRMS cov_type, canopy density, imperviousness
+5. Soils --- gNATSGO/STATSGO2 texture classification and AWC
+6. Waterbody --- NHDPlus depression storage overlay
+7. Forcing --- temporal CBH merge (prcp, tmax, tmin)
+8. Lookup tables --- interception capacities and winter cover density
+9. Soltab --- potential solar radiation tables (Swift 1976)
+10. PET --- Jensen-Haise coefficients from climate normals
+11. Transpiration --- frost-free period timing from monthly tmin
+13. Defaults --- standard PRMS default values and initial conditions
+14. Calibration seeds --- physically-based initial values for calibration parameters
+
+Step 12 (routing parameters) is not yet implemented.
+
+References
+----------
+Markstrom, S. L., et al. (2015). PRMS-IV, the Precipitation-Runoff
+    Modeling System, Version 4. USGS Techniques and Methods 6-B7.
+Regan, R. S., et al. (2018). Description of the National Hydrologic
+    Model Infrastructure. USGS Techniques and Methods 6-B9.
+
+See Also
+--------
+hydro_param.plugins.DerivationContext : Typed input bundle for derivation.
+hydro_param.units.convert : Unit conversion dispatch used throughout.
+hydro_param.solar.compute_soltab : Solar radiation table computation.
 """
 
 from __future__ import annotations
@@ -88,19 +120,33 @@ _SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
 
 
 def _sat_vp(temp_f: np.ndarray) -> np.ndarray:
-    """Saturation vapor pressure (hPa) from temperature in °F.
+    """Compute saturation vapor pressure from temperature.
 
-    Uses the Magnus formula (Alduchov & Eskridge 1996).
+    Apply the Magnus formula (Alduchov & Eskridge 1996) to convert
+    temperature in degrees Fahrenheit to saturation vapor pressure.
+    Used internally by step 10 (PET coefficients) for the Jensen-Haise
+    equation.
 
     Parameters
     ----------
-    temp_f
-        Temperature in degrees Fahrenheit.
+    temp_f : np.ndarray
+        Temperature in degrees Fahrenheit (°F).
 
     Returns
     -------
     np.ndarray
         Saturation vapor pressure in hectopascals (hPa).
+
+    Notes
+    -----
+    Internally converts °F to °C before applying the Magnus formula:
+    ``es = 6.1078 * exp(17.269 * T_c / (T_c + 237.3))``.
+
+    References
+    ----------
+    Alduchov, O. A. and Eskridge, R. E. (1996). Improved Magnus Form
+        Approximation of Saturation Vapor Pressure. J. Appl. Meteor.,
+        35, 601-609.
     """
     temp_c = (temp_f - 32.0) * 5.0 / 9.0
     return 6.1078 * np.exp(17.269 * temp_c / (temp_c + 237.3))
@@ -113,26 +159,43 @@ def merge_temporal_into_derived(
     conversions: dict[str, tuple[str, str]] | None = None,
     id_field: str = "nhru",
 ) -> xr.Dataset:
-    """Merge temporal data into derived dataset with renaming and unit conversion.
+    """Merge temporal forcing data into the derived parameter dataset.
+
+    .. deprecated::
+        Use ``PywatershedDerivation._derive_forcing()`` via
+        ``DerivationContext.temporal`` instead.  This standalone function
+        predates the plugin architecture and will be removed in a future
+        release.
+
+    Concatenate multi-year temporal chunks (keyed with ``_YYYY`` suffixes),
+    rename variables to PRMS conventions, apply unit conversions, and align
+    the feature dimension to the derived dataset's ``id_field``.
 
     Parameters
     ----------
-    derived
+    derived : xr.Dataset
         Derived parameter dataset (output of ``PywatershedDerivation.derive()``).
-    temporal
+    temporal : dict[str, xr.Dataset]
         Temporal datasets keyed by dataset name from ``PipelineResult.temporal``.
-    renames
+        Multi-year datasets may have keys like ``"gridmet_2020"``,
+        ``"gridmet_2021"`` which are concatenated along the time dimension.
+    renames : dict[str, str] or None
         Variable name mapping ``{source_name: target_name}``.
-    conversions
+    conversions : dict[str, tuple[str, str]] or None
         Unit conversions ``{variable_name: (from_unit, to_unit)}``.
-        Applied **after** renames (use target names).
-    id_field
-        Feature dimension name used in the derived dataset.
+        Applied **after** renames (use target names as keys).
+    id_field : str
+        Feature dimension name used in the derived dataset (default ``"nhru"``).
 
     Returns
     -------
     xr.Dataset
         Derived dataset with temporal variables merged in.
+
+    Warnings
+    --------
+    Emits a ``DeprecationWarning`` at call time.  Migrate to
+    ``DerivationContext.temporal`` with ``_derive_forcing()`` for new code.
     """
     import warnings
 
@@ -190,12 +253,45 @@ def merge_temporal_into_derived(
 class PywatershedDerivation:
     """Derive pywatershed/PRMS parameters from SIR physical properties.
 
-    Implements the derivation pipeline from
-    ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
-    steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 6 (waterbody overlay), 7 (forcing), 8 (lookup tables),
-    9 (soltab), 10 (PET coefficients), 11 (transpiration timing),
-    13 (defaults), and 14 (calibration seeds).
+    Implement the full derivation pipeline defined in
+    ``docs/reference/pywatershed_dataset_param_map.yml``, converting
+    source-unit zonal statistics from the Standardized Internal
+    Representation (SIR) into the ~100+ parameters required by
+    pywatershed (PRMS-IV in Python).
+
+    The derivation follows a directed acyclic graph (DAG) of 15 ordered
+    steps.  Each step is implemented as a private method (e.g.,
+    ``_derive_geometry`` for step 1).  Steps execute in dependency order:
+    later steps may read parameters produced by earlier ones (e.g.,
+    step 8 reads ``cov_type`` from step 4).
+
+    This class conforms to the ``DerivationPlugin`` protocol defined in
+    ``hydro_param.plugins``.
+
+    Attributes
+    ----------
+    name : str
+        Plugin identifier (``"pywatershed"``).
+
+    Notes
+    -----
+    PRMS internal units are: feet, inches, degrees Fahrenheit, acres.
+    All unit conversions from SI source data happen within individual
+    derivation steps using ``hydro_param.units.convert``.
+
+    Lookup tables are loaded lazily from YAML files and cached in
+    ``_lookup_cache`` for the lifetime of the instance.
+
+    References
+    ----------
+    Markstrom, S. L., et al. (2015). PRMS-IV, the Precipitation-Runoff
+        Modeling System, Version 4. USGS Techniques and Methods 6-B7.
+
+    See Also
+    --------
+    hydro_param.plugins.DerivationContext : Input bundle for ``derive()``.
+    hydro_param.plugins.DerivationPlugin : Protocol this class implements.
+    hydro_param.formatters.pywatershed : Output formatter for pywatershed.
     """
 
     name: str = "pywatershed"
@@ -206,15 +302,36 @@ class PywatershedDerivation:
     def derive(self, context: DerivationContext) -> xr.Dataset:
         """Derive all pywatershed parameters from the SIR.
 
+        Execute the full derivation DAG in dependency order, producing a
+        single ``xr.Dataset`` containing all derivable PRMS parameters.
+        Steps that lack required input data log warnings and are skipped
+        gracefully.  Parameter overrides from the config are applied last.
+
         Parameters
         ----------
-        context
-            Typed input bundle containing SIR, fabric, config, etc.
+        context : DerivationContext
+            Typed input bundle containing the SIR dataset, target fabric
+            GeoDataFrame, segment GeoDataFrame, waterbody GeoDataFrame,
+            temporal forcing datasets, lookup table directory, and
+            pipeline configuration.
 
         Returns
         -------
         xr.Dataset
-            pywatershed parameter dataset with PRMS-convention units.
+            Parameter dataset with PRMS-convention variable names and units.
+            Dimensions are ``nhru`` (and ``nsegment`` for routing, ``ndoy``
+            for soltab, ``nmonths`` for monthly parameters, ``time`` for
+            forcing).
+
+        Notes
+        -----
+        Step execution order: 1 (geometry) -> 2 (topology) -> 3 (topo) ->
+        4 (landcover) -> 5 (soils) -> 6 (waterbody) -> 8 (lookups) ->
+        9 (soltab) -> 10 (PET) -> 11 (transp) -> 13 (defaults) ->
+        14 (calibration) -> 7 (forcing) -> overrides.
+
+        Step 7 (forcing) runs late because it has no downstream
+        dependencies within the static parameter DAG.
         """
         sir = context.sir
         id_field = context.fabric_id_field
@@ -285,12 +402,35 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Step 1: Compute basic geometry from the target fabric.
+        """Compute HRU area and centroid latitude from the target fabric (step 1).
 
-        When *fabric* is provided, computes area via EPSG:5070 equal-area
-        projection and latitude from EPSG:4326 centroids.  Falls back to
-        SIR variables ``hru_area_m2`` and ``hru_lat`` when fabric is not
-        available.
+        Derive ``hru_area`` (acres) and ``hru_lat`` (decimal degrees) from
+        the fabric GeoDataFrame geometry.  Area is computed in EPSG:5070
+        (NAD83 CONUS Albers equal-area) and converted from m² to acres.
+        Latitude is extracted from EPSG:4326 (WGS84) centroids.
+
+        Falls back to SIR variables ``hru_area_m2`` and ``hru_lat`` when
+        fabric is ``None`` or lacks the ``id_field`` column.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing ``sir``, ``fabric``, and
+            ``fabric_id_field``.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``hru_area`` (acres) and ``hru_lat``
+            (decimal degrees) added on the ``nhru`` dimension.
+
+        Notes
+        -----
+        Unit conversions: m² -> acres (factor: 1 acre = 4046.8564224 m²).
+        The equal-area projection ensures accurate area computation for
+        continental US fabrics; other regions may need a different CRS.
         """
         sir = ctx.sir
         fabric = ctx.fabric
@@ -347,24 +487,49 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Step 2: Extract routing topology from GeoDataFrames.
+        """Extract routing topology from fabric and segment GeoDataFrames (step 2).
 
-        Extracts ``tosegment``, ``hru_segment``, and ``seg_length``
-        directly from GeoDataFrame columns.  The input fabric should
-        carry these as attributes (e.g., from the Geospatial Fabric).
+        Read ``tosegment``, ``hru_segment``, and ``seg_length`` from the
+        Geospatial Fabric GeoDataFrames.  These define the stream-segment
+        routing network and HRU-to-segment flow contributions used by
+        PRMS for Muskingum routing.
+
+        Segment lengths are computed geodesically (WGS84 ellipsoid) from
+        line geometries when a ``seg_length`` column is not already present,
+        using ``pyproj.Geod.geometry_length``.
 
         Parameters
         ----------
-        ctx
-            Derivation context with fabric, segments, and field names.
-        ds
-            Output dataset being constructed.
+        ctx : DerivationContext
+            Derivation context with ``fabric``, ``segments``,
+            ``fabric_id_field``, and ``segment_id_field``.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``tosegment`` (dimensionless index on ``nsegment``),
+            ``hru_segment`` (dimensionless index on ``nhru``), and
+            ``seg_length`` (meters on ``nsegment``) added.  Returns ``ds``
+            unchanged if ``fabric`` or ``segments`` is ``None``.
 
         Raises
         ------
         ValueError
-            If required columns (``tosegment``, ``hru_segment``) are
-            missing from the GeoDataFrames.
+            If ``tosegment`` column is missing from segments, ``hru_segment``
+            column is missing from fabric, tosegment contains self-loops or
+            out-of-range values, or no outlet segments (tosegment == 0) exist.
+        KeyError
+            If an explicitly configured ``segment_id_field`` is not found in
+            the segments GeoDataFrame columns.
+
+        Notes
+        -----
+        Topology is model-specific and comes directly from the fabric
+        GeoDataFrames --- hydro-param does not normalize between topology
+        conventions.  The ``tosegment`` array uses 1-based indexing with
+        0 indicating an outlet segment.
         """
         fabric = ctx.fabric
         segments = ctx.segments
@@ -455,12 +620,31 @@ class PywatershedDerivation:
 
     @staticmethod
     def _compute_seg_length(segments: gpd.GeoDataFrame) -> np.ndarray:
-        """Compute segment length from column or geodesic calculation.
+        """Compute segment lengths from column or geodesic calculation.
 
-        Uses ``seg_length`` column if present, otherwise computes
-        geodesic length from segment line geometries using
-        ``pyproj.Geod.geometry_length``.  Handles LineString,
-        MultiLineString, and projected CRS (auto-reprojects to WGS84).
+        Return segment lengths in meters.  Prefer the ``seg_length`` column
+        if present in the GeoDataFrame; otherwise compute geodesic length
+        from line geometries using the WGS84 ellipsoid.  Handles LineString
+        and MultiLineString geometries.  Projected CRS data is reprojected
+        to EPSG:4326 before geodesic computation.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame with line geometries and optional
+            ``seg_length`` column.
+
+        Returns
+        -------
+        np.ndarray
+            Segment lengths in meters, shape ``(nseg,)``.  Empty or null
+            geometries yield a length of 0.0.
+
+        Notes
+        -----
+        PRMS expects ``seg_length`` in meters.  No unit conversion is
+        needed because ``pyproj.Geod.geometry_length`` returns meters
+        on the WGS84 ellipsoid.
         """
         if "seg_length" in segments.columns:
             return segments["seg_length"].values.astype(np.float64)
@@ -482,12 +666,24 @@ class PywatershedDerivation:
 
     @staticmethod
     def _validate_tosegment(tosegment: np.ndarray, nseg: int) -> None:
-        """Validate tosegment array.
+        """Validate the tosegment routing array for topological consistency.
+
+        Check that no segment routes to itself (self-loop), all values are
+        within the valid range ``[0, nseg]``, and at least one outlet
+        (value == 0) exists.
+
+        Parameters
+        ----------
+        tosegment : np.ndarray
+            Downstream segment index array, 1-based with 0 = outlet.
+        nseg : int
+            Total number of segments (maximum valid index).
 
         Raises
         ------
         ValueError
-            If self-loops exist, values out of range, or no outlets found.
+            If self-loops exist, values are out of range ``[0, nseg]``,
+            or no outlet segments (tosegment == 0) are found.
         """
         indices = np.arange(1, nseg + 1)
 
@@ -509,12 +705,23 @@ class PywatershedDerivation:
 
     @staticmethod
     def _validate_hru_segment(hru_segment: np.ndarray, nseg: int) -> None:
-        """Validate hru_segment array.
+        """Validate the hru_segment array for valid segment references.
+
+        Ensure all HRU-to-segment assignments reference existing segments
+        (values in ``[0, nseg]``, where 0 means the HRU is unassigned).
+
+        Parameters
+        ----------
+        hru_segment : np.ndarray
+            HRU-to-segment assignment array (1-based segment indices,
+            0 = unassigned).
+        nseg : int
+            Total number of segments (maximum valid index).
 
         Raises
         ------
         ValueError
-            If values are out of range [0, nseg].
+            If any values are outside the range ``[0, nseg]``.
         """
         if np.any(hru_segment < 0) or np.any(hru_segment > nseg):
             bad = hru_segment[(hru_segment < 0) | (hru_segment > nseg)]
@@ -525,7 +732,39 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _derive_topography(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 3: Convert DEM zonal statistics to PRMS parameters."""
+        """Convert DEM zonal statistics to PRMS topographic parameters (step 3).
+
+        Transform 3DEP-derived zonal statistics from SI units to PRMS
+        conventions:
+
+        - ``elevation_m_mean`` (meters) -> ``hru_elev`` (feet)
+        - ``slope_deg_mean`` (degrees) -> ``hru_slope`` (decimal fraction = tan(slope))
+        - ``aspect_deg_mean`` (degrees) -> ``hru_aspect`` (degrees, unchanged)
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing the SIR dataset.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``hru_elev`` (feet), ``hru_slope`` (decimal
+            fraction), and ``hru_aspect`` (degrees) on the ``nhru``
+            dimension.  Only variables with corresponding SIR input are
+            added.
+
+        Notes
+        -----
+        Unit conversions: meters -> feet (``convert(m, ft)``),
+        degrees -> radians -> tan() for slope.
+
+        PRMS slope is rise/run (dimensionless), not an angle.  The
+        conversion is ``tan(slope_rad)`` where ``slope_rad`` is the
+        slope angle in radians.
+        """
         sir = ctx.sir
         if "elevation_m_mean" in sir:
             ds["hru_elev"] = xr.DataArray(
@@ -557,18 +796,54 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _derive_landcover(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 4: Derive vegetation and impervious parameters from NLCD.
+        """Derive vegetation cover and impervious parameters from NLCD (step 4).
+
+        Reclassify NLCD land cover classes to PRMS vegetation cover type
+        (``cov_type``) and derive canopy density (``covden_sum``) and
+        impervious fraction (``hru_percent_imperv``).
 
         Supports three input modes:
 
         1. **Categorical fractions** (preferred): SIR contains columns
            like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
-           normalized categorical output.  The majority class is
-           computed via argmax.
+           normalized categorical zonal output.  The majority class is
+           computed via argmax across fraction columns.
         2. **Single majority value**: ``land_cover`` or
-           ``land_cover_majority`` containing the dominant NLCD class.
-        3. **Impervious/canopy**: ``fctimp_pct_mean`` (0-100%) and
-           ``tree_canopy_pct_mean`` (0-100%).
+           ``land_cover_majority`` variable containing the dominant
+           NLCD class code per HRU.
+        3. **Continuous auxiliary layers**: ``fctimp_pct_mean`` (0--100%)
+           for impervious fraction and ``tree_canopy_pct_mean``
+           (0--100%) for canopy cover density.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing the SIR dataset and lookup
+            tables directory.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``cov_type`` (integer PRMS code on ``nhru``),
+            ``covden_sum`` (decimal fraction 0--1 on ``nhru``), and
+            ``hru_percent_imperv`` (decimal fraction 0--1 on ``nhru``)
+            added where input data is available.
+
+        Notes
+        -----
+        PRMS ``cov_type`` codes: 0 = bare, 1 = grasses, 2 = shrubs,
+        3 = deciduous trees, 4 = coniferous trees.  The NLCD-to-PRMS
+        mapping is defined in ``nlcd_to_prms_cov_type.yml``.
+
+        When ``tree_canopy_pct_mean`` is unavailable, ``covden_sum`` is
+        estimated from ``cov_type`` using a simple lookup (0=0.0,
+        1=0.3, 2=0.4, 3=0.7, 4=0.8).
+
+        See Also
+        --------
+        _compute_majority_from_fractions : Argmax over fraction columns.
         """
         sir = ctx.sir
         # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
@@ -638,22 +913,34 @@ class PywatershedDerivation:
     ) -> np.ndarray | None:
         """Compute majority NLCD class from categorical fraction columns.
 
-        Scans SIR variables for columns matching ``{prefix}{class_code}``
-        (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU, returns the
-        class code with the highest fraction.
+        Scan SIR variables for columns matching ``{prefix}{class_code}``
+        (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU,
+        return the class code with the highest fraction via ``np.argmax``.
+
+        This method supports the normalized categorical output from
+        gdptools ``ZonalGen`` where each NLCD class is a separate
+        fraction variable summing to 1.0 per HRU.
 
         Parameters
         ----------
-        sir
+        sir : xr.Dataset
             SIR dataset potentially containing fraction columns.
-        prefixes
-            Variable name prefixes to search for.
+        prefixes : tuple[str, ...]
+            Variable name prefixes to search for (default:
+            ``("lndcov_frac_",)``).
 
         Returns
         -------
         np.ndarray or None
-            Array of majority NLCD class codes (int), or ``None`` if no
-            fraction columns found.
+            Array of majority NLCD class codes (int) with shape
+            ``(nhru,)``, or ``None`` if fewer than 2 fraction columns
+            are found for any prefix.
+
+        Notes
+        -----
+        Suffixes that cannot be parsed as integers are silently skipped
+        with a debug log message.  At least 2 valid fraction columns
+        are required to compute a meaningful majority.
         """
         for prefix in prefixes:
             fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
@@ -701,17 +988,50 @@ class PywatershedDerivation:
     _SOIL_RECHR_MAX_FRAC_DEFAULT: float = 0.4
 
     def _derive_soils(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 5: Derive soil parameters from gNATSGO/STATSGO2 zonal stats.
+        """Derive soil parameters from gNATSGO/STATSGO2 zonal statistics (step 5).
 
-        Supports two input modes:
+        Classify soil texture into PRMS ``soil_type`` and derive
+        ``soil_moist_max`` (maximum soil moisture capacity) from
+        available water capacity (AWC).
+
+        Supports two input modes for soil texture:
 
         1. **Soil texture fractions** (preferred): SIR contains columns
-           like ``soil_texture_frac_sand``, ``soil_texture_frac_loam``, etc.
-           Majority class via argmax, then reclassify to PRMS soil_type.
+           like ``soil_texture_frac_sand``, ``soil_texture_frac_loam``,
+           etc.  Majority class determined via argmax, then reclassified
+           to PRMS soil_type using ``soil_texture_to_prms_type.yml``.
         2. **Single texture class**: ``soil_texture`` or
-           ``soil_texture_majority`` containing the dominant USDA class name.
+           ``soil_texture_majority`` variable containing the dominant
+           USDA texture class name per HRU.
 
-        Also derives ``soil_moist_max`` from available water capacity (AWC).
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing the SIR dataset and lookup
+            tables directory.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``soil_type`` (integer: 1=sand, 2=loam, 3=clay
+            on ``nhru``), ``soil_moist_max`` (inches on ``nhru``), and
+            ``soil_rechr_max_frac`` (decimal fraction on ``nhru``) added
+            where input data is available.
+
+        Notes
+        -----
+        Unit conversions: AWC from mm -> inches (``convert(mm, in)``).
+        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches.
+
+        ``soil_rechr_max_frac`` is set to a constant default of 0.4
+        (no soil layer depth data is currently available from the SIR
+        to compute it from first principles).
+
+        See Also
+        --------
+        _compute_soil_type : Texture classification helper.
         """
         sir = ctx.sir
 
@@ -766,7 +1086,26 @@ class PywatershedDerivation:
         return ds
 
     def _compute_soil_type(self, sir: xr.Dataset, ctx: DerivationContext) -> np.ndarray | None:
-        """Compute PRMS soil_type from SIR soil texture data."""
+        """Compute PRMS soil_type from SIR soil texture data.
+
+        Try fraction columns first (argmax across texture classes), then
+        fall back to a single texture class variable.  Unrecognized
+        texture names default to loam (soil_type=2).
+
+        Parameters
+        ----------
+        sir : xr.Dataset
+            SIR dataset with soil texture variables.
+        ctx : DerivationContext
+            Derivation context providing the lookup tables directory.
+
+        Returns
+        -------
+        np.ndarray or None
+            Array of PRMS soil type codes (1=sand, 2=loam, 3=clay) with
+            shape ``(nhru,)``, or ``None`` if no soil texture data is
+            found in the SIR.
+        """
         # Check data availability before loading lookup table
         prefix = "soil_texture_frac_"
         fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
@@ -835,7 +1174,26 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _waterbody_defaults(self, ds: xr.Dataset, nhru: int) -> xr.Dataset:
-        """Assign zero/default waterbody parameters."""
+        """Assign zero/default waterbody parameters when no overlay data exists.
+
+        Set ``dprst_frac`` and ``dprst_area_max`` to zero, and
+        ``hru_type`` to 1 (land) for all HRUs.  Used as a fallback
+        when waterbody data, fabric, or ``hru_area`` is unavailable.
+
+        Parameters
+        ----------
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+        nhru : int
+            Number of HRUs for array dimensioning.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``dprst_frac`` (fraction), ``dprst_area_max``
+            (acres), and ``hru_type`` (dimensionless integer) set to
+            defaults on the ``nhru`` dimension.
+        """
         ds["dprst_frac"] = xr.DataArray(
             np.zeros(nhru),
             dims="nhru",
@@ -858,23 +1216,54 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Step 6: Derive depression storage from waterbody overlay.
+        """Derive depression storage from NHDPlus waterbody overlay (step 6).
 
-        Performs polygon-on-polygon overlay of NHDPlus waterbody polygons
-        against HRU fabric to compute depression fraction, area, and HRU
-        type classification.
+        Perform polygon-on-polygon overlay of NHDPlus waterbody polygons
+        (LakePond and Reservoir feature types) against the HRU fabric to
+        compute depression storage fraction, maximum depression area, and
+        HRU type classification (land vs. lake).
+
+        The overlay uses ``geopandas.overlay(how="intersection")`` to clip
+        waterbody polygons to HRU boundaries, then sums clipped areas per
+        HRU.  HRUs with >50% waterbody coverage are classified as lake-type
+        (``hru_type=2``).
 
         Parameters
         ----------
-        ctx
-            Derivation context (must contain ``fabric`` and ``waterbodies``).
-        ds
-            In-progress parameter dataset (must contain ``hru_area``).
+        ctx : DerivationContext
+            Derivation context providing ``fabric``, ``waterbodies``,
+            ``fabric_id_field``, and ``sir``.
+        ds : xr.Dataset
+            In-progress parameter dataset (must contain ``hru_area`` from
+            step 1 for fraction computation).
 
         Returns
         -------
         xr.Dataset
-            Dataset with ``dprst_frac``, ``dprst_area_max``, and ``hru_type``.
+            Dataset with ``dprst_frac`` (decimal fraction 0--1 on ``nhru``),
+            ``dprst_area_max`` (acres on ``nhru``), and ``hru_type``
+            (integer: 1=land, 2=lake on ``nhru``).  Falls back to zero
+            defaults if any prerequisite data is missing.
+
+        Raises
+        ------
+        KeyError
+            If ``id_field`` is missing from the fabric columns, or if the
+            waterbody GeoDataFrame lacks an ``ftype`` column.
+
+        Notes
+        -----
+        Unit conversions: intersection area from m² -> acres (factor:
+        1 acre = 4046.8564224 m²).  The fabric CRS must be projected
+        for accurate area computation; a warning is logged if geographic.
+
+        Waterbodies are reprojected to match the fabric CRS if they differ.
+        Only ``ftype`` values ``"LakePond"`` and ``"Reservoir"`` are
+        included; other feature types (e.g., SwampMarsh) are excluded.
+
+        See Also
+        --------
+        _waterbody_defaults : Zero-value fallback when overlay is skipped.
         """
         nhru = ds.sizes.get("nhru", 0)
         id_field = ctx.fabric_id_field
@@ -990,9 +1379,45 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _apply_lookup_tables(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 8: Apply lookup tables for interception and winter cover.
+        """Apply lookup tables for interception and winter cover density (step 8).
 
-        Requires ``cov_type`` and ``covden_sum`` to already be in ``ds``.
+        Use ``cov_type`` (from step 4) to look up per-HRU interception
+        capacities (``srain_intcp``, ``wrain_intcp``, ``snow_intcp``) and
+        compute winter cover density (``covden_win``) by applying a
+        cov_type-dependent reduction factor to ``covden_sum``.
+
+        Also sets ``imperv_stor_max`` to a uniform default of 0.03 inches.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing the lookup tables directory.
+        ds : xr.Dataset
+            In-progress parameter dataset (must contain ``cov_type`` from
+            step 4; ``covden_sum`` needed for winter density).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``srain_intcp`` (inches), ``wrain_intcp``
+            (inches), ``snow_intcp`` (inches), ``imperv_stor_max``
+            (inches), and ``covden_win`` (decimal fraction) added on
+            the ``nhru`` dimension.  Returns ``ds`` unchanged if
+            ``cov_type`` is not present.
+
+        Notes
+        -----
+        Lookup tables used:
+
+        - ``cov_type_to_interception.yml`` --- maps PRMS cov_type to
+          seasonal interception capacities (inches).
+        - ``cov_type_winter_reduction.yml`` --- maps PRMS cov_type to a
+          multiplicative reduction factor for converting summer to winter
+          cover density.
+
+        See Also
+        --------
+        _load_lookup_table : YAML lookup table loader with caching.
         """
         if "cov_type" not in ds:
             return ds
@@ -1042,13 +1467,55 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _derive_soltab(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 9: Compute potential solar radiation tables (Swift 1976).
+        """Compute potential solar radiation tables using Swift (1976) (step 9).
 
-        Requires ``hru_lat``, ``hru_slope``, and ``hru_aspect`` from step 3.
-        Produces 2-D arrays of shape ``(ndoy=366, nhru)`` for potential solar
-        radiation on sloped and horizontal surfaces.  Output dimensions are
-        named ``ndoy`` and ``nhru`` to match pywatershed's internal convention;
-        ``nhru`` aligns with the id_field coordinate on the existing dataset.
+        Generate day-of-year-resolved potential shortwave radiation for
+        sloped and horizontal surfaces, plus hours of direct sunlight,
+        for each HRU.  These tables drive the ``soltab`` module in
+        pywatershed/PRMS for daily solar radiation distribution.
+
+        Requires ``hru_lat`` (decimal degrees), ``hru_slope`` (decimal
+        fraction), and ``hru_aspect`` (degrees) from step 3.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context (used for logging context only).
+        ds : xr.Dataset
+            In-progress parameter dataset containing step 3 outputs.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with three 2-D arrays on dimensions ``(ndoy, nhru)``:
+
+            - ``soltab_potsw`` --- potential SW radiation on slope
+              (cal/cm²/day)
+            - ``soltab_horad_potsw`` --- potential SW radiation on
+              horizontal surface (cal/cm²/day)
+            - ``soltab_sunhrs`` --- hours of direct sunlight (hours)
+
+            Returns ``ds`` unchanged (with warning) if required inputs
+            are missing.
+
+        Notes
+        -----
+        ``ndoy`` has 366 entries (includes leap day).  The ``nhru``
+        dimension aligns with the ``id_field`` coordinate on the
+        existing dataset.
+
+        NaN values in the output indicate NaN in the upstream zonal
+        statistics (slope, aspect, or latitude) and are logged as
+        warnings.
+
+        References
+        ----------
+        Swift, L. W. (1976). Algorithm for Solar Radiation on Mountain
+            Slopes. Water Resources Research, 12(1), 108-112.
+
+        See Also
+        --------
+        hydro_param.solar.compute_soltab : Core solar table computation.
         """
         required = ("hru_lat", "hru_slope", "hru_aspect")
         if not all(v in ds for v in required):
@@ -1105,10 +1572,42 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _apply_defaults(self, ds: xr.Dataset, nhru: int) -> xr.Dataset:
-        """Step 13: Apply standard PRMS default values.
+        """Apply standard PRMS default values and initial conditions (step 13).
 
-        Only sets parameters that are not already present in ``ds``
-        (preserves any values derived from data in earlier steps).
+        Fill parameters that were not derived from data in earlier steps
+        with literature-standard defaults from Regan et al. (2018) and
+        Markstrom et al. (2015).  Only sets parameters that are **not**
+        already present in ``ds``, preserving data-derived values.
+
+        Parameters
+        ----------
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+        nhru : int
+            Number of HRUs for array dimensioning of per-HRU defaults.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with default values added for any missing parameters
+            from the ``_DEFAULTS`` dictionary.
+
+        Notes
+        -----
+        Special-case parameters that require array shapes:
+
+        - ``jh_coef``: shape ``(nhru, 12)`` --- per_degF_per_day
+        - ``transp_beg``, ``transp_end``: shape ``(nhru,)`` --- integer month
+        - ``hru_type``: shape ``(nhru,)`` --- integer (1=land, 2=lake)
+
+        All other defaults are scalar values broadcast by xarray as needed.
+        Default units match PRMS conventions: inches for storage depths,
+        degree-days for ``transp_tmax``, etc.
+
+        References
+        ----------
+        Regan, R. S., et al. (2018). USGS Techniques and Methods 6-B9.
+        Markstrom, S. L., et al. (2015). USGS Techniques and Methods 6-B7.
         """
         # Special handling for 2D jh_coef default (nhru, 12)
         if "jh_coef" not in ds:
@@ -1153,12 +1652,58 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _derive_calibration_seeds(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
-        """Step 14: Apply YAML-driven calibration seed values.
+        """Apply YAML-driven calibration seed values (step 14).
 
-        Seeds provide physically-based initial values for calibration
-        parameters.  Each seed is computed from a method (linear,
-        exponential_scale, fraction_of, constant) with range clipping.
-        Seeds are skipped when the parameter already exists in ``ds``.
+        Compute physically-based initial values for calibration parameters
+        from the ``calibration_seeds.yml`` lookup table.  Seeds provide
+        reasonable starting points for calibration, derived from existing
+        dataset variables using simple mathematical relationships.
+
+        Each seed specification includes a method (``linear``,
+        ``exponential_scale``, ``fraction_of``, ``constant``), input
+        variable reference, method-specific parameters, valid range
+        for clipping, and a fallback default value.
+
+        Seeds are **skipped** when the parameter already exists in ``ds``
+        (e.g., set by an earlier derivation step or user override).
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing the lookup tables directory.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.  Existing parameters
+            take precedence over seed values.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with calibration seed parameters added.  Each seed
+            variable carries ``attrs["source"] = "calibration_seed"`` for
+            provenance tracking.
+
+        Raises
+        ------
+        ValueError
+            If a seed method requires a parameter key not present in the
+            YAML ``params`` dict, or if ``range`` does not have exactly
+            2 elements ``[min, max]``.
+
+        Notes
+        -----
+        Supported seed methods (defined in ``_SEED_METHODS``):
+
+        - ``linear``: ``scale * input + offset``
+        - ``exponential_scale``: ``scale * exp(exponent * input)``
+        - ``fraction_of``: ``fraction * input``
+        - ``constant``: fixed scalar value
+
+        Unknown methods and missing input variables trigger a warning
+        and fall back to the specified default value.
+
+        See Also
+        --------
+        _SEED_METHODS : Method dispatch dictionary.
         """
         tables_dir = ctx.resolved_lookup_tables_dir
         seed_table = self._load_lookup_table("calibration_seeds", tables_dir)
@@ -1267,13 +1812,48 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Step 7: Merge SIR-normalized temporal forcing into derived dataset.
+        """Merge SIR-normalized temporal forcing into derived dataset (step 7).
 
-        Loads variable mappings from ``forcing_variables.yml``, detects the
-        source dataset by matching SIR variable names, renames to PRMS names,
-        applies unit conversions, and merges into *ds*.
+        Load variable mappings from ``forcing_variables.yml``, auto-detect
+        the source dataset by matching SIR variable names, rename to PRMS
+        conventions (e.g., ``tmmx`` -> ``tmax``), apply unit conversions
+        (e.g., K -> °F, mm -> inches), and merge time-series arrays into
+        the parameter dataset.
 
-        Skips gracefully when no temporal data is available.
+        Multi-year temporal chunks (keyed with ``_YYYY`` suffixes like
+        ``"gridmet_2020"``, ``"gridmet_2021"``) are concatenated along the
+        time dimension before processing.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing ``temporal`` datasets and the
+            lookup tables directory.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment with forcing
+            variables.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with temporal forcing variables (e.g., ``prcp``,
+            ``tmax``, ``tmin``) merged in on dimensions ``(time, nhru)``.
+            Returns ``ds`` unchanged if no temporal data is available.
+
+        Notes
+        -----
+        This step runs late in the DAG (after step 14) because forcing
+        variables have no downstream dependencies within the static
+        parameter derivation.
+
+        Unit conversions are defined in ``forcing_variables.yml`` per
+        variable as ``sir_unit`` -> ``intermediate_unit`` pairs and
+        dispatched through ``hydro_param.units.convert``.
+
+        See Also
+        --------
+        _detect_forcing_dataset : Source dataset matching logic.
+        merge_temporal_into_derived : Deprecated standalone equivalent.
         """
         if ctx.temporal is None or len(ctx.temporal) == 0:
             logger.info("No temporal data provided; skipping forcing generation.")
@@ -1371,8 +1951,26 @@ class PywatershedDerivation:
     ) -> dict | None:
         """Match a temporal dataset to its forcing config section.
 
-        Tries exact name match first, then falls back to counting SIR
-        variable name matches.
+        Try exact name match on ``source_name`` first, then fall back to
+        a fuzzy match by counting how many SIR variable names from each
+        config section appear in the temporal dataset.  The section with
+        the most variable name hits is selected.
+
+        Parameters
+        ----------
+        source_name : str
+            Base name of the temporal source (e.g., ``"gridmet"``).
+        temporal : xr.Dataset
+            Temporal dataset to match against config sections.
+        datasets_config : dict
+            Forcing dataset configurations from ``forcing_variables.yml``,
+            keyed by dataset name.
+
+        Returns
+        -------
+        dict or None
+            The matched forcing config section (mapping PRMS names to
+            variable specs), or ``None`` if no match is found.
         """
         # Exact match on source name
         if source_name in datasets_config:
@@ -1411,13 +2009,34 @@ class PywatershedDerivation:
     ) -> tuple[np.ndarray, np.ndarray] | None:
         """Compute monthly mean tmax and tmin from temporal forcing data.
 
-        Aggregates multi-year daily data into 12 monthly means per HRU,
-        converting from °C to °F.
+        Aggregate multi-year daily temperature data into 12 monthly means
+        per HRU, converting from the SIR unit (°C) to PRMS internal
+        units (°F).  Used by steps 10 (PET coefficients) and 11
+        (transpiration timing).
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing ``temporal`` datasets and the
+            lookup tables directory for forcing variable configuration.
 
         Returns
         -------
-        tuple of (monthly_tmax, monthly_tmin) each shape (12, nhru) in °F,
-        or None if temporal data is unavailable.
+        tuple[np.ndarray, np.ndarray] or None
+            Tuple of ``(monthly_tmax, monthly_tmin)`` each with shape
+            ``(12, nhru)`` in degrees Fahrenheit (°F), or ``None`` if
+            temporal data is unavailable or lacks tmax/tmin variables.
+
+        Notes
+        -----
+        Temperature conversion: °C -> °F via ``T_f = T_c * 9/5 + 32``.
+
+        Requires full 12-month coverage in the temporal data to produce
+        reliable normals.  Sources with fewer than 12 months are skipped
+        with a warning.
+
+        For single-HRU datasets, the output is reshaped from ``(12,)``
+        to ``(12, 1)`` to maintain consistent 2-D array shape.
         """
         if ctx.temporal is None or len(ctx.temporal) == 0:
             return None
@@ -1514,12 +2133,56 @@ class PywatershedDerivation:
         ds: xr.Dataset,
         normals: tuple[np.ndarray, np.ndarray] | None,
     ) -> xr.Dataset:
-        """Step 10: Derive Jensen-Haise PET coefficients.
+        """Derive Jensen-Haise PET coefficients from climate normals (step 10).
 
-        Computes ``jh_coef`` (nhru, 12) and ``jh_coef_hru`` (nhru,) from
-        monthly climate normals using PRMS-IV equation 1-26.
+        Compute monthly ``jh_coef`` and per-HRU ``jh_coef_hru`` using
+        the PRMS-IV equation 1-26 (Markstrom et al. 2015).  The
+        Jensen-Haise method estimates potential evapotranspiration from
+        temperature and vapor pressure deficit.
 
-        Falls back to step 13 defaults when no temporal data is available.
+        Falls back to step 13 scalar defaults when no temporal data is
+        available (normals is ``None``).
+
+        Parameters
+        ----------
+        ds : xr.Dataset
+            In-progress parameter dataset.  ``hru_elev`` (feet) is used
+            for elevation adjustment of ``jh_coef_hru`` if available.
+        normals : tuple[np.ndarray, np.ndarray] or None
+            Monthly climate normals ``(monthly_tmax, monthly_tmin)`` each
+            with shape ``(12, nhru)`` in degrees Fahrenheit (°F), as
+            returned by ``_compute_monthly_normals``.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``jh_coef`` (per_degF_per_day, shape
+            ``(nhru, 12)``) and ``jh_coef_hru`` (per_degF_per_day,
+            shape ``(nhru,)``) added.
+
+        Notes
+        -----
+        The PRMS-IV equation 1-26 for ``jh_coef``:
+        ``jh = 27.5 - 0.25 * (es_max - es_min) / es_max``
+        where ``es_max`` and ``es_min`` are monthly saturation vapor
+        pressures computed from tmax and tmin respectively.  Values are
+        clipped to ``[0.005, 0.06]``.
+
+        ``jh_coef_hru`` uses the July (warmest month) coefficient with
+        a linear elevation adjustment: ``+0.00001`` per foot above sea
+        level, reflecting the increased vapor pressure deficit at higher
+        elevations due to lower atmospheric pressure.
+
+        References
+        ----------
+        Markstrom, S. L., et al. (2015). PRMS-IV. USGS TM 6-B7, eq. 1-26.
+        Jensen, M. E. and Haise, H. R. (1963). Estimating evapotranspiration
+            from solar radiation. J. Irrig. Drain. Div., 89, 15-41.
+
+        See Also
+        --------
+        _sat_vp : Saturation vapor pressure helper.
+        _compute_monthly_normals : Climate normals computation.
         """
         if normals is None:
             logger.info("No temporal data for PET coefficients; deferring to defaults.")
@@ -1582,12 +2245,44 @@ class PywatershedDerivation:
         ds: xr.Dataset,
         normals: tuple[np.ndarray, np.ndarray] | None,
     ) -> xr.Dataset:
-        """Step 11: Derive transpiration onset/offset from monthly tmin.
+        """Derive transpiration onset and offset from monthly tmin (step 11).
 
-        Computes ``transp_beg`` and ``transp_end`` (integer months) by
-        detecting the frost-free period from monthly minimum temperature
-        normals.  Falls back to step 13 defaults when no temporal data
-        is available.
+        Compute ``transp_beg`` (month transpiration begins) and
+        ``transp_end`` (month transpiration ends) by detecting the
+        frost-free period from monthly minimum temperature normals.
+
+        ``transp_beg`` is the first month (1-indexed, Jan=1) where
+        monthly mean tmin exceeds 32 °F.  ``transp_end`` is the first
+        month from July onward where monthly mean tmin drops below 32 °F.
+
+        Falls back to step 13 defaults (``transp_beg=4``,
+        ``transp_end=10``) when no temporal data is available.
+
+        Parameters
+        ----------
+        ds : xr.Dataset
+            In-progress parameter dataset.
+        normals : tuple[np.ndarray, np.ndarray] or None
+            Monthly climate normals ``(monthly_tmax, monthly_tmin)`` each
+            with shape ``(12, nhru)`` in degrees Fahrenheit (°F).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``transp_beg`` (integer month, 1--12 on
+            ``nhru``) and ``transp_end`` (integer month, 7--12 on
+            ``nhru``) added.
+
+        Notes
+        -----
+        HRUs that never exceed freezing in any month default to
+        ``transp_beg=4`` (April).  HRUs that never drop below freezing
+        from July onward default to ``transp_end=10`` (October).
+        Both conditions are logged as warnings.
+
+        The freezing threshold is 32 °F (0 °C).  This is a simplified
+        approach; more sophisticated phenology models could improve
+        accuracy in transitional climates.
         """
         if normals is None:
             logger.info("No temporal data for transpiration timing; deferring to defaults.")
@@ -1667,8 +2362,30 @@ class PywatershedDerivation:
     def _apply_overrides(self, ds: xr.Dataset, overrides: dict) -> xr.Dataset:
         """Apply user-specified parameter value overrides.
 
-        Overrides are applied last, after all derivation steps.
-        Values can be scalars or lists matching the parameter dimension.
+        Replace or add parameter values from the ``parameter_overrides``
+        section of the pipeline configuration.  Overrides are applied
+        **last**, after all derivation steps and calibration seeds, giving
+        users final control over any parameter value.
+
+        Parameters
+        ----------
+        ds : xr.Dataset
+            In-progress parameter dataset.
+        overrides : dict
+            Mapping of parameter names to override values.  Values can be
+            scalars (broadcast) or lists matching the parameter dimension
+            length.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with overridden parameter values applied.
+
+        Notes
+        -----
+        Existing parameters are updated in-place; new parameters are
+        created with an ``nhru`` dimension if the value is a list, or
+        as a scalar otherwise.
         """
         for param_name, value in overrides.items():
             if isinstance(value, list):
@@ -1694,19 +2411,38 @@ class PywatershedDerivation:
     # ------------------------------------------------------------------
 
     def _load_lookup_table(self, name: str, tables_dir: Path) -> dict:
-        """Load a YAML lookup table from the lookup tables directory.
+        """Load and cache a YAML lookup table from the lookup tables directory.
+
+        Load the named YAML file, validate that it contains a ``mapping``
+        key, and cache the result for subsequent calls within the same
+        ``PywatershedDerivation`` instance.
 
         Parameters
         ----------
-        name
-            Lookup table filename (without ``.yml`` extension).
-        tables_dir
+        name : str
+            Lookup table filename without the ``.yml`` extension
+            (e.g., ``"nlcd_to_prms_cov_type"``).
+        tables_dir : Path
             Directory containing lookup table YAML files.
 
         Returns
         -------
         dict
             Parsed YAML content with at least a ``mapping`` key.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``{name}.yml`` does not exist in ``tables_dir``.
+        ValueError
+            If the YAML file is malformed or missing the required
+            ``mapping`` key.
+
+        Notes
+        -----
+        Results are cached in ``self._lookup_cache`` keyed by ``name``.
+        The cache persists for the lifetime of the instance, so lookup
+        tables are read from disk at most once per derivation run.
         """
         if name not in self._lookup_cache:
             path = tables_dir / f"{name}.yml"

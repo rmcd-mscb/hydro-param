@@ -88,13 +88,25 @@ nav:
       - user-guide/datasets.md
   - API Reference:
       - api/index.md
-      - api/config.md
-      - api/registry.md
-      - api/pipeline.md
-      - api/data-access.md
-      - api/processing.md
-      - api/batching.md
-      - api/project.md
+      - Core:
+          - api/config.md
+          - api/pipeline.md
+          - api/sir.md
+          - api/registry.md
+          - api/data-access.md
+          - api/processing.md
+          - api/batching.md
+          - api/manifest.md
+          - api/units.md
+          - api/project.md
+      - Plugins:
+          - api/plugins.md
+          - api/derivations-pywatershed.md
+          - api/formatters-pywatershed.md
+          - api/pywatershed-config.md
+      - Utilities:
+          - api/cli.md
+          - api/solar.md
   - Architecture:
       - design.md
   - Contributing:

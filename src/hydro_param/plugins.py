@@ -1,10 +1,24 @@
 """Plugin protocols, context, and registries.
 
-Defines the contracts that all model plugins (derivation + formatter) must
+Define the contracts that all model plugins (derivation + formatter) must
 satisfy, the typed ``DerivationContext`` input bundle, and factory functions
 for plugin discovery.
 
-This module is the single source of truth for "what is a plugin?"
+This module enforces the two-phase separation between the generic pipeline
+and model-specific logic.  The pipeline produces a normalized Standardized
+Internal Representation (SIR); plugins consume SIR data and transform it
+into model-specific parameters and output files.  This module is the single
+source of truth for "what is a plugin?" and how plugins are discovered.
+
+See Also
+--------
+hydro_param.derivations.pywatershed : pywatershed derivation plugin.
+hydro_param.formatters.pywatershed : pywatershed output formatter plugin.
+
+Notes
+-----
+Plugin discovery uses lazy imports so that heavy model-specific dependencies
+are only loaded when a plugin is actually requested.
 """
 
 from __future__ import annotations
@@ -23,36 +37,63 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class DerivationContext:
-    """Everything a derivation plugin needs.
+    """Bundle all inputs a derivation plugin needs into a single immutable object.
 
-    Bundles SIR output, target fabric geometry, and configuration into
-    a single immutable object.  Validates that ``fabric_id_field`` exists
-    as a dimension in the SIR on construction.
+    ``DerivationContext`` is the sole interface between the generic pipeline and
+    model-specific derivation logic.  It packages normalized SIR output, target
+    fabric geometry, segment topology, and plugin configuration so that
+    derivation plugins never reach back into the pipeline internals.
 
-    Parameters
+    Validates on construction that ``fabric_id_field`` exists as a dimension in
+    the SIR and as a column in the fabric GeoDataFrame (if provided).  This
+    fail-fast validation prevents silent dimension mismatches downstream.
+
+    Attributes
     ----------
-    sir
-        Normalized Standardized Internal Representation (SIR) dataset.
-    temporal
+    sir : xr.Dataset
+        Normalized Standardized Internal Representation (SIR) dataset produced
+        by stage 5 of the pipeline.  Variables use canonical names and SI-like
+        units (metres, degrees Celsius, etc.).
+    temporal : dict[str, xr.Dataset] or None
         SIR-normalized temporal datasets keyed by name (e.g., ``"gridmet_2020"``).
-        When ``None``, step 7 (forcing generation) is skipped.
-    fabric
-        Target HRU polygon GeoDataFrame.
-    segments
-        Stream segment line GeoDataFrame.
-    waterbodies
+        Each dataset contains time-indexed climate variables.  When ``None``,
+        step 7 (forcing generation) is skipped.
+    fabric : geopandas.GeoDataFrame or None
+        Target HRU polygon GeoDataFrame with a geometry column and an ID column
+        named by ``fabric_id_field``.
+    segments : geopandas.GeoDataFrame or None
+        Stream segment line GeoDataFrame for routing derivations (step 12).
+    waterbodies : geopandas.GeoDataFrame or None
         NHDPlus waterbody polygon GeoDataFrame for depression storage
         parameters.  When ``None``, step 6 (waterbody overlay) is skipped.
-    fabric_id_field
-        Column name for HRU identifiers in the fabric.  Must exist as a
-        dimension in ``sir``.
-    segment_id_field
-        Column name for segment identifiers in the segments GeoDataFrame.
-    config
-        Plugin-specific configuration dict.
-    lookup_tables_dir
+    fabric_id_field : str
+        Column name for HRU identifiers in ``fabric``.  Must also exist as a
+        dimension in ``sir``.  Defaults to ``"nhm_id"`` for pywatershed.
+    segment_id_field : str or None
+        Column name for segment identifiers in ``segments``.  When ``None``,
+        the derivation plugin is responsible for determining the correct field.
+    config : dict
+        Plugin-specific configuration dict passed through from the pipeline
+        YAML.
+    lookup_tables_dir : pathlib.Path or None
         Override path to lookup table YAML files.  When ``None``, defaults
-        to the package-bundled tables via ``importlib.resources``.
+        to the package-bundled tables under ``hydro_param/data/lookup_tables/``
+        via ``importlib.resources``.
+
+    Raises
+    ------
+    KeyError
+        If ``fabric_id_field`` is not a dimension in ``sir``, or not a column
+        in ``fabric`` (when ``fabric`` is provided).
+
+    See Also
+    --------
+    DerivationPlugin : Protocol that consumes this context.
+
+    Notes
+    -----
+    Frozen dataclass -- all fields are immutable after construction.  This
+    prevents derivation plugins from accidentally mutating shared state.
     """
 
     sir: xr.Dataset
@@ -79,10 +120,22 @@ class DerivationContext:
 
     @property
     def resolved_lookup_tables_dir(self) -> Path:
-        """Resolve the lookup tables directory.
+        """Resolve the lookup tables directory to an absolute path.
 
-        Returns the explicit override if set, otherwise the
-        package-bundled default via ``importlib.resources``.
+        Return the explicit override if set, otherwise the package-bundled
+        default under ``hydro_param/data/lookup_tables/`` discovered via
+        ``importlib.resources``.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute path to a directory containing lookup table YAML files.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``lookup_tables_dir`` was explicitly set but does not exist
+            on disk.
         """
         if self.lookup_tables_dir is not None:
             if not self.lookup_tables_dir.is_dir():
@@ -95,48 +148,88 @@ class DerivationContext:
 
 @runtime_checkable
 class DerivationPlugin(Protocol):
-    """Contract for model-specific parameter derivation.
+    """Define the contract for model-specific parameter derivation.
 
-    Implementations transform a normalized SIR dataset into
-    model-specific parameters (e.g., PRMS units, variable names,
-    lookup-table reclassification).
+    Implementations transform a normalized SIR dataset into model-specific
+    parameters.  This includes unit conversions (e.g., metres to feet, Celsius
+    to Fahrenheit), variable renaming, lookup-table reclassification, majority
+    extraction from categorical fractions, gap-filling, and derived math.
+
+    All model-specific logic lives in derivation plugins -- the generic
+    pipeline never performs these transforms.
+
+    Attributes
+    ----------
+    name : str
+        Unique plugin identifier used by ``get_derivation()`` for discovery.
+
+    See Also
+    --------
+    DerivationContext : Immutable input bundle consumed by ``derive()``.
+    FormatterPlugin : Companion protocol for output formatting.
     """
 
     name: str
 
     def derive(self, context: DerivationContext) -> xr.Dataset:
-        """Derive model parameters from the SIR.
+        """Derive model-specific parameters from the normalized SIR.
+
+        Execute the full derivation pipeline for a target model, including
+        unit conversions, reclassification, lookup-table application, and
+        derived math.
 
         Parameters
         ----------
-        context
-            Typed input bundle containing SIR, fabric, config, etc.
+        context : DerivationContext
+            Immutable input bundle containing the SIR dataset, target fabric
+            geometry, segment topology, and plugin configuration.
 
         Returns
         -------
         xr.Dataset
-            Model-specific parameter dataset.
+            Model-specific parameter dataset with variables in model-native
+            names and units (e.g., feet, acres, degrees Fahrenheit for PRMS).
         """
         ...
 
 
 @runtime_checkable
 class FormatterPlugin(Protocol):
-    """Contract for model-specific output formatting.
+    """Define the contract for model-specific output formatting.
 
-    Implementations write derived parameters to the file format(s)
-    expected by the target model.
+    Implementations serialize derived parameters to the file format(s)
+    expected by the target model (e.g., PRMS parameter files, NextGen
+    configuration, or generic NetCDF/Parquet).
+
+    Attributes
+    ----------
+    name : str
+        Unique plugin identifier used by ``get_formatter()`` for discovery.
+
+    See Also
+    --------
+    DerivationPlugin : Companion protocol for parameter derivation.
+    NetCDFFormatter : Generic NetCDF implementation.
+    ParquetFormatter : Generic Parquet implementation.
     """
 
     name: str
 
     def validate(self, parameters: xr.Dataset) -> list[str]:
-        """Validate parameters before writing.
+        """Validate derived parameters before writing output files.
+
+        Check that required variables are present, values are within
+        physically plausible ranges, and units are consistent.
+
+        Parameters
+        ----------
+        parameters : xr.Dataset
+            Derived model parameters to validate.
 
         Returns
         -------
         list[str]
-            Validation warnings.  Empty if all checks pass.
+            Validation warning messages.  Empty list if all checks pass.
         """
         ...
 
@@ -146,27 +239,52 @@ class FormatterPlugin(Protocol):
         output_path: Path,
         config: dict,
     ) -> list[Path]:
-        """Write model-specific output files.
+        """Write derived parameters to model-specific output files.
+
+        Create the output directory if it does not exist, then serialize
+        the parameter dataset into one or more files in the format expected
+        by the target model.
 
         Parameters
         ----------
-        parameters
-            Derived model parameters.
-        output_path
-            Output directory.
-        config
-            Formatter-specific configuration options.
+        parameters : xr.Dataset
+            Derived model parameters (output of ``DerivationPlugin.derive``).
+        output_path : pathlib.Path
+            Directory to write output files into.  Created if absent.
+        config : dict
+            Formatter-specific configuration options (e.g., ``sir_name``
+            for file naming).
 
         Returns
         -------
-        list[Path]
-            Paths to all files written.
+        list[pathlib.Path]
+            Absolute paths to all files written.
+
+        Raises
+        ------
+        OSError
+            If file I/O fails (e.g., permission denied, disk full).
         """
         ...
 
 
 class NetCDFFormatter:
-    """Simple NetCDF output (wraps SIR -> NetCDF)."""
+    """Format parameters as a single NetCDF-4 file.
+
+    Generic formatter that writes the full parameter dataset to one NetCDF
+    file without any model-specific transformations.  Suitable for archival,
+    inspection, or consumption by downstream tools that read CF-compliant
+    NetCDF.
+
+    Attributes
+    ----------
+    name : str
+        Formatter identifier (``"netcdf"``).
+
+    See Also
+    --------
+    ParquetFormatter : Alternative tabular output format.
+    """
 
     name: str = "netcdf"
 
@@ -176,7 +294,31 @@ class NetCDFFormatter:
         output_path: Path,
         config: dict,
     ) -> list[Path]:
-        """Write parameters as a single NetCDF file."""
+        """Write parameters as a single NetCDF-4 file.
+
+        Parameters
+        ----------
+        parameters : xr.Dataset
+            Parameter dataset to serialize.
+        output_path : pathlib.Path
+            Directory to write into (created if absent).
+        config : dict
+            Options.  Recognized keys:
+
+            - ``sir_name`` (str): Base filename (default ``"result"``).
+              Output file is ``<sir_name>.nc``.
+
+        Returns
+        -------
+        list[pathlib.Path]
+            Single-element list containing the path to the written file.
+
+        Raises
+        ------
+        OSError
+            If the NetCDF write fails (wrapped with the target path for
+            easier debugging).
+        """
         output_path.mkdir(parents=True, exist_ok=True)
         sir_name = config.get("sir_name", "result")
         out_file = output_path / f"{sir_name}.nc"
@@ -188,12 +330,38 @@ class NetCDFFormatter:
         return [out_file]
 
     def validate(self, parameters: xr.Dataset) -> list[str]:
-        """No-op validation for generic NetCDF output."""
+        """Perform no-op validation (generic NetCDF has no schema constraints).
+
+        Parameters
+        ----------
+        parameters : xr.Dataset
+            Parameter dataset (unused).
+
+        Returns
+        -------
+        list[str]
+            Always returns an empty list.
+        """
         return []
 
 
 class ParquetFormatter:
-    """Simple Parquet output (wraps SIR -> Parquet)."""
+    """Format parameters as a single Apache Parquet file.
+
+    Generic formatter that converts the parameter dataset to a pandas
+    DataFrame and writes it as a single Parquet file.  Parquet provides
+    efficient columnar storage with compression, suitable for downstream
+    analysis in pandas, Spark, or DuckDB.
+
+    Attributes
+    ----------
+    name : str
+        Formatter identifier (``"parquet"``).
+
+    See Also
+    --------
+    NetCDFFormatter : Alternative multidimensional output format.
+    """
 
     name: str = "parquet"
 
@@ -203,7 +371,35 @@ class ParquetFormatter:
         output_path: Path,
         config: dict,
     ) -> list[Path]:
-        """Write parameters as a single Parquet file."""
+        """Write parameters as a single Parquet file.
+
+        Convert the xarray Dataset to a pandas DataFrame via
+        ``to_dataframe()`` before serializing.  Index columns are
+        preserved.
+
+        Parameters
+        ----------
+        parameters : xr.Dataset
+            Parameter dataset to serialize.
+        output_path : pathlib.Path
+            Directory to write into (created if absent).
+        config : dict
+            Options.  Recognized keys:
+
+            - ``sir_name`` (str): Base filename (default ``"result"``).
+              Output file is ``<sir_name>.parquet``.
+
+        Returns
+        -------
+        list[pathlib.Path]
+            Single-element list containing the path to the written file.
+
+        Raises
+        ------
+        OSError
+            If the Parquet write fails (wrapped with the target path for
+            easier debugging).
+        """
         output_path.mkdir(parents=True, exist_ok=True)
         sir_name = config.get("sir_name", "result")
         out_file = output_path / f"{sir_name}.parquet"
@@ -215,22 +411,46 @@ class ParquetFormatter:
         return [out_file]
 
     def validate(self, parameters: xr.Dataset) -> list[str]:
-        """No-op validation for generic Parquet output."""
+        """Perform no-op validation (generic Parquet has no schema constraints).
+
+        Parameters
+        ----------
+        parameters : xr.Dataset
+            Parameter dataset (unused).
+
+        Returns
+        -------
+        list[str]
+            Always returns an empty list.
+        """
         return []
 
 
 def get_derivation(name: str) -> DerivationPlugin:
-    """Select a derivation plugin by name.
+    """Look up and instantiate a derivation plugin by name.
+
+    Factory function that lazily imports the requested derivation plugin
+    module.  This avoids loading heavy model-specific dependencies until
+    they are actually needed.
 
     Parameters
     ----------
-    name
-        Plugin name: ``"pywatershed"``.
+    name : str
+        Plugin name.  Currently supported: ``"pywatershed"``.
+
+    Returns
+    -------
+    DerivationPlugin
+        A freshly instantiated derivation plugin.
 
     Raises
     ------
     ValueError
-        If the name is not recognized.
+        If ``name`` does not match any registered plugin.
+
+    See Also
+    --------
+    get_formatter : Companion factory for output formatters.
     """
     if name == "pywatershed":
         from hydro_param.derivations.pywatershed import PywatershedDerivation
@@ -242,17 +462,31 @@ def get_derivation(name: str) -> DerivationPlugin:
 
 
 def get_formatter(name: str) -> FormatterPlugin:
-    """Select an output formatter by name.
+    """Look up and instantiate an output formatter by name.
+
+    Factory function that returns a formatter matching the requested output
+    format.  Model-specific formatters (e.g., ``"pywatershed"``) are lazily
+    imported to avoid loading unused dependencies.
 
     Parameters
     ----------
-    name
-        Formatter name: ``"netcdf"``, ``"parquet"``, or ``"pywatershed"``.
+    name : str
+        Formatter name.  Currently supported: ``"netcdf"``, ``"parquet"``,
+        ``"pywatershed"``.
+
+    Returns
+    -------
+    FormatterPlugin
+        A freshly instantiated formatter plugin.
 
     Raises
     ------
     ValueError
-        If the name is not recognized.
+        If ``name`` does not match any registered formatter.
+
+    See Also
+    --------
+    get_derivation : Companion factory for derivation plugins.
     """
     if name == "netcdf":
         return NetCDFFormatter()

@@ -1,8 +1,25 @@
 """Dataset registry: load and resolve dataset definitions from YAML.
 
-The registry maps human-readable dataset names to access strategies,
-variable specifications, and derivation rules. See design.md section 6.6
-and section 11.3 for the schema design.
+Map human-readable dataset names to access strategies, variable
+specifications, and derivation rules.  The registry is the single source
+of truth for "what datasets exist and how to access them."  Pipeline
+stage 2 (``stage2_resolve_datasets``) consults the registry to resolve
+user-requested datasets and variables into concrete access instructions.
+
+The registry supports five access strategies (``stac_cog``, ``local_tiff``,
+``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and two
+variable types (direct ``VariableSpec`` and terrain-derived
+``DerivedVariableSpec``).
+
+References
+----------
+.. [1] docs/design.md, section 6.6 -- Dataset registry schema design.
+.. [2] docs/design.md, section 11.3 -- Registry YAML conventions.
+
+See Also
+--------
+hydro_param.config : Pipeline configuration schema (``DatasetRequest``).
+hydro_param.data_access : Functions that use registry entries to fetch data.
 """
 
 from __future__ import annotations
@@ -15,20 +32,77 @@ from pydantic import BaseModel, model_validator
 
 
 class VariableSpec(BaseModel):
-    """A variable available directly in a dataset."""
+    """Describe a variable available directly in a source dataset.
+
+    Each ``VariableSpec`` maps a logical variable name to its location
+    within a source dataset (band number, STAC asset key, or file path
+    override) and carries metadata for SIR normalization (units, long
+    name, categorical flag).
+
+    Attributes
+    ----------
+    name : str
+        Logical variable name used throughout the pipeline (e.g.,
+        ``"elevation"``, ``"land_cover"``, ``"ksat"``).
+    band : int
+        Raster band number for multi-band GeoTIFFs.  Default ``1``.
+    units : str
+        Source data units (e.g., ``"m"``, ``"log10(cm/hr)"``, ``"%"``).
+        Empty string for dimensionless quantities.
+    long_name : str
+        Human-readable description for NetCDF attributes and documentation.
+    native_name : str
+        Variable name in the source data (e.g., OPeNDAP/CF name like
+        ``"daily_mean_temperature_2m"``).  Required for temporal datasets
+        to map gdptools output back to logical names.
+    categorical : bool
+        ``True`` for land-cover or other classification variables.
+        Categorical variables produce per-class fraction columns in zonal
+        statistics rather than continuous summary statistics.
+    asset_key : str or None
+        Per-variable STAC asset key override (e.g., ``"mukey"`` for
+        gNATSGO).  When ``None``, uses the dataset-level ``asset_key``.
+    source_override : str or None
+        Per-variable source path or URL override (e.g., individual POLARIS
+        VRT files).  When ``None``, uses the dataset-level ``source``.
+    """
 
     name: str
     band: int = 1
     units: str = ""
     long_name: str = ""
-    native_name: str = ""  # variable name in source data (e.g. OPeNDAP CF name)
+    native_name: str = ""
     categorical: bool = False
-    asset_key: str | None = None  # per-variable STAC asset override (e.g. gNATSGO)
-    source_override: str | None = None  # per-variable source path/URL (e.g. POLARIS VRTs)
+    asset_key: str | None = None
+    source_override: str | None = None
 
 
 class DerivedVariableSpec(BaseModel):
-    """A variable derived from another variable (e.g., slope from elevation)."""
+    """Describe a variable derived from another variable in the same dataset.
+
+    Derived variables are computed from a source variable using a named
+    method (e.g., slope and aspect from elevation via terrain analysis).
+    They are resolved alongside direct variables in stage 2 and processed
+    in stage 4.
+
+    Attributes
+    ----------
+    name : str
+        Logical name for the derived variable (e.g., ``"slope"``,
+        ``"aspect"``).
+    source : str
+        Name of the source ``VariableSpec`` this is derived from (e.g.,
+        ``"elevation"``).
+    method : str
+        Derivation method passed to the derivation function (e.g.,
+        ``"horn"`` for Horn 1981 finite-difference terrain analysis).
+        The derivation function is selected by variable ``name`` via
+        ``hydro_param.data_access.DERIVATION_FUNCTIONS``.
+    units : str
+        Units of the derived variable (e.g., ``"degrees"``).
+    long_name : str
+        Human-readable description for metadata.
+    """
 
     name: str
     source: str
@@ -38,7 +112,23 @@ class DerivedVariableSpec(BaseModel):
 
 
 class DownloadFile(BaseModel):
-    """A single downloadable file in a multi-file dataset."""
+    """Describe a single downloadable file in a multi-file dataset.
+
+    Used by the ``hydro-param datasets download`` CLI command to stage
+    local data files required by the ``local_tiff`` access strategy.
+
+    Attributes
+    ----------
+    year : int
+        Calendar year this file covers.
+    variable : str
+        Variable name this file provides (e.g., ``"ksat"``, ``"clay"``).
+    url : str
+        Direct download URL for the file.
+    size_gb : float or None
+        Approximate file size in gigabytes for progress reporting.
+        ``None`` if unknown.
+    """
 
     year: int
     variable: str
@@ -47,7 +137,51 @@ class DownloadFile(BaseModel):
 
 
 class DownloadInfo(BaseModel):
-    """Download provenance for datasets requiring local staging."""
+    """Describe download provenance for datasets requiring local staging.
+
+    Some datasets (e.g., POLARIS soil data, NLCD legacy GeoTIFFs) cannot be
+    accessed through STAC or OPeNDAP and must be downloaded to local disk
+    before processing.  ``DownloadInfo`` records where to get the data,
+    how large it is, and whether requester-pays access is needed.
+
+    Supports two modes: **explicit files** (a fixed list of
+    ``DownloadFile`` entries) and **template mode** (a URL template
+    expanded over ``year_range x variables_available``).
+
+    Attributes
+    ----------
+    url : str
+        Single-file download URL (mutually exclusive with ``files``
+        and ``url_template``).
+    size_gb : float or None
+        Approximate total download size in gigabytes.
+    format : str
+        File format description (e.g., ``"GeoTIFF"``, ``"VRT"``).
+    notes : str
+        Human-readable notes about access requirements.
+    files : list[DownloadFile]
+        Explicit list of downloadable files (multi-file datasets).
+    url_template : str
+        Python format string with ``{variable}`` and ``{year}``
+        placeholders (e.g.,
+        ``"https://example.com/{variable}_{year}.tif"``).
+    year_range : list[int]
+        Two-element ``[start, end]`` list for template expansion.
+        Required when ``url_template`` is set.
+    variables_available : list[str]
+        Variable names available for template expansion.  Required when
+        ``url_template`` is set.
+    requester_pays : bool
+        ``True`` if the data source requires requester-pays access
+        (e.g., ``s3://usgs-landcover``).
+
+    Raises
+    ------
+    ValueError
+        If none of ``url``, ``files``, or ``url_template`` is provided,
+        or if ``url_template`` is set without valid ``year_range`` and
+        ``variables_available``.
+    """
 
     url: str = ""
     size_gb: float | None = None
@@ -61,6 +195,7 @@ class DownloadInfo(BaseModel):
 
     @model_validator(mode="after")
     def _require_download_source(self) -> DownloadInfo:
+        """Validate that at least one download source is specified."""
         if not self.url and not self.files and not self.url_template:
             raise ValueError("DownloadInfo requires at least 'url', 'files', or 'url_template'")
         if self.url_template:
@@ -78,22 +213,25 @@ class DownloadInfo(BaseModel):
         years: set[int] | None = None,
         variables: set[str] | None = None,
     ) -> list[DownloadFile]:
-        """Expand download sources into a list of files, with optional filtering.
+        """Expand download sources into a concrete list of files.
 
-        For template mode, iterates year_range x variables_available and
-        formats the URL template. For explicit files mode, returns the
-        files list with optional year/variable filtering.
+        For **template mode**, iterate ``year_range x variables_available``
+        and format the ``url_template`` with ``{variable}`` and ``{year}``
+        placeholders.  For **explicit files mode**, return the ``files``
+        list.  In both modes, optional ``years`` and ``variables`` filters
+        restrict the output.
 
         Parameters
         ----------
-        years
-            If given, only include files matching these years.
-        variables
-            If given, only include files matching these variables.
+        years : set[int] or None
+            If given, only include files matching these calendar years.
+        variables : set[str] or None
+            If given, only include files matching these variable names.
 
         Returns
         -------
         list[DownloadFile]
+            Expanded and filtered list of downloadable files.
         """
         if self.url_template:
             start, end = self.year_range
@@ -117,25 +255,83 @@ class DownloadInfo(BaseModel):
 
 
 class DatasetEntry(BaseModel):
-    """A single dataset in the registry."""
+    """Describe a single dataset in the registry.
+
+    Each entry captures everything needed to access, process, and normalize
+    a source dataset: the access strategy, connection parameters (STAC
+    catalog URL, collection, asset key, etc.), coordinate system, and the
+    list of available variables.
+
+    The ``strategy`` field determines which data access pathway is used:
+
+    - ``"stac_cog"`` -- STAC COG via Planetary Computer (3DEP, gNATSGO).
+    - ``"local_tiff"`` -- local GeoTIFF files (POLARIS, NLCD legacy).
+    - ``"nhgf_stac"`` -- NHGF STAC catalog (NLCD Annual on OSN).
+    - ``"climr_cat"`` -- ClimateR-Catalog via OPeNDAP (gridMET).
+    - ``"native_zarr"`` / ``"converted_zarr"`` -- Zarr stores (planned).
+
+    Attributes
+    ----------
+    description : str
+        Human-readable dataset description.
+    strategy : str
+        Data access strategy identifier.
+    catalog_url : str or None
+        STAC catalog URL (required for ``stac_cog``).
+    collection : str or None
+        STAC collection name (required for ``stac_cog`` and ``nhgf_stac``).
+    asset_key : str
+        Default STAC asset key.  Default ``"data"``.
+    gsd : int or None
+        Ground sample distance in metres (STAC COG spatial resolution).
+    sign : str or None
+        STAC signing method (e.g., ``"planetary-computer"``).
+    source : str or None
+        Local file path or remote URL for Zarr/local_tiff datasets.
+    download : DownloadInfo or None
+        Download provenance for datasets requiring local staging.
+    catalog_id : str or None
+        ClimateR-Catalog identifier (required for ``climr_cat``).
+    crs : str
+        Coordinate reference system as an EPSG string.  Default
+        ``"EPSG:4326"``.
+    x_coord : str
+        Name of the x/longitude coordinate.  Default ``"x"``.
+    y_coord : str
+        Name of the y/latitude coordinate.  Default ``"y"``.
+    t_coord : str or None
+        Name of the time coordinate (required for temporal datasets).
+    variables : list[VariableSpec]
+        Variables directly available in this dataset.
+    derived_variables : list[DerivedVariableSpec]
+        Variables computed from other variables in this dataset.
+    category : str
+        Dataset category for grouping (e.g., ``"topography"``,
+        ``"soils"``, ``"land_cover"``).
+    temporal : bool
+        ``True`` for time-indexed datasets (e.g., gridMET, SNODAS).
+    year_range : list[int] or None
+        Two-element ``[start, end]`` list of available calendar years.
+
+    Raises
+    ------
+    ValueError
+        If required strategy-specific fields are missing, or if
+        constraints are violated (e.g., temporal without ``t_coord``).
+    """
 
     description: str = ""
     strategy: Literal[
         "stac_cog", "native_zarr", "converted_zarr", "local_tiff", "climr_cat", "nhgf_stac"
     ]
-    # STAC COG fields
     catalog_url: str | None = None
     collection: str | None = None
     asset_key: str = "data"
     gsd: int | None = None
     sign: str | None = None
-    # Zarr / local fields
     source: str | None = None
-    # Download provenance (local_tiff datasets that require user download)
     download: DownloadInfo | None = None
-    # ClimateR-Catalog identifier (climr_cat strategy)
     catalog_id: str | None = None
-    # Common fields
     crs: str = "EPSG:4326"
     x_coord: str = "x"
     y_coord: str = "y"
@@ -148,6 +344,7 @@ class DatasetEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate_strategy_fields(self) -> DatasetEntry:
+        """Validate that strategy-specific required fields are present."""
         if self.strategy == "stac_cog":
             if not self.catalog_url or not self.collection:
                 raise ValueError("stac_cog strategy requires 'catalog_url' and 'collection'")
@@ -180,7 +377,22 @@ class DatasetEntry(BaseModel):
 
 
 class DatasetRegistry(BaseModel):
-    """Container for all registered datasets."""
+    """Contain and query all registered datasets.
+
+    Provides lookup by name and variable resolution across the full set
+    of loaded datasets.  Typically created by ``load_registry()`` from
+    one or more YAML files.
+
+    Attributes
+    ----------
+    datasets : dict[str, DatasetEntry]
+        Mapping of dataset name to entry.  Names must be unique across
+        all registry files.
+
+    See Also
+    --------
+    load_registry : Load a registry from YAML file(s).
+    """
 
     datasets: dict[str, DatasetEntry]
 
@@ -190,16 +402,19 @@ class DatasetRegistry(BaseModel):
         Parameters
         ----------
         name : str
-            Dataset name as it appears in the registry YAML.
+            Dataset name as it appears in the registry YAML (e.g.,
+            ``"3dep"``, ``"gnatsgo"``, ``"gridmet"``).
 
         Returns
         -------
         DatasetEntry
+            The matching dataset entry.
 
         Raises
         ------
         KeyError
-            If the dataset is not found.
+            If ``name`` is not found.  The error message lists all
+            available dataset names for debugging.
         """
         if name not in self.datasets:
             available = ", ".join(sorted(self.datasets.keys()))
@@ -209,23 +424,29 @@ class DatasetRegistry(BaseModel):
     def resolve_variable(
         self, dataset_name: str, variable_name: str
     ) -> VariableSpec | DerivedVariableSpec:
-        """Resolve a variable name to its spec within a dataset.
+        """Resolve a variable name to its specification within a dataset.
+
+        Search both direct variables and derived variables in the named
+        dataset.  Direct variables are checked first.
 
         Parameters
         ----------
         dataset_name : str
-            Dataset name in the registry.
+            Dataset name in the registry (e.g., ``"3dep"``).
         variable_name : str
-            Variable name to look up.
+            Variable name to look up (e.g., ``"elevation"``, ``"slope"``).
 
         Returns
         -------
         VariableSpec or DerivedVariableSpec
+            The matching variable specification.
 
         Raises
         ------
         KeyError
-            If the dataset or variable is not found.
+            If the dataset is not found in the registry, or the variable
+            is not found in the dataset.  The error message lists all
+            available variable names for debugging.
         """
         entry = self.get(dataset_name)
         for v in entry.variables:
@@ -244,23 +465,36 @@ class DatasetRegistry(BaseModel):
 def load_registry(path: str | Path) -> DatasetRegistry:
     """Load a dataset registry from a YAML file or directory of YAML files.
 
+    When ``path`` is a directory, all ``*.yml`` and ``*.yaml`` files are
+    loaded and merged into a single registry.  Dataset names must be
+    unique across all files -- duplicates raise ``ValueError``.
+
     Parameters
     ----------
-    path : str or Path
+    path : str or pathlib.Path
         Path to a single registry YAML file, or a directory containing
-        per-category YAML files.  Each file must have a top-level
-        ``datasets:`` key mapping dataset names to entries.
+        per-category YAML files (e.g., ``configs/datasets/``).  Each
+        file must have a top-level ``datasets:`` key mapping dataset
+        names to entries.
 
     Returns
     -------
     DatasetRegistry
+        Merged registry containing all datasets found.
 
     Raises
     ------
     FileNotFoundError
-        If the path does not exist or contains no datasets.
+        If ``path`` does not exist, is neither file nor directory, or
+        the directory contains no YAML files with datasets.
     ValueError
-        If dataset names collide across files.
+        If a dataset name appears in more than one YAML file within a
+        directory.
+
+    Examples
+    --------
+    >>> registry = load_registry("configs/datasets/")
+    >>> entry = registry.get("3dep")
     """
     path = Path(path)
     if not path.exists():
@@ -273,7 +507,7 @@ def load_registry(path: str | Path) -> DatasetRegistry:
 
 
 def _load_registry_file(path: Path) -> DatasetRegistry:
-    """Load a single registry YAML file."""
+    """Load a single registry YAML file and return a validated registry."""
     with open(path) as f:
         raw = yaml.safe_load(f)
     return DatasetRegistry(**raw)
@@ -282,22 +516,29 @@ def _load_registry_file(path: Path) -> DatasetRegistry:
 def _load_registry_dir(directory: Path) -> DatasetRegistry:
     """Load and merge all YAML files in a registry directory.
 
+    Files are processed in sorted order for deterministic results.  YAML
+    files that parse as empty or lack a ``datasets:`` key are silently
+    skipped.
+
     Parameters
     ----------
-    directory : Path
-        Directory containing ``*.yml`` and/or ``*.yaml`` files, each with
-        a ``datasets:`` root key.
+    directory : pathlib.Path
+        Directory containing ``*.yml`` and/or ``*.yaml`` files, each
+        expected to have a ``datasets:`` root key.
 
     Returns
     -------
     DatasetRegistry
+        Merged registry containing datasets from all files.
 
     Raises
     ------
     FileNotFoundError
-        If the directory contains no YAML files or no datasets.
+        If the directory contains no YAML files or no files with
+        datasets.
     ValueError
-        If a dataset name appears in more than one file.
+        If a dataset name appears in more than one file.  The error
+        message identifies both conflicting files.
     """
     yaml_files = sorted(list(directory.glob("*.yml")) + list(directory.glob("*.yaml")))
     if not yaml_files:

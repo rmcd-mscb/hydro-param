@@ -1,8 +1,20 @@
-"""Project scaffolding: init command, project root detection, template generation.
+"""Project scaffolding: init command, project root detection, and template generation.
 
-Provides the ``hydro-param init`` functionality that creates a standard project
-directory structure with categorical data subfolders and a template pipeline
-configuration.
+Provide the ``hydro-param init`` functionality that creates a standard project
+directory structure with categorical data subfolders, template pipeline and
+pywatershed configurations, and a ``.gitignore``.  A hidden ``.hydro-param``
+marker file at the project root enables upward directory discovery so that
+commands run from subdirectories can locate the project root automatically.
+
+The scaffolding is intentionally lightweight -- hydro-param uses
+library-managed transparent caching (pooch-style), not a heavyweight project
+directory contract.  The templates exist to give users a working starting
+point, not to enforce a rigid layout.
+
+See Also
+--------
+hydro_param.cli : CLI commands that invoke :func:`init_project`.
+hydro_param.config : Pipeline config schema that the generated template follows.
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 MARKER_FILE = ".hydro-param"
+"""str : Hidden file name placed at the project root by ``hydro-param init``."""
 
 # Fallback categories when registry is unavailable.
 # These match the per-category YAML files in configs/datasets/.
@@ -30,21 +43,37 @@ DEFAULT_CATEGORIES: list[str] = [
     "topography",
     "water_bodies",
 ]
+"""list[str] : Built-in dataset categories used when the registry is unavailable.
+
+These names correspond to the per-category YAML files under ``configs/datasets/``
+and become subdirectory names under ``data/`` in an initialized project.
+"""
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
     """Walk up from *start* looking for a ``.hydro-param`` marker file.
 
+    Traverse parent directories from *start* toward the filesystem root,
+    returning the first directory that contains the marker file.  This
+    allows CLI commands invoked from any subdirectory to locate the
+    project root without requiring an explicit ``--project-dir`` flag.
+
     Parameters
     ----------
-    start
+    start : Path or None
         Directory to begin searching from.  Defaults to the current
-        working directory.
+        working directory (``Path.cwd()``).
 
     Returns
     -------
     Path or None
-        The project root directory, or ``None`` if no marker is found.
+        The resolved project root directory, or ``None`` if no marker
+        is found before reaching the filesystem root.
+
+    Notes
+    -----
+    The search terminates when ``parent == current``, which is the
+    filesystem root on both POSIX and Windows systems.
     """
     current = (start or Path.cwd()).resolve()
     while True:
@@ -57,18 +86,24 @@ def find_project_root(start: Path | None = None) -> Path | None:
 
 
 def get_data_categories(registry_path: Path | None = None) -> list[str]:
-    """Discover dataset categories, falling back to built-in defaults.
+    """Discover dataset categories from the registry, with built-in fallback.
+
+    Attempt to load the dataset registry and extract the union of all
+    ``category`` values.  If the registry cannot be loaded (missing path,
+    parse error, etc.), fall back to :data:`DEFAULT_CATEGORIES` so that
+    project scaffolding always succeeds.
 
     Parameters
     ----------
-    registry_path
-        Path to a registry YAML file or directory.  When ``None`` or
-        unloadable, :data:`DEFAULT_CATEGORIES` is returned.
+    registry_path : Path or None
+        Path to a registry YAML file or directory of YAML files.  When
+        ``None`` or unloadable, :data:`DEFAULT_CATEGORIES` is returned.
 
     Returns
     -------
     list[str]
-        Sorted, deduplicated list of category names.
+        Sorted, deduplicated list of category names.  Always includes at
+        least the :data:`DEFAULT_CATEGORIES`.
     """
     if registry_path is None:
         return list(DEFAULT_CATEGORIES)
@@ -85,17 +120,27 @@ def get_data_categories(registry_path: Path | None = None) -> list[str]:
 
 
 def generate_pipeline_template(project_name: str) -> str:
-    """Generate a well-commented pipeline config template.
+    """Generate a well-commented pipeline YAML config template.
+
+    Produce a starter ``pipeline.yml`` with inline comments explaining
+    each section (target fabric, domain, datasets, output, processing).
+    The template includes a working DEM example and a commented-out NLCD
+    example to illustrate both remote STAC and local-file workflows.
 
     Parameters
     ----------
-    project_name
-        Project name used in the ``output.sir_name`` field.
+    project_name : str
+        Project name inserted into the ``output.sir_name`` field and the
+        header comment.
 
     Returns
     -------
     str
-        YAML content for ``configs/pipeline.yml``.
+        YAML content suitable for writing to ``configs/pipeline.yml``.
+
+    See Also
+    --------
+    hydro_param.config.PipelineConfig : Schema the generated YAML must conform to.
     """
     return f"""\
 # Pipeline configuration for {project_name}
@@ -168,15 +213,29 @@ processing:
 def generate_pywatershed_template(project_name: str) -> str:
     """Generate a well-commented pywatershed run config template.
 
+    Produce a starter ``pywatershed_run.yml`` covering domain extraction,
+    simulation period, climate forcing, dataset sources, processing,
+    parameter overrides, calibration, and output format sections.  The
+    template targets the Delaware River Basin as a default example.
+
     Parameters
     ----------
-    project_name
-        Project name used in the output path.
+    project_name : str
+        Project name inserted into the output path and header comment.
 
     Returns
     -------
     str
-        YAML content for ``configs/pywatershed_run.yml``.
+        YAML content suitable for writing to ``configs/pywatershed_run.yml``.
+
+    References
+    ----------
+    - ``docs/reference/pywatershed_parameterization_guide.md``
+    - ``docs/reference/pywatershed_dataset_param_map.yml``
+
+    See Also
+    --------
+    hydro_param.pywatershed_config : Schema for pywatershed run configs.
     """
     return f"""\
 # pywatershed run configuration for {project_name}
@@ -263,7 +322,18 @@ output:
 
 
 def generate_gitignore() -> str:
-    """Generate ``.gitignore`` content for a hydro-param project."""
+    """Generate ``.gitignore`` content for a hydro-param project.
+
+    The ignore rules track lightweight config files and the marker, while
+    ignoring downloaded raster/vector data, pipeline output, and model
+    exports.  Large geospatial formats (``*.nc``, ``*.tif``, ``*.zarr/``)
+    are caught by a safety-net section.
+
+    Returns
+    -------
+    str
+        Content suitable for writing to ``.gitignore`` in the project root.
+    """
     return """\
 # hydro-param project
 #
@@ -304,25 +374,45 @@ def init_project(
 ) -> None:
     """Scaffold a hydro-param project directory.
 
-    Creates the standard directory structure, a ``.hydro-param`` marker
-    file, a template ``configs/pipeline.yml``, and a ``.gitignore``.
+    Create the standard directory structure expected by the pipeline:
+
+    - ``configs/`` -- pipeline and pywatershed run config templates
+    - ``data/fabrics/`` -- target polygon files
+    - ``data/<category>/`` -- one subdirectory per dataset category
+    - ``output/`` -- pipeline results
+    - ``models/pywatershed/`` -- pywatershed model exports
+    - ``.hydro-param`` -- marker file for project root discovery
+    - ``.gitignore`` -- rules to keep large data out of version control
+
+    Existing config templates (``pipeline.yml``, ``pywatershed_run.yml``)
+    are never overwritten, even with ``force=True``, so user edits are
+    preserved.  The ``.gitignore`` is always regenerated because it is
+    declarative and safe to replace.
 
     Parameters
     ----------
-    project_dir
-        Root directory for the new project.
-    force
+    project_dir : Path
+        Root directory for the new project.  Created if it does not exist.
+    force : bool
         If ``True``, re-initialise an existing project (refreshes the
-        marker and creates missing directories, but never overwrites an
-        existing ``configs/pipeline.yml``).
-    registry_path
-        Optional path to a dataset registry for category discovery.
+        marker and creates missing directories, but never overwrites
+        existing config templates).
+    registry_path : Path or None
+        Optional path to a dataset registry YAML file or directory for
+        category discovery.  When ``None``, :data:`DEFAULT_CATEGORIES`
+        is used.
 
     Raises
     ------
     SystemExit
         If the directory already contains a ``.hydro-param`` marker and
         *force* is ``False``.
+
+    Notes
+    -----
+    The marker file (``.hydro-param``) is a YAML file containing the
+    project name and UTC creation timestamp.  It is used by
+    :func:`find_project_root` for upward directory discovery.
     """
     project_dir = project_dir.resolve()
     marker_path = project_dir / MARKER_FILE

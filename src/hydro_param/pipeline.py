@@ -1,19 +1,35 @@
-"""Pipeline orchestrator: config-driven parameterization stages 1-5.
+"""Pipeline orchestrator: execute the config-driven parameterization stages 1--5.
 
-Implements the 5-stage pipeline from design.md section 4:
-  1. Resolve Target Fabric
-  2. Resolve Source Datasets
-  3. Compute/Load Weights (handled internally by gdptools)
-  4. Process Datasets (batch loop) + incremental file writes
-  5. Normalize SIR (canonical naming, unit conversion, validation)
+Implement the 5-stage pipeline from design.md section 4:
 
-Per-variable and temporal output files are written incrementally during
-Stage 4. Stage 5 normalizes raw output into the Standardized Internal
-Representation (SIR) with canonical variable names and units.
-A lazy ``PipelineResult.load_sir()`` method assembles a combined
-xr.Dataset on demand for consumers that need it.
+1. **Resolve Target Fabric** -- load the polygon mesh and apply optional
+   domain filtering (bbox clip).
+2. **Resolve Source Datasets** -- match dataset names in the pipeline config
+   to registry entries and resolve variable specifications.
+3. **Compute/Load Weights** -- handled internally by gdptools (no explicit
+   stage function; gdptools ``ZonalGen`` computes coverage weights on the fly).
+4. **Process Datasets** -- spatial batching loop for static datasets
+   (``ZonalGen``) and full-fabric temporal processing (``WeightGen`` +
+   ``AggGen``).  Per-variable and temporal output files are written
+   incrementally as each dataset completes.
+5. **Normalize SIR** -- canonical variable naming, unit conversion, and
+   validation.  Produces the Standardized Internal Representation consumed
+   by model plugins.
 
-See design.md section 11 for MVP implementation details.
+A lazy :meth:`PipelineResult.load_sir` method assembles a combined
+``xr.Dataset`` on demand for downstream consumers (e.g., the pywatershed
+derivation plugin).
+
+This module is **model-agnostic** by design -- all model-specific logic
+(unit conversions, variable renaming, derived math, output formatting)
+lives in model plugins under ``derivations/`` and ``formatters/``.
+
+See Also
+--------
+design.md : Full architecture document (section 4: pipeline stages,
+    section 11: MVP implementation).
+hydro_param.config : Pydantic config schema consumed by every stage.
+hydro_param.sir : SIR normalization and validation utilities.
 """
 
 from __future__ import annotations
@@ -67,7 +83,24 @@ DEFAULT_REGISTRY = Path("configs/datasets")
 
 @dataclass
 class Stage4Results:
-    """Results from stage 4 processing: file paths for static and temporal outputs."""
+    """Collect file paths and category metadata from stage 4 processing.
+
+    Stage 4 writes per-variable CSV files (static datasets) and per-year
+    NetCDF/Parquet files (temporal datasets) incrementally.  This dataclass
+    aggregates the paths so that stage 5 can locate and normalize them.
+
+    Attributes
+    ----------
+    static_files : dict[str, Path]
+        Mapping of result key (e.g., ``"elevation"`` or ``"land_cover_2021"``)
+        to the CSV file path written during stage 4.
+    temporal_files : dict[str, Path]
+        Mapping of result key (e.g., ``"gridmet_2020"``) to the NetCDF or
+        Parquet file path written during stage 4.
+    categories : dict[str, str]
+        Mapping of result key to its dataset category (e.g., ``"topography"``),
+        used for organizing output into subdirectories.
+    """
 
     static_files: dict[str, Path] = field(default_factory=dict)
     temporal_files: dict[str, Path] = field(default_factory=dict)
@@ -76,11 +109,33 @@ class Stage4Results:
 
 @dataclass
 class PipelineResult:
-    """Full pipeline result with file paths and lazy SIR loading.
+    """Encapsulate all pipeline outputs with lazy SIR loading.
 
-    Per-variable and temporal files are written incrementally during
-    Stage 4. Use ``load_sir()`` to assemble a combined xr.Dataset
-    on demand.
+    Per-variable and temporal files are written incrementally during stage 4.
+    Stage 5 normalizes them into SIR files.  Use :meth:`load_sir` to
+    assemble a combined ``xr.Dataset`` on demand rather than holding all
+    data in memory.
+
+    Attributes
+    ----------
+    output_dir : Path
+        Root output directory (same as ``config.output.path``).
+    static_files : dict[str, Path]
+        Raw (pre-normalization) per-variable CSV paths from stage 4.
+    temporal_files : dict[str, Path]
+        Raw temporal NetCDF/Parquet paths from stage 4.
+    categories : dict[str, str]
+        Result key to dataset category mapping.
+    fabric : gpd.GeoDataFrame or None
+        Target fabric with ``batch_id`` column, retained for downstream
+        consumers (e.g., model plugins that need geometry or topology).
+    sir_files : dict[str, Path]
+        Normalized SIR file paths from stage 5.
+    sir_schema : list[SIRVariableSchema]
+        Schema entries describing each SIR variable (canonical name, units,
+        source dataset, statistic).
+    sir_warnings : list[SIRValidationWarning]
+        Validation warnings from stage 5 SIR validation.
     """
 
     output_dir: Path
@@ -95,8 +150,22 @@ class PipelineResult:
     def load_sir(self) -> xr.Dataset:
         """Load normalized SIR files into a combined xr.Dataset.
 
-        Uses ``sir_files`` (normalized) when available, falling back
-        to ``static_files`` (raw) for backward compatibility.
+        Assemble all per-variable SIR CSV files into a single
+        ``xr.Dataset`` with the fabric ``id_field`` as the dimension.
+        Prefer normalized SIR files (canonical names and units) when
+        available; fall back to raw stage 4 static files for backward
+        compatibility.
+
+        Returns
+        -------
+        xr.Dataset
+            Combined dataset with one data variable per SIR variable.
+            Returns an empty dataset if no files are available.
+
+        Warnings
+        --------
+        When falling back to raw static files, variable names use source
+        conventions (not canonical SIR names) and units are not converted.
         """
         if self.sir_files:
             files = self.sir_files
@@ -114,7 +183,18 @@ class PipelineResult:
         return xr.Dataset.from_dataframe(combined)
 
     def load_raw_sir(self) -> xr.Dataset:
-        """Load raw (pre-normalization) static files into a combined xr.Dataset."""
+        """Load raw (pre-normalization) static files into a combined xr.Dataset.
+
+        Unlike :meth:`load_sir`, this always uses the stage 4 raw CSV files,
+        bypassing SIR normalization.  Useful for debugging or inspecting
+        source-native variable names and units.
+
+        Returns
+        -------
+        xr.Dataset
+            Combined dataset from raw static files, or an empty dataset if
+            no static files exist.
+        """
         if not self.static_files:
             return xr.Dataset()
         dfs = [pd.read_csv(p, index_col=0) for p in self.static_files.values()]
@@ -128,17 +208,27 @@ class PipelineResult:
 
 
 def resolve_bbox(config: PipelineConfig) -> list[float]:
-    """Extract the domain bounding box from config.
+    """Extract the domain bounding box from the pipeline config.
 
     Parameters
     ----------
     config : PipelineConfig
-        Pipeline configuration.
+        Pipeline configuration containing an optional ``domain`` section.
 
     Returns
     -------
     list[float]
-        ``[west, south, east, north]``.
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326
+        (decimal degrees).
+
+    Raises
+    ------
+    ValueError
+        If no domain is configured (the caller should use the fabric
+        bounding box directly instead).
+    NotImplementedError
+        If the domain type is not ``"bbox"`` (HUC/gage extraction is
+        planned but not yet implemented).
     """
     if config.domain is None:
         raise ValueError(
@@ -153,7 +243,30 @@ def resolve_bbox(config: PipelineConfig) -> list[float]:
 
 
 def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
-    """Stage 1: Load target fabric as GeoDataFrame."""
+    """Stage 1: Load the target fabric and apply optional domain filtering.
+
+    Read the geospatial file specified by ``config.target_fabric.path``,
+    validate that the ``id_field`` column exists, and optionally clip the
+    fabric to a bounding box domain.  The domain bbox is assumed to be in
+    EPSG:4326 and is reprojected to the fabric CRS if they differ.
+
+    Parameters
+    ----------
+    config : PipelineConfig
+        Pipeline configuration with ``target_fabric`` and optional
+        ``domain`` sections.
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Target fabric, potentially spatially subsetted by the domain bbox.
+
+    Raises
+    ------
+    ValueError
+        If the ``id_field`` is not found in the fabric columns, or if
+        domain filtering produces an empty result.
+    """
     logger.info("Stage 1: Loading target fabric from %s", config.target_fabric.path)
     fabric = gpd.read_file(config.target_fabric.path)
 
@@ -195,11 +308,36 @@ def stage2_resolve_datasets(
     config: PipelineConfig,
     registry: DatasetRegistry,
 ) -> list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]:
-    """Stage 2: Resolve dataset names to registry entries + variable specs.
+    """Stage 2: Resolve dataset names to registry entries and variable specs.
+
+    For each :class:`~hydro_param.config.DatasetRequest` in the pipeline
+    config, look up the corresponding :class:`~hydro_param.dataset_registry.DatasetEntry`
+    in the registry.  Apply source overrides from the pipeline config,
+    validate strategy-specific requirements (e.g., ``local_tiff`` needs a
+    source path, temporal datasets need a ``time_period``), and resolve
+    each requested variable name to its full specification.
+
+    Parameters
+    ----------
+    config : PipelineConfig
+        Pipeline configuration containing the ``datasets`` list.
+    registry : DatasetRegistry
+        Dataset registry mapping names to entries and variable specs.
 
     Returns
     -------
-    list of (DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec])
+    list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+        One tuple per dataset: the registry entry, the pipeline request,
+        and the resolved variable specifications.
+
+    Raises
+    ------
+    ValueError
+        If a ``local_tiff`` dataset has no source path (dataset-level or
+        per-variable), or if a temporal dataset has no ``time_period``.
+    KeyError
+        If a dataset name is not found in the registry (raised by
+        ``registry.get()``).
     """
     logger.info("Stage 2: Resolving %d datasets from registry", len(config.datasets))
     resolved = []
@@ -276,19 +414,27 @@ def stage2_resolve_datasets(
 
 
 def _buffered_bbox(fabric: gpd.GeoDataFrame, buffer_frac: float = 0.02) -> list[float]:
-    """Compute WGS84 bbox from fabric with fractional buffer.
+    """Compute a WGS 84 bounding box from the fabric with a fractional buffer.
+
+    Add a small buffer around the fabric total bounds to ensure edge
+    features are fully covered by STAC/remote data queries.  Without
+    this buffer, features at the boundary may receive partial or missing
+    raster coverage.
 
     Parameters
     ----------
     fabric : gpd.GeoDataFrame
-        Spatial features (any CRS).
+        Spatial features in any CRS.  If the CRS is projected, the fabric
+        is temporarily reprojected to EPSG:4326 for bounds computation.
     buffer_frac : float
-        Fractional buffer to add around bounds (default 2%).
+        Fractional buffer to add on each side, as a proportion of the
+        extent in that dimension.  Default is 0.02 (2%).
 
     Returns
     -------
     list[float]
-        ``[west, south, east, north]`` in EPSG:4326.
+        Bounding box as ``[west, south, east, north]`` in EPSG:4326
+        (decimal degrees).
     """
     if fabric.crs and not fabric.crs.is_geographic:
         bounds = fabric.to_crs("EPSG:4326").total_bounds
@@ -309,13 +455,57 @@ def _process_batch(
 ) -> dict[str, pd.DataFrame]:
     """Process all variables for a single spatial batch.
 
-    Fetches source data clipped to the batch bounding box, derives
-    any requested variables, and runs zonal statistics.
+    Fetch source raster data clipped to the batch bounding box, derive
+    any terrain variables (slope, aspect) from their source, save
+    intermediate GeoTIFFs, and run zonal statistics via gdptools.
+
+    Memory management is critical here because gNATSGO variables can
+    each consume ~1.25 GB.  The ``source_cache`` is eagerly pruned:
+    raw variables are released as soon as no downstream derived variable
+    needs them, and ``gc.collect()`` runs after each variable.
+
+    Parameters
+    ----------
+    batch_fabric : gpd.GeoDataFrame
+        Subset of the target fabric for this spatial batch.
+    entry : DatasetEntry
+        Registry entry describing the source dataset (strategy, CRS, etc.).
+    ds_req : DatasetRequest
+        Pipeline config request (variables, statistics, year).
+    var_specs : list[VariableSpec | DerivedVariableSpec]
+        Resolved variable specifications from the registry.
+    config : PipelineConfig
+        Pipeline configuration (engine, id_field, etc.).
+    work_dir : Path
+        Temporary directory for intermediate GeoTIFF files.  Cleaned up
+        by the caller (``tempfile.TemporaryDirectory``).
 
     Returns
     -------
     dict[str, pd.DataFrame]
-        Variable name → DataFrame of zonal statistics.
+        Mapping of variable name to a DataFrame of zonal statistics,
+        indexed by the fabric ``id_field``.
+
+    Raises
+    ------
+    NotImplementedError
+        If derived variables are requested for ``nhgf_stac`` strategy, or
+        if temporal ``nhgf_stac`` is used (not yet supported in batch loop).
+    ValueError
+        If a derived variable has no registered derivation function.
+
+    Notes
+    -----
+    The NHGF STAC static pathway bypasses intermediate GeoTIFF files
+    entirely -- gdptools reads directly from the STAC COGs.  All other
+    strategies write a temporary GeoTIFF per variable, which gdptools
+    reads for zonal statistics.
+
+    See Also
+    --------
+    hydro_param.data_access.fetch_stac_cog : STAC COG fetch with bbox clip.
+    hydro_param.data_access.fetch_local_tiff : Local GeoTIFF fetch.
+    hydro_param.processing.ZonalProcessor : gdptools zonal statistics wrapper.
     """
     processor = get_processor(batch_fabric)
     results: dict[str, pd.DataFrame] = {}
@@ -359,7 +549,12 @@ def _process_batch(
         asset_key: str | None = None,
         items: list | None = None,
     ) -> xr.DataArray:
-        """Dispatch to the correct fetch function based on strategy."""
+        """Dispatch to the correct fetch function based on dataset strategy.
+
+        Routes to ``fetch_stac_cog`` or ``fetch_local_tiff`` depending on
+        ``dataset_entry.strategy``.  Pre-queried STAC items can be passed
+        via *items* to avoid redundant STAC API calls within a batch.
+        """
         if dataset_entry.strategy == "stac_cog":
             return fetch_stac_cog(
                 dataset_entry,
@@ -473,25 +668,47 @@ def _process_temporal(
     var_specs: list[VariableSpec | DerivedVariableSpec],
     config: PipelineConfig,
 ) -> xr.Dataset:
-    """Process a temporal dataset using WeightGen + AggGen.
+    """Process a temporal dataset using gdptools WeightGen + AggGen.
+
+    Temporal datasets (e.g., gridMET, SNODAS, CONUS404-BA) are processed
+    over the full fabric without spatial batching, because the gdptools
+    ``WeightGen`` + ``AggGen`` pathway computes area-weighted time series
+    in a single pass.
 
     Parameters
     ----------
     fabric : gpd.GeoDataFrame
-        Target fabric (full, not batched).
+        Target fabric (full, not spatially batched).
     entry : DatasetEntry
-        Registry entry for the dataset.
+        Registry entry for the dataset.  Must have ``temporal=True`` and
+        a strategy of ``"nhgf_stac"`` or ``"climr_cat"``.
     ds_req : DatasetRequest
-        Pipeline config request.
-    var_specs : list
-        Resolved variable specifications.
+        Pipeline config request with ``time_period`` and ``statistics``.
+    var_specs : list[VariableSpec | DerivedVariableSpec]
+        Resolved variable specifications.  Derived variables are not
+        supported for temporal datasets.
     config : PipelineConfig
-        Pipeline configuration.
+        Pipeline configuration (id_field, etc.).
 
     Returns
     -------
     xr.Dataset
-        Temporal dataset with ``(time, features)`` dimensions.
+        Temporal dataset with ``(time, features)`` dimensions containing
+        area-weighted aggregated values.
+
+    Raises
+    ------
+    NotImplementedError
+        If derived variables are requested, or if the dataset strategy
+        does not support temporal processing.
+    ValueError
+        If no statistics are specified in the dataset request.
+
+    Notes
+    -----
+    Only the first statistic in ``ds_req.statistics`` is used.  If
+    multiple statistics are provided, a warning is logged and subsequent
+    entries are ignored.
     """
     processor = TemporalProcessor()
     var_names = [v.name for v in var_specs]
@@ -545,15 +762,21 @@ def _process_temporal(
 def _split_time_period_by_year(time_period: list[str]) -> list[list[str]]:
     """Split a time period into per-year chunks at calendar year boundaries.
 
+    Temporal datasets that span multiple years are processed one year at a
+    time to keep individual output files manageable and to enable resume
+    support at year granularity.
+
     Parameters
     ----------
     time_period : list[str]
-        ``[start, end]`` ISO date strings.
+        ``[start, end]`` ISO date strings (``"YYYY-MM-DD"``).
 
     Returns
     -------
     list[list[str]]
-        List of ``[start, end]`` pairs, one per calendar year.
+        List of ``[start, end]`` pairs, one per calendar year.  The first
+        chunk starts on the original start date; the last chunk ends on
+        the original end date; intermediate chunks span full calendar years.
 
     Examples
     --------
@@ -578,30 +801,44 @@ def _write_variable_file(
     config: PipelineConfig,
     feature_ids: object,
 ) -> Path:
-    """Write a single per-variable CSV file.
+    """Write a single per-variable CSV file with standardized column naming.
 
-    Renames columns using ``var_name_{col}`` (or just ``var_name`` when the
-    only statistic is ``"mean"``), reindexes to the full set of feature IDs,
-    sorts by ``id_field``, and writes a CSV with ``id_field`` as the first
-    column.
+    Rename statistic columns using ``var_name_{stat}`` (or just ``var_name``
+    when the only statistic is ``"mean"``), reindex to the full set of
+    feature IDs (inserting NaN for features not covered by any batch), sort
+    by ``id_field``, and write a CSV with ``id_field`` as the first column.
+
+    This function is called once per variable after all batches have been
+    merged, producing the incremental output that stage 5 later normalizes.
 
     Parameters
     ----------
     var_name : str
-        Variable name (used as filename stem).
+        Variable name used as the filename stem and column prefix.
     df : pd.DataFrame
-        Merged zonal statistics for this variable.
+        Merged zonal statistics for this variable, concatenated from all
+        spatial batches.  Index is the fabric ``id_field``.
     category : str
-        Dataset category (used as subdirectory).
+        Dataset category (e.g., ``"topography"``), used as the output
+        subdirectory name.
     config : PipelineConfig
-        Pipeline configuration.
+        Pipeline configuration (provides ``output.path`` and
+        ``target_fabric.id_field``).
     feature_ids : array-like
-        Feature IDs from the target fabric.
+        Complete set of feature IDs from the target fabric, used to
+        reindex the output so every feature has a row.
 
     Returns
     -------
     Path
-        Path to the written CSV file.
+        Absolute path to the written CSV file (e.g.,
+        ``output/topography/elevation.csv``).
+
+    Warnings
+    --------
+    If the DataFrame index name does not match ``id_field``, a warning is
+    logged and the index is renamed.  This may indicate a bug in the
+    upstream zonal statistics output.
     """
     id_field = config.target_fabric.id_field
     output_dir = config.output.path
@@ -638,23 +875,35 @@ def _write_temporal_file(
     category: str,
     config: PipelineConfig,
 ) -> Path:
-    """Write a single temporal output file.
+    """Write a single temporal output file in NetCDF or Parquet format.
+
+    Temporal files are written immediately after each year-chunk is
+    processed, keeping memory usage low for multi-year datasets.
 
     Parameters
     ----------
     ds_name : str
-        Dataset name (used as filename stem).
+        Dataset name with year suffix (e.g., ``"gridmet_2020"``), used
+        as the filename stem.
     ds : xr.Dataset
         Temporal dataset with ``(time, features)`` dimensions.
     category : str
-        Dataset category (used as subdirectory).
+        Dataset category (e.g., ``"climate"``), used as the output
+        subdirectory name.
     config : PipelineConfig
-        Pipeline configuration.
+        Pipeline configuration (provides ``output.path`` and
+        ``output.format``).
 
     Returns
     -------
     Path
-        Path to the written output file.
+        Path to the written output file (e.g.,
+        ``output/climate/gridmet_2020_temporal.nc``).
+
+    Raises
+    ------
+    ValueError
+        If ``config.output.format`` is not ``"netcdf"`` or ``"parquet"``.
     """
     output_dir = config.output.path
     var_dir = output_dir / category
@@ -676,7 +925,21 @@ def _write_temporal_file(
 
 
 def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, object]:
-    """Build CF-1.8 metadata attributes for SIR output."""
+    """Build CF-1.8 global metadata attributes for SIR output.
+
+    Parameters
+    ----------
+    config : PipelineConfig
+        Pipeline configuration (provides ``sir_name``, fabric path, etc.).
+    n_features : int
+        Number of features in the target fabric.
+
+    Returns
+    -------
+    dict[str, object]
+        CF-1.8 compliant attribute dictionary suitable for
+        ``xr.Dataset.attrs``.
+    """
     return {
         "title": f"Hydrologic parameters: {config.output.sir_name}",
         "institution": "hydro-param",
@@ -694,7 +957,20 @@ def _save_manifest_to_disk(
     manifest: _manifest_mod.PipelineManifest,
     output_dir: Path,
 ) -> None:
-    """Save manifest to disk, logging errors instead of crashing the pipeline."""
+    """Save the pipeline manifest to disk, logging errors non-fatally.
+
+    The manifest enables resume support by recording which datasets have
+    been processed and their fingerprints.  A write failure is logged but
+    does not crash the pipeline -- outputs are still intact, only resume
+    support may be degraded on the next run.
+
+    Parameters
+    ----------
+    manifest : PipelineManifest
+        Current manifest state to persist.
+    output_dir : Path
+        Output directory where the manifest JSON file is written.
+    """
     try:
         manifest.save(output_dir)
     except OSError as exc:
@@ -714,7 +990,26 @@ def _save_manifest(
     temporal_files: dict[str, Path],
     output_dir: Path,
 ) -> None:
-    """Update a manifest entry and save to disk."""
+    """Update a single dataset's manifest entry and persist to disk.
+
+    Called after each dataset completes processing to record its
+    fingerprint and output file paths for resume support.
+
+    Parameters
+    ----------
+    manifest : PipelineManifest
+        Manifest object to update in place.
+    ds_name : str
+        Dataset name (key in ``manifest.entries``).
+    ds_fp : str
+        Dataset fingerprint (hash of request + entry + processing config).
+    static_files : dict[str, Path]
+        Per-variable CSV paths for this dataset.
+    temporal_files : dict[str, Path]
+        Per-year temporal output paths for this dataset.
+    output_dir : Path
+        Output directory for relativizing file paths in the manifest.
+    """
     manifest.entries[ds_name] = _manifest_mod.make_manifest_entry(
         ds_fp, static_files, temporal_files, output_dir
     )
@@ -726,28 +1021,50 @@ def stage4_process(
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
     config: PipelineConfig,
 ) -> Stage4Results:
-    """Stage 4: Process all datasets with spatial batching.
+    """Stage 4: Process all datasets with spatial batching and incremental writes.
 
-    Temporal datasets skip batching and are processed full-fabric via
-    ``WeightGen`` + ``AggGen``. Static datasets use the existing batch
-    loop with ``ZonalGen``.
+    Iterate over each resolved dataset.  Static datasets are processed
+    through the spatial batch loop (KD-tree batches, per-batch GeoTIFF
+    fetch, gdptools ``ZonalGen``).  Temporal datasets skip batching and
+    are processed full-fabric via ``WeightGen`` + ``AggGen``.
 
-    Per-variable and temporal output files are written incrementally
-    as each dataset completes, reducing peak memory usage.
+    Per-variable CSV files (static) and per-year NetCDF/Parquet files
+    (temporal) are written incrementally as each dataset completes,
+    reducing peak memory usage compared to accumulating all results.
+
+    Resume support is provided via a manifest that records dataset
+    fingerprints and output paths.  When ``config.processing.resume`` is
+    ``True``, datasets whose outputs are already current are skipped.
 
     Parameters
     ----------
     fabric : gpd.GeoDataFrame
-        Target fabric with ``batch_id`` column from spatial batching.
-    resolved : list
-        Resolved dataset entries from stage 2.
+        Target fabric with a ``batch_id`` column added by
+        :func:`~hydro_param.batching.spatial_batch`.
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+        Resolved dataset entries from :func:`stage2_resolve_datasets`.
     config : PipelineConfig
-        Pipeline configuration.
+        Pipeline configuration (output path, engine, batch size, resume
+        flag, etc.).
 
     Returns
     -------
     Stage4Results
-        Static and temporal results.
+        Aggregated file paths and category metadata for all processed
+        datasets.
+
+    Raises
+    ------
+    ValueError
+        If duplicate result keys are detected across datasets or years
+        (indicates a config collision).
+
+    Notes
+    -----
+    Multi-year static datasets (``year: [2020, 2021]``) produce
+    year-suffixed result keys (e.g., ``"land_cover_2020"``).  Temporal
+    datasets are split into per-calendar-year chunks via
+    :func:`_split_time_period_by_year`.
     """
     batch_ids = sorted(fabric["batch_id"].unique())
     logger.info("Stage 4: Processing %d datasets across %d batches", len(resolved), len(batch_ids))
@@ -939,25 +1256,42 @@ def stage5_normalize_sir(
 ) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]:
     """Stage 5: Normalize raw stage 4 output to canonical SIR format.
 
+    Build a SIR schema from the resolved datasets, then normalize each
+    raw per-variable CSV into a canonical SIR file with standardized
+    variable names and units.  Temporal files are also normalized.
+    Finally, validate the SIR files against the schema.
+
+    The SIR (Standardized Internal Representation) is the contract
+    between the generic pipeline and model plugins -- plugins consume
+    SIR files with predictable names and units, never raw source output.
+
     Parameters
     ----------
-    stage4
-        Stage 4 results with raw per-variable file paths.
-    resolved
-        Resolved dataset entries from stage 2.
-    config
-        Pipeline configuration.
+    stage4 : Stage4Results
+        Stage 4 results containing raw per-variable file paths.
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+        Resolved dataset entries from :func:`stage2_resolve_datasets`,
+        used to build the SIR schema.
+    config : PipelineConfig
+        Pipeline configuration (output path, id_field, validation mode).
 
     Returns
     -------
     tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]
-        Normalized SIR file paths, the schema used, and validation warnings.
+        - Normalized SIR file paths (``sir/`` subdirectory)
+        - Schema entries describing each SIR variable
+        - Validation warnings (empty if all checks pass)
 
     Raises
     ------
     SIRValidationError
         If ``config.processing.sir_validation == "strict"`` and any
         validation warnings are found.
+
+    See Also
+    --------
+    hydro_param.sir.normalize_sir : Per-file normalization logic.
+    hydro_param.sir.validate_sir : SIR validation checks.
     """
     logger.info("Stage 5: SIR normalization")
     schema = build_sir_schema(resolved)
@@ -1004,19 +1338,35 @@ def run_pipeline_from_config(
     config: PipelineConfig,
     registry: DatasetRegistry,
 ) -> PipelineResult:
-    """Execute the full pipeline from pre-loaded config and registry.
+    """Execute the full 5-stage pipeline from pre-loaded config and registry.
+
+    Orchestrate all pipeline stages in sequence: resolve fabric (stage 1),
+    resolve datasets (stage 2), process datasets with spatial batching
+    (stage 4), and normalize to SIR (stage 5).  Stage 3 (weights) is
+    handled internally by gdptools during stage 4.
+
+    GDAL HTTP timeout environment variables are set from
+    ``config.processing.network_timeout`` for the duration of the pipeline
+    and restored afterward.
 
     Parameters
     ----------
-    config
-        Pipeline configuration.
-    registry
-        Dataset registry.
+    config : PipelineConfig
+        Validated pipeline configuration.
+    registry : DatasetRegistry
+        Dataset registry for resolving dataset names to entries.
 
     Returns
     -------
     PipelineResult
-        File paths for static/temporal outputs, plus fabric.
+        Complete pipeline output including file paths for static and
+        temporal outputs, the target fabric, normalized SIR files,
+        schema, and validation warnings.  Use :meth:`PipelineResult.load_sir`
+        to assemble a combined ``xr.Dataset`` on demand.
+
+    See Also
+    --------
+    run_pipeline : Convenience wrapper that loads config and registry from paths.
     """
     t0 = time.perf_counter()
 
@@ -1121,21 +1471,30 @@ def run_pipeline(
     config_path: str | Path,
     registry_path: str | Path | None = None,
 ) -> PipelineResult:
-    """Execute the full parameterization pipeline.
+    """Execute the full parameterization pipeline from file paths.
+
+    Convenience wrapper that loads the pipeline config and dataset registry
+    from disk, then delegates to :func:`run_pipeline_from_config`.
 
     Parameters
     ----------
     config_path : str or Path
-        Path to the pipeline YAML config.
+        Path to the pipeline YAML config file.
     registry_path : str or Path or None
-        Path to a dataset registry YAML file or directory. Defaults to
-        ``configs/datasets/``.
+        Path to a dataset registry YAML file or directory of YAML files.
+        Defaults to ``configs/datasets/`` (the built-in registry).
 
     Returns
     -------
     PipelineResult
-        File paths for static/temporal outputs. Use ``load_sir()``
-        to assemble a combined xr.Dataset on demand.
+        Complete pipeline output.  Use :meth:`PipelineResult.load_sir`
+        to assemble a combined ``xr.Dataset`` on demand.
+
+    See Also
+    --------
+    run_pipeline_from_config : Core pipeline execution with pre-loaded objects.
+    hydro_param.config.load_config : YAML config loader.
+    hydro_param.dataset_registry.load_registry : Registry loader.
     """
     config = load_config(config_path)
     if registry_path is None:
@@ -1146,7 +1505,17 @@ def run_pipeline(
 
 
 def main() -> int:
-    """CLI entry point for ``python -m hydro_param.pipeline``."""
+    """Run the pipeline from the command line via ``python -m hydro_param.pipeline``.
+
+    Parse ``sys.argv`` for a config path and optional registry path, configure
+    logging, and execute the pipeline.  This is a minimal entry point for
+    debugging; the primary CLI is :mod:`hydro_param.cli`.
+
+    Returns
+    -------
+    int
+        Exit code: 0 on success, 1 on failure.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
