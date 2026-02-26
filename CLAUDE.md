@@ -110,6 +110,10 @@ Package management: **pixi** (configured in `pyproject.toml` under `[tool.pixi.*
 - `dev` — daily development (default + pytest, ruff, mypy, pre-commit)
 - `docs` — documentation building (mkdocs-material, mkdocstrings)
 
+## Execution Style
+
+When executing an approved plan (e.g., from `/superpowers:writing-plans` or `/superpowers:executing-plans`), **prioritize doing over re-planning**. Do not re-read design docs, re-analyze architecture, or ask redundant clarifying questions when the plan already covers the approach. Start executing tasks immediately. Only pause to investigate if a task fails or produces unexpected results.
+
 ## Coding Conventions
 
 - src layout (`src/hydro_param/`)
