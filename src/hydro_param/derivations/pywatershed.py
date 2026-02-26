@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 13, and 14.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, and 14.
 """
 
 from __future__ import annotations
@@ -57,7 +57,16 @@ _DEFAULTS: dict[str, float] = {
     "dprst_depth_avg": 24.0,  # inches
     # Transpiration
     "transp_tmax": 500.0,  # degree-days
+    # PET (Jensen-Haise)
+    "jh_coef": 0.014,
+    "jh_coef_hru": 0.014,
+    # Transpiration timing
+    "transp_beg": 4,  # April
+    "transp_end": 10,  # October
 }
+
+# Parameters with non-scalar defaults handled specially in _apply_defaults
+_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end"})
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
@@ -69,6 +78,25 @@ _SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
     "fraction_of": lambda ds, p: p["fraction"] * ds[p["input"]].values,
     "constant": lambda ds, p: np.float64(p["value"]),
 }
+
+
+def _sat_vp(temp_f: np.ndarray) -> np.ndarray:
+    """Saturation vapor pressure (hPa) from temperature in °F.
+
+    Uses the Magnus formula (Alduchov & Eskridge 1996).
+
+    Parameters
+    ----------
+    temp_f
+        Temperature in degrees Fahrenheit.
+
+    Returns
+    -------
+    np.ndarray
+        Saturation vapor pressure in hectopascals (hPa).
+    """
+    temp_c = (temp_f - 32.0) * 5.0 / 9.0
+    return 6.1078 * np.exp(17.269 * temp_c / (temp_c + 237.3))
 
 
 def merge_temporal_into_derived(
@@ -158,8 +186,9 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 13 (defaults),
-    and 14 (calibration seeds).
+    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 10 (PET
+    coefficients), 11 (transpiration timing), 13 (defaults), and
+    14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -209,6 +238,15 @@ class PywatershedDerivation:
 
         # Step 9: Solar radiation tables (soltab)
         ds = self._derive_soltab(context, ds)
+
+        # Compute monthly climate normals once for steps 10 and 11
+        normals = self._compute_monthly_normals(context)
+
+        # Step 10: PET coefficients (Jensen-Haise)
+        ds = self._derive_pet_coefficients(ds, normals)
+
+        # Step 11: Transpiration timing (frost-free period)
+        ds = self._derive_transp_timing(ds, normals)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
@@ -907,7 +945,29 @@ class PywatershedDerivation:
         Only sets parameters that are not already present in ``ds``
         (preserves any values derived from data in earlier steps).
         """
+        # Special handling for 2D jh_coef default (nhru, 12)
+        if "jh_coef" not in ds:
+            ds["jh_coef"] = xr.DataArray(
+                np.full((nhru, 12), _DEFAULTS["jh_coef"]),
+                dims=("nhru", "nmonths"),
+                attrs={
+                    "units": "per_degF_per_day",
+                    "long_name": "Jensen-Haise PET coefficient (default)",
+                },
+            )
+
+        # Special handling for transp_beg/transp_end (integer, per-HRU)
+        for param in ("transp_beg", "transp_end"):
+            if param not in ds:
+                ds[param] = xr.DataArray(
+                    np.full(nhru, int(_DEFAULTS[param]), dtype=np.int32),
+                    dims=("nhru",),
+                    attrs={"units": "integer_month", "long_name": f"{param} (default)"},
+                )
+
         for param_name, default_val in _DEFAULTS.items():
+            if param_name in _DEFAULTS_SPECIAL:
+                continue  # handled above
             if param_name not in ds:
                 ds[param_name] = xr.DataArray(
                     np.float64(default_val),
@@ -1167,6 +1227,265 @@ class PywatershedDerivation:
             return datasets_config[best_match]
 
         return None
+
+    # ------------------------------------------------------------------
+    # Climate normals helpers (steps 10, 11)
+    # ------------------------------------------------------------------
+
+    def _compute_monthly_normals(
+        self,
+        ctx: DerivationContext,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Compute monthly mean tmax and tmin from temporal forcing data.
+
+        Aggregates multi-year daily data into 12 monthly means per HRU,
+        converting from °C to °F.
+
+        Returns
+        -------
+        tuple of (monthly_tmax, monthly_tmin) each shape (12, nhru) in °F,
+        or None if temporal data is unavailable.
+        """
+        if ctx.temporal is None or len(ctx.temporal) == 0:
+            return None
+
+        tables_dir = ctx.resolved_lookup_tables_dir
+        config = self._load_lookup_table("forcing_variables", tables_dir)
+        datasets_config = config["mapping"]
+
+        # Concat multi-year chunks by base name
+        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        for ds_name, tds in ctx.temporal.items():
+            base_name = re.sub(r"_\d{4}$", "", ds_name)
+            chunks_by_source.setdefault(base_name, []).append(tds)
+
+        for source_name, chunks in chunks_by_source.items():
+            if len(chunks) > 1:
+                chunks.sort(key=lambda c: c["time"].values[0])
+                merged = xr.concat(chunks, dim="time")
+            else:
+                merged = chunks[0]
+
+            dataset_cfg = self._detect_forcing_dataset(source_name, merged, datasets_config)
+            if dataset_cfg is None:
+                logger.warning(
+                    "Could not match temporal source '%s' to any forcing "
+                    "dataset config for climate normals; skipping.",
+                    source_name,
+                )
+                continue
+
+            # Find tmax and tmin SIR variable names
+            tmax_sir = dataset_cfg.get("tmax", {}).get("sir_name")
+            tmin_sir = dataset_cfg.get("tmin", {}).get("sir_name")
+
+            if tmax_sir is None or tmin_sir is None:
+                logger.warning(
+                    "Forcing config for source '%s' is missing tmax and/or "
+                    "tmin sir_name entries; cannot compute climate normals.",
+                    source_name,
+                )
+                continue
+            if tmax_sir not in merged or tmin_sir not in merged:
+                logger.warning(
+                    "Temporal source '%s' missing required variables: "
+                    "tmax='%s' (present=%s), tmin='%s' (present=%s).",
+                    source_name,
+                    tmax_sir,
+                    tmax_sir in merged,
+                    tmin_sir,
+                    tmin_sir in merged,
+                )
+                continue
+
+            # Group by month, compute mean, convert C -> F
+            tmax_monthly = merged[tmax_sir].groupby("time.month").mean(dim="time")
+            tmin_monthly = merged[tmin_sir].groupby("time.month").mean(dim="time")
+
+            # Validate full 12-month coverage
+            n_months = tmax_monthly.sizes.get("month", 0)
+            if n_months != 12:
+                logger.warning(
+                    "Temporal source '%s' covers only %d of 12 months; "
+                    "cannot compute reliable monthly normals. Skipping.",
+                    source_name,
+                    n_months,
+                )
+                continue
+
+            tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
+            tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
+
+            # Ensure 2-D shape (12, nhru) for single-HRU case
+            if tmax_f.ndim == 1:
+                tmax_f = tmax_f[:, np.newaxis]
+                tmin_f = tmin_f[:, np.newaxis]
+
+            logger.info(
+                "Computed monthly climate normals from '%s' (%d timesteps, %d HRUs).",
+                source_name,
+                merged.sizes.get("time", 0),
+                tmax_f.shape[1],
+            )
+            return tmax_f, tmin_f
+
+        logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
+        return None
+
+    # ------------------------------------------------------------------
+    # Step 10: PET coefficients (Jensen-Haise)
+    # ------------------------------------------------------------------
+
+    def _derive_pet_coefficients(
+        self,
+        ds: xr.Dataset,
+        normals: tuple[np.ndarray, np.ndarray] | None,
+    ) -> xr.Dataset:
+        """Step 10: Derive Jensen-Haise PET coefficients.
+
+        Computes ``jh_coef`` (nhru, 12) and ``jh_coef_hru`` (nhru,) from
+        monthly climate normals using PRMS-IV equation 1-26.
+
+        Falls back to step 13 defaults when no temporal data is available.
+        """
+        if normals is None:
+            logger.info("No temporal data for PET coefficients; deferring to defaults.")
+            return ds
+
+        monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
+        nhru = monthly_tmax.shape[1]
+
+        # --- jh_coef: PRMS-IV eq. 1-26 ---
+        svp_max = _sat_vp(monthly_tmax)  # (12, nhru)
+        svp_min = _sat_vp(monthly_tmin)  # (12, nhru)
+
+        # Guard against division by zero
+        svp_max_safe = np.maximum(svp_max, 1e-6)
+        jh_coef = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
+        jh_coef = np.clip(jh_coef, 0.005, 0.06)
+
+        # Transpose to (nhru, 12) for output convention
+        ds["jh_coef"] = xr.DataArray(
+            jh_coef.T,
+            dims=("nhru", "nmonths"),
+            attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient"},
+        )
+
+        # --- jh_coef_hru: elevation-adjusted coefficient ---
+        # Use July (index 6) as warmest month for base coefficient
+        july_jh = jh_coef[6, :]  # (nhru,)
+
+        # Elevation adjustment: higher elevations have lower boiling point,
+        # increasing vapor pressure deficit -> slightly higher coefficients.
+        # Linear approximation: +0.00001 per foot above sea level.
+        if "hru_elev" in ds:
+            elev_ft = ds["hru_elev"].values
+            jh_coef_hru = july_jh + 0.00001 * elev_ft
+        else:
+            logger.info(
+                "hru_elev not in dataset; computing jh_coef_hru without elevation adjustment.",
+            )
+            jh_coef_hru = july_jh
+
+        jh_coef_hru = np.clip(jh_coef_hru, 0.005, 0.06)
+        ds["jh_coef_hru"] = xr.DataArray(
+            jh_coef_hru,
+            dims=("nhru",),
+            attrs={"units": "per_degF_per_day", "long_name": "Per-HRU Jensen-Haise coefficient"},
+        )
+
+        logger.info(
+            "Step 10: derived jh_coef (%d HRUs x 12 months) and jh_coef_hru.",
+            nhru,
+        )
+        return ds
+
+    # ------------------------------------------------------------------
+    # Step 11: Transpiration timing (frost-free period)
+    # ------------------------------------------------------------------
+
+    def _derive_transp_timing(
+        self,
+        ds: xr.Dataset,
+        normals: tuple[np.ndarray, np.ndarray] | None,
+    ) -> xr.Dataset:
+        """Step 11: Derive transpiration onset/offset from monthly tmin.
+
+        Computes ``transp_beg`` and ``transp_end`` (integer months) by
+        detecting the frost-free period from monthly minimum temperature
+        normals.  Falls back to step 13 defaults when no temporal data
+        is available.
+        """
+        if normals is None:
+            logger.info("No temporal data for transpiration timing; deferring to defaults.")
+            return ds
+
+        _monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
+        nhru = monthly_tmin.shape[1]
+        freezing = 32.0  # °F
+
+        # Check for NaN in monthly tmin
+        nan_count = int(np.count_nonzero(np.isnan(monthly_tmin)))
+        if nan_count:
+            logger.warning(
+                "monthly_tmin contains %d NaN values across %d HRUs x 12 months; "
+                "affected HRUs will use default transp_beg/transp_end values.",
+                nan_count,
+                nhru,
+            )
+
+        # transp_beg: first month (1-indexed) where tmin > freezing (vectorized)
+        above_freezing = monthly_tmin > freezing  # (12, nhru) boolean
+        has_warm_month = above_freezing.any(axis=0)
+        transp_beg = np.where(has_warm_month, np.argmax(above_freezing, axis=0) + 1, 4).astype(
+            np.int32
+        )
+
+        fallback_beg = int(nhru - np.count_nonzero(has_warm_month))
+        if fallback_beg > 0:
+            logger.warning(
+                "transp_beg: %d of %d HRUs never exceeded freezing in any "
+                "month; using default transp_beg=4 for those HRUs.",
+                fallback_beg,
+                nhru,
+            )
+
+        # transp_end: first month from July onward where tmin < freezing
+        below_freezing_late = monthly_tmin[6:, :] < freezing  # (6, nhru)
+        has_cold_month = below_freezing_late.any(axis=0)
+        transp_end = np.where(
+            has_cold_month, np.argmax(below_freezing_late, axis=0) + 7, 10
+        ).astype(np.int32)
+
+        fallback_end = int(nhru - np.count_nonzero(has_cold_month))
+        if fallback_end > 0:
+            logger.warning(
+                "transp_end: %d of %d HRUs never dropped below freezing "
+                "Jul-Dec; using default transp_end=10 for those HRUs.",
+                fallback_end,
+                nhru,
+            )
+
+        ds["transp_beg"] = xr.DataArray(
+            transp_beg,
+            dims=("nhru",),
+            attrs={"units": "integer_month", "long_name": "Month transpiration begins"},
+        )
+        ds["transp_end"] = xr.DataArray(
+            transp_end,
+            dims=("nhru",),
+            attrs={"units": "integer_month", "long_name": "Month transpiration ends"},
+        )
+
+        logger.info(
+            "Step 11: derived transp_beg (range %d-%d) and transp_end (range %d-%d) for %d HRUs.",
+            int(transp_beg.min()),
+            int(transp_beg.max()),
+            int(transp_end.min()),
+            int(transp_end.max()),
+            nhru,
+        )
+        return ds
 
     # ------------------------------------------------------------------
     # Parameter overrides
