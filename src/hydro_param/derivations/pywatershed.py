@@ -236,11 +236,14 @@ class PywatershedDerivation:
         # Step 9: Solar radiation tables (soltab)
         ds = self._derive_soltab(context, ds)
 
+        # Compute monthly climate normals once for steps 10 and 11
+        normals = self._compute_monthly_normals(context)
+
         # Step 10: PET coefficients (Jensen-Haise)
-        ds = self._derive_pet_coefficients(context, ds)
+        ds = self._derive_pet_coefficients(ds, normals)
 
         # Step 11: Transpiration timing (frost-free period)
-        ds = self._derive_transp_timing(context, ds)
+        ds = self._derive_transp_timing(ds, normals)
 
         # Step 13: Defaults and initial conditions
         ds = self._apply_defaults(ds, nhru)
@@ -1333,8 +1336,8 @@ class PywatershedDerivation:
 
     def _derive_pet_coefficients(
         self,
-        ctx: DerivationContext,
         ds: xr.Dataset,
+        normals: tuple[np.ndarray, np.ndarray] | None,
     ) -> xr.Dataset:
         """Step 10: Derive Jensen-Haise PET coefficients.
 
@@ -1343,7 +1346,6 @@ class PywatershedDerivation:
 
         Falls back to step 13 defaults when no temporal data is available.
         """
-        normals = self._compute_monthly_normals(ctx)
         if normals is None:
             logger.info("No temporal data for PET coefficients; deferring to defaults.")
             return ds
@@ -1399,8 +1401,8 @@ class PywatershedDerivation:
 
     def _derive_transp_timing(
         self,
-        ctx: DerivationContext,
         ds: xr.Dataset,
+        normals: tuple[np.ndarray, np.ndarray] | None,
     ) -> xr.Dataset:
         """Step 11: Derive transpiration onset/offset from monthly tmin.
 
@@ -1409,7 +1411,6 @@ class PywatershedDerivation:
         normals.  Falls back to step 13 defaults when no temporal data
         is available.
         """
-        normals = self._compute_monthly_normals(ctx)
         if normals is None:
             logger.info("No temporal data for transpiration timing; deferring to defaults.")
             return ds
