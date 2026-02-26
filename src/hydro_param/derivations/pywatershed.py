@@ -4,7 +4,7 @@ Converts SIR physical properties (zonal statistics of raw geospatial
 data) into PRMS/pywatershed model parameters.  Implements the
 derivation pipeline from ``pywatershed_dataset_param_map.yml``.
 
-Foundation implementation covers steps 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, and 14.
+Foundation implementation covers steps 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, and 14.
 """
 
 from __future__ import annotations
@@ -63,13 +63,20 @@ _DEFAULTS: dict[str, float] = {
     # Transpiration timing
     "transp_beg": 4,  # April
     "transp_end": 10,  # October
+    # Depression storage — hru_type only; dprst_frac and dprst_area_max are
+    # always set by _derive_waterbody (or _waterbody_defaults), so no scalar
+    # fallback is needed here.
+    "hru_type": 1,
 }
 
 # Parameters with non-scalar defaults handled specially in _apply_defaults
-_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end"})
+_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end", "hru_type"})
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
+
+# Square metres per acre (exact)
+_M2_PER_ACRE = 4046.8564224
 
 # Calibration seed method dispatch — safe lambdas only, NO eval.
 _SEED_METHODS: dict[str, Callable[..., np.floating | np.ndarray]] = {
@@ -186,9 +193,9 @@ class PywatershedDerivation:
     Implements the derivation pipeline from
     ``docs/reference/pywatershed_dataset_param_map.yml``.  Covers pipeline
     steps 1 (geometry), 2 (topology), 3 (topography), 4 (land cover),
-    5 (soils), 7 (forcing), 8 (lookup tables), 9 (soltab), 10 (PET
-    coefficients), 11 (transpiration timing), 13 (defaults), and
-    14 (calibration seeds).
+    5 (soils), 6 (waterbody overlay), 7 (forcing), 8 (lookup tables),
+    9 (soltab), 10 (PET coefficients), 11 (transpiration timing),
+    13 (defaults), and 14 (calibration seeds).
     """
 
     name: str = "pywatershed"
@@ -232,6 +239,9 @@ class PywatershedDerivation:
 
         # Step 5: Soils parameters (soil_type, soil_moist_max, soil_rechr_max_frac)
         ds = self._derive_soils(context, ds)
+
+        # Step 6: Waterbody overlay (dprst_frac, dprst_area_max, hru_type)
+        ds = self._derive_waterbody(context, ds)
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
@@ -821,6 +831,161 @@ class PywatershedDerivation:
         return None
 
     # ------------------------------------------------------------------
+    # Step 6: Waterbody overlay (depression storage)
+    # ------------------------------------------------------------------
+
+    def _waterbody_defaults(self, ds: xr.Dataset, nhru: int) -> xr.Dataset:
+        """Assign zero/default waterbody parameters."""
+        ds["dprst_frac"] = xr.DataArray(
+            np.zeros(nhru),
+            dims="nhru",
+            attrs={"units": "fraction", "long_name": "Depression storage fraction of HRU area"},
+        )
+        ds["dprst_area_max"] = xr.DataArray(
+            np.zeros(nhru),
+            dims="nhru",
+            attrs={"units": "acres", "long_name": "Maximum depression storage area"},
+        )
+        ds["hru_type"] = xr.DataArray(
+            np.ones(nhru, dtype=np.int32),
+            dims="nhru",
+            attrs={"units": "none", "long_name": "HRU type (1=land, 2=lake)"},
+        )
+        return ds
+
+    def _derive_waterbody(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Step 6: Derive depression storage from waterbody overlay.
+
+        Performs polygon-on-polygon overlay of NHDPlus waterbody polygons
+        against HRU fabric to compute depression fraction, area, and HRU
+        type classification.
+
+        Parameters
+        ----------
+        ctx
+            Derivation context (must contain ``fabric`` and ``waterbodies``).
+        ds
+            In-progress parameter dataset (must contain ``hru_area``).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``dprst_frac``, ``dprst_area_max``, and ``hru_type``.
+        """
+        nhru = ds.sizes.get("nhru", 0)
+        id_field = ctx.fabric_id_field
+
+        # Guard: hru_area must exist from step 1
+        if "hru_area" not in ds:
+            logger.warning("Step 6 requires 'hru_area' from step 1 (not found); using defaults")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Guard: fabric required for overlay
+        fabric = ctx.fabric
+        if fabric is None:
+            logger.warning("No fabric provided; using defaults for step 6")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Guard: id_field must exist in fabric
+        if id_field not in fabric.columns:
+            raise KeyError(
+                f"Fabric GeoDataFrame missing id_field '{id_field}' "
+                f"(found: {sorted(fabric.columns.tolist())})"
+            )
+
+        # Fallback: no waterbody data
+        if ctx.waterbodies is None:
+            logger.warning("No waterbody data provided; using defaults for step 6")
+            return self._waterbody_defaults(ds, nhru)
+
+        if "ftype" not in ctx.waterbodies.columns:
+            raise KeyError(
+                "Waterbody GeoDataFrame must contain an 'ftype' column "
+                f"(found: {sorted(ctx.waterbodies.columns.tolist())})"
+            )
+
+        # Filter to LakePond and Reservoir only
+        wb = ctx.waterbodies[ctx.waterbodies["ftype"].isin({"LakePond", "Reservoir"})]
+        if wb.empty:
+            logger.info("No LakePond/Reservoir waterbodies found; using defaults for step 6")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Ensure matching CRS
+        if wb.crs != fabric.crs:
+            logger.info("Reprojecting waterbodies from %s to %s", wb.crs, fabric.crs)
+            wb = wb.to_crs(fabric.crs)
+
+        # Warn if CRS is geographic (area computation will be wrong)
+        if fabric.crs is not None and not fabric.crs.is_projected:
+            logger.warning(
+                "Fabric CRS %s is geographic — area computations may be inaccurate. "
+                "Use a projected CRS (e.g. EPSG:5070) for reliable results.",
+                fabric.crs,
+            )
+
+        # Polygon overlay: intersection of fabric x waterbodies
+        try:
+            intersections = gpd.overlay(
+                fabric[[id_field, "geometry"]],
+                wb[["geometry"]],
+                how="intersection",
+            )
+        except Exception:
+            logger.exception("gpd.overlay failed in step 6; using defaults")
+            return self._waterbody_defaults(ds, nhru)
+
+        if intersections.empty:
+            logger.info("No waterbody-HRU intersections found; using defaults for step 6")
+            return self._waterbody_defaults(ds, nhru)
+
+        # Compute clipped areas and group by HRU
+        intersections["_clip_area_m2"] = intersections.geometry.area
+        area_by_hru = intersections.groupby(id_field)["_clip_area_m2"].sum()
+
+        # Vectorized alignment to SIR coordinate order
+        hru_ids = ctx.sir[id_field].values
+        clipped_acres = area_by_hru.reindex(hru_ids, fill_value=0.0).values / _M2_PER_ACRE
+
+        # Compute fraction from hru_area (already in acres from step 1)
+        hru_area_acres = ds["hru_area"].values
+        dprst_frac = np.where(hru_area_acres > 0, clipped_acres / hru_area_acres, 0.0)
+        dprst_frac = np.clip(dprst_frac, 0.0, 1.0)
+
+        # HRU type: 2 (lake) if >50% waterbody, else 1 (land)
+        hru_type = np.where(dprst_frac > 0.5, 2, 1).astype(np.int32)
+
+        ds["dprst_frac"] = xr.DataArray(
+            dprst_frac,
+            dims="nhru",
+            attrs={"units": "fraction", "long_name": "Depression storage fraction of HRU area"},
+        )
+        ds["dprst_area_max"] = xr.DataArray(
+            clipped_acres,
+            dims="nhru",
+            attrs={"units": "acres", "long_name": "Maximum depression storage area"},
+        )
+        ds["hru_type"] = xr.DataArray(
+            hru_type,
+            dims="nhru",
+            attrs={"units": "none", "long_name": "HRU type (1=land, 2=lake)"},
+        )
+
+        n_lake = int((hru_type == 2).sum())
+        n_with_water = int((dprst_frac > 0).sum())
+        logger.info(
+            "Step 6 waterbody overlay: %d/%d HRUs with waterbodies, %d lake-type",
+            n_with_water,
+            nhru,
+            n_lake,
+        )
+
+        return ds
+
+    # ------------------------------------------------------------------
     # Step 8: Lookup table application
     # ------------------------------------------------------------------
 
@@ -964,6 +1129,14 @@ class PywatershedDerivation:
                     dims=("nhru",),
                     attrs={"units": "integer_month", "long_name": f"{param} (default)"},
                 )
+
+        # Special handling for hru_type (integer, per-HRU)
+        if "hru_type" not in ds:
+            ds["hru_type"] = xr.DataArray(
+                np.full(nhru, int(_DEFAULTS["hru_type"]), dtype=np.int32),
+                dims=("nhru",),
+                attrs={"units": "none", "long_name": "HRU type (default)"},
+            )
 
         for param_name, default_val in _DEFAULTS.items():
             if param_name in _DEFAULTS_SPECIAL:
