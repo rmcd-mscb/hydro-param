@@ -33,7 +33,7 @@ class TargetFabricConfig(BaseModel):
     a pre-existing geospatial file -- hydro-param does not fetch or subset
     fabrics (use pynhd/pygeohydro upstream).
 
-    Parameters
+    Attributes
     ----------
     path : Path
         Path to the fabric file (GeoPackage, GeoParquet, or Shapefile).
@@ -68,7 +68,7 @@ class DomainConfig(BaseModel):
     Only ``type="bbox"`` is currently implemented; HUC and gage-based
     subsetting are planned.
 
-    Parameters
+    Attributes
     ----------
     type : {"bbox", "huc2", "huc4", "gage"}
         Domain specification method.
@@ -107,7 +107,7 @@ class DatasetRequest(BaseModel):
     ``DatasetRequest``.  The ``name`` is resolved against the dataset registry
     to obtain fetch strategy, STAC collection, CRS, and variable metadata.
 
-    Parameters
+    Attributes
     ----------
     name : str
         Dataset name as it appears in the registry (e.g., ``"dem_3dep_10m"``).
@@ -188,7 +188,7 @@ class DatasetRequest(BaseModel):
 class OutputConfig(BaseModel):
     """Configure pipeline output location and format.
 
-    Parameters
+    Attributes
     ----------
     path : Path
         Directory for output files.  Created automatically if it does not
@@ -210,7 +210,7 @@ class OutputConfig(BaseModel):
 class ProcessingConfig(BaseModel):
     """Control processing engine, batching, fault tolerance, and networking.
 
-    Parameters
+    Attributes
     ----------
     engine : {"exactextract", "serial"}
         Zonal statistics engine.  ``"exactextract"`` uses the
@@ -260,7 +260,7 @@ class PipelineConfig(BaseModel):
     This is the root model that :func:`load_config` deserializes.  It
     composes all sub-configs and is consumed by every pipeline stage.
 
-    Parameters
+    Attributes
     ----------
     target_fabric : TargetFabricConfig
         Polygon mesh to parameterize.

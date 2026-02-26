@@ -48,7 +48,7 @@ class DerivationContext:
     the SIR and as a column in the fabric GeoDataFrame (if provided).  This
     fail-fast validation prevents silent dimension mismatches downstream.
 
-    Parameters
+    Attributes
     ----------
     sir : xr.Dataset
         Normalized Standardized Internal Representation (SIR) dataset produced

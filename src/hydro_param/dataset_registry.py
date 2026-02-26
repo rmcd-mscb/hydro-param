@@ -39,7 +39,7 @@ class VariableSpec(BaseModel):
     override) and carries metadata for SIR normalization (units, long
     name, categorical flag).
 
-    Parameters
+    Attributes
     ----------
     name : str
         Logical variable name used throughout the pipeline (e.g.,
@@ -85,7 +85,7 @@ class DerivedVariableSpec(BaseModel):
     They are resolved alongside direct variables in stage 2 and processed
     in stage 4.
 
-    Parameters
+    Attributes
     ----------
     name : str
         Logical name for the derived variable (e.g., ``"slope"``,
@@ -116,7 +116,7 @@ class DownloadFile(BaseModel):
     Used by the ``hydro-param datasets download`` CLI command to stage
     local data files required by the ``local_tiff`` access strategy.
 
-    Parameters
+    Attributes
     ----------
     year : int
         Calendar year this file covers.
@@ -147,7 +147,7 @@ class DownloadInfo(BaseModel):
     ``DownloadFile`` entries) and **template mode** (a URL template
     expanded over ``year_range x variables_available``).
 
-    Parameters
+    Attributes
     ----------
     url : str
         Single-file download URL (mutually exclusive with ``files``
@@ -269,7 +269,7 @@ class DatasetEntry(BaseModel):
     - ``"climr_cat"`` -- ClimateR-Catalog via OPeNDAP (gridMET).
     - ``"native_zarr"`` / ``"converted_zarr"`` -- Zarr stores (planned).
 
-    Parameters
+    Attributes
     ----------
     description : str
         Human-readable dataset description.
@@ -382,7 +382,7 @@ class DatasetRegistry(BaseModel):
     of loaded datasets.  Typically created by ``load_registry()`` from
     one or more YAML files.
 
-    Parameters
+    Attributes
     ----------
     datasets : dict[str, DatasetEntry]
         Mapping of dataset name to entry.  Names must be unique across

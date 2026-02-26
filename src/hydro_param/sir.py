@@ -176,7 +176,7 @@ class SIRVariableSchema:
     constraints.  Used by ``normalize_sir()`` and ``validate_sir()`` to
     transform and check pipeline output.
 
-    Parameters
+    Attributes
     ----------
     canonical_name : str
         Canonical SIR variable name (e.g., ``"elevation_m_mean"``).
@@ -655,7 +655,7 @@ def normalize_sir_temporal(
 class SIRValidationWarning:
     """Represent a single SIR validation warning.
 
-    Parameters
+    Attributes
     ----------
     variable : str
         Canonical variable name or column name that triggered the warning.
