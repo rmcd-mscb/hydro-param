@@ -116,9 +116,7 @@ class TestPwsConfigTranslation:
         )
 
         pipeline_config = _translate_pws_to_pipeline(pws_config)
-        nlcd_ds = next(
-            d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov"
-        )
+        nlcd_ds = next(d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov")
         assert nlcd_ds.year == 2019  # end year, not 2021
 
     def test_translate_missing_fabric_raises(self) -> None:
@@ -191,7 +189,11 @@ class TestPwsConfigTranslation:
             },
             time={"start": "2020-01-01", "end": "2021-12-31"},
             climate={"source": "gridmet", "variables": ["prcp", "tmax", "tmin"]},
-            datasets={"topography": "dem_3dep_10m", "landcover": "nlcd_osn_lndcov", "soils": "polaris_30m"},
+            datasets={
+                "topography": "dem_3dep_10m",
+                "landcover": "nlcd_osn_lndcov",
+                "soils": "polaris_30m",
+            },
         )
 
         pipeline_config = _translate_pws_to_pipeline(pws_config)
