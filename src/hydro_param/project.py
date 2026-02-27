@@ -205,7 +205,6 @@ output:
 # Engine and batching options.
 processing:
   engine: exactextract                    # exactextract or serial
-  failure_mode: strict                    # strict (fail fast) or tolerant (log and continue)
   batch_size: 500                         # Number of features per spatial batch
 """
 

@@ -217,10 +217,6 @@ class ProcessingConfig(BaseModel):
         exactextract C++ library via gdptools for fast, coverage-weighted
         statistics.  ``"serial"`` is a pure-Python fallback.  Defaults to
         ``"exactextract"``.
-    failure_mode : {"strict", "tolerant"}
-        How to handle feature-level processing failures.  ``"strict"``
-        raises immediately; ``"tolerant"`` logs failed features to CSV and
-        continues.  Defaults to ``"strict"``.
     batch_size : int
         Maximum number of features per spatial batch.  KD-tree recursive
         bisection groups nearby features to minimize data fetch extent.
@@ -239,15 +235,9 @@ class ProcessingConfig(BaseModel):
         ``GDAL_HTTP_CONNECTTIMEOUT`` environment variables.  Must be > 0.
         Defaults to 120.
 
-    Notes
-    -----
-    The ``failure_mode`` parameter is not yet wired into the stage 4
-    processing loop -- it is reserved for future fault-tolerance support.
     """
 
     engine: Literal["exactextract", "serial"] = "exactextract"
-    # TODO: Wire failure_mode into stage4 error handling (continue-on-failure with logging)
-    failure_mode: Literal["strict", "tolerant"] = "strict"
     batch_size: int = Field(default=500, gt=0)
     resume: bool = False
     sir_validation: Literal["tolerant", "strict"] = "tolerant"

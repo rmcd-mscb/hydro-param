@@ -57,7 +57,6 @@ def test_config_full_yaml(tmp_path: Path):
         },
         "processing": {
             "engine": "serial",
-            "failure_mode": "tolerant",
             "batch_size": 200,
         },
     }
@@ -69,7 +68,6 @@ def test_config_full_yaml(tmp_path: Path):
     assert config.output.format == "parquet"
     assert config.output.sir_name == "delaware_test"
     assert config.processing.engine == "serial"
-    assert config.processing.failure_mode == "tolerant"
     assert config.processing.batch_size == 200
 
 
@@ -83,7 +81,6 @@ def test_config_defaults():
     assert config.output.format == "netcdf"
     assert config.output.sir_name == "result"
     assert config.processing.engine == "exactextract"
-    assert config.processing.failure_mode == "strict"
     assert config.processing.batch_size == 500
 
 

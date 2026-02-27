@@ -40,7 +40,6 @@ output:
 
 processing:
   engine: exactextract
-  failure_mode: strict
   batch_size: 500
 ```
 
