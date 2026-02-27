@@ -20,10 +20,9 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 9. Soltab --- potential solar radiation tables (Swift 1976)
 10. PET --- Jensen-Haise coefficients from climate normals
 11. Transpiration --- frost-free period timing from monthly tmin
+12. Routing --- Muskingum K_coef, x_coef, seg_slope via Manning's equation
 13. Defaults --- standard PRMS default values and initial conditions
 14. Calibration seeds --- physically-based initial values for calibration parameters
-
-12. Routing --- Muskingum K_coef via Manning's equation (in progress)
 
 References
 ----------
@@ -376,6 +375,9 @@ class PywatershedDerivation:
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
+
+        # Step 12: Routing coefficients (K_coef, x_coef, seg_slope)
+        ds = self._derive_routing(context, ds)
 
         # Step 9: Solar radiation tables (soltab)
         ds = self._derive_soltab(context, ds)
@@ -780,9 +782,7 @@ class PywatershedDerivation:
         seg_comid_col = "comid" if "comid" in segments.columns else "COMID"
         comids = segments[seg_comid_col].values
 
-        vaa_slopes = dict(
-            zip(vaa["comid"].values, vaa["slope"].values, strict=True)
-        )
+        vaa_slopes = dict(zip(vaa["comid"].values, vaa["slope"].values, strict=True))
 
         slopes = np.array(
             [vaa_slopes.get(c, _FALLBACK_SLOPE) for c in comids],
@@ -879,9 +879,7 @@ class PywatershedDerivation:
                 match_slopes_arr = np.array(match_slopes)
                 total_weight = weights_arr.sum()
                 if total_weight > 0:
-                    slopes[seg_idx] = np.average(
-                        match_slopes_arr, weights=weights_arr
-                    )
+                    slopes[seg_idx] = np.average(match_slopes_arr, weights=weights_arr)
 
         n_fallback = int(np.sum(slopes == _FALLBACK_SLOPE))
         if n_fallback > 0:
@@ -944,12 +942,7 @@ class PywatershedDerivation:
         s = np.clip(slopes[valid], _MIN_SLOPE, None)
 
         # Manning's equation: velocity in ft/hr
-        velocity = (
-            (1.0 / _MANNING_N)
-            * np.sqrt(s)
-            * (_DEFAULT_DEPTH_FT ** (2.0 / 3.0))
-            * 3600.0
-        )
+        velocity = (1.0 / _MANNING_N) * np.sqrt(s) * (_DEFAULT_DEPTH_FT ** (2.0 / 3.0)) * 3600.0
 
         # Convert segment length from meters to feet
         seg_length_ft = seg_lengths_m[valid] * 3.28084
@@ -1047,6 +1040,133 @@ class PywatershedDerivation:
         except Exception:
             logger.exception("Failed to fetch NHDPlus data")
             return None, None
+
+    # ------------------------------------------------------------------
+    # Step 12: Routing coefficients
+    # ------------------------------------------------------------------
+
+    def _derive_routing(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Derive Muskingum routing parameters from channel geometry (step 12).
+
+        Compute ``K_coef`` (travel time) via Manning's equation using
+        NHDPlus VAA slopes, and assign ``x_coef``, ``seg_slope``,
+        ``segment_type``, and ``obsin_segment``.
+
+        Supports two segment types:
+
+        - **NHD segments** (have ``comid``/``COMID`` column): direct
+          COMID-to-VAA slope lookup.
+        - **GF/PRMS segments** (no COMID): spatial join to NHDPlus
+          flowlines with length-weighted slope averaging.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing ``segments`` GeoDataFrame.
+        ds : xr.Dataset
+            In-progress parameter dataset (must already contain
+            ``seg_length`` on ``nsegment`` from Step 2).
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``K_coef`` (hours), ``x_coef`` (dimensionless),
+            ``seg_slope`` (m/m), ``segment_type`` (integer), and
+            ``obsin_segment`` (integer) added on ``nsegment``.
+            Returns ``ds`` unchanged if ``ctx.segments`` is ``None``.
+
+        Notes
+        -----
+        Step 12 of the derivation DAG.  Runs after Step 8 (lookups) and
+        before Step 9 (soltab).  See the design document at
+        ``docs/plans/2026-02-26-step12-routing-design.md``.
+
+        References
+        ----------
+        Hay, L.E., et al. 2023. Parameter estimation at the CONUS scale.
+            USGS TM 6-B10.
+        """
+        segments = ctx.segments
+        if segments is None:
+            logger.warning("No segments provided; skipping routing derivation")
+            return ds
+
+        nseg = len(segments)
+        if "nsegment" not in ds.dims:
+            logger.warning("nsegment dimension not in dataset; skipping routing")
+            return ds
+
+        # --- Fetch NHDPlus slopes ---
+        vaa, nhd_flowlines = self._fetch_nhd_slopes(segments)
+
+        if vaa is not None and self._has_comid(segments):
+            # NHD path: direct COMID lookup
+            slopes = self._get_slopes_from_comid(segments, vaa)
+        elif vaa is not None and nhd_flowlines is not None:
+            # GF path: spatial join
+            slopes = self._get_slopes_spatial_join(segments, nhd_flowlines)
+        else:
+            # Fetch failed — use fallback slopes everywhere
+            logger.warning(
+                "NHDPlus data unavailable; using fallback slope %.1e for all %d segments",
+                _FALLBACK_SLOPE,
+                nseg,
+            )
+            slopes = np.full(nseg, _FALLBACK_SLOPE, dtype=np.float64)
+
+        # --- seg_slope ---
+        ds["seg_slope"] = xr.DataArray(
+            slopes,
+            dims="nsegment",
+            attrs={"units": "m/m", "long_name": "Channel slope"},
+        )
+
+        # --- K_coef ---
+        seg_lengths = ds["seg_length"].values if "seg_length" in ds else np.zeros(nseg)
+        k_coef = self._compute_k_coef(slopes, seg_lengths)
+
+        # --- segment_type ---
+        if "segment_type" in segments.columns:
+            seg_type = segments["segment_type"].values.astype(np.int32)
+        else:
+            seg_type = np.full(nseg, _CHANNEL_SEGMENT_TYPE, dtype=np.int32)
+
+        # Force lake segments to max K_coef
+        lake_mask = seg_type == _LAKE_SEGMENT_TYPE
+        k_coef[lake_mask] = _LAKE_K_COEF
+
+        ds["K_coef"] = xr.DataArray(
+            k_coef,
+            dims="nsegment",
+            attrs={"units": "hours", "long_name": "Muskingum storage time coefficient"},
+        )
+
+        # --- x_coef ---
+        ds["x_coef"] = xr.DataArray(
+            np.full(nseg, _DEFAULT_X_COEF, dtype=np.float64),
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Muskingum routing weighting factor"},
+        )
+
+        # --- segment_type ---
+        ds["segment_type"] = xr.DataArray(
+            seg_type,
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Segment type (0=channel, 1=lake)"},
+        )
+
+        # --- obsin_segment ---
+        ds["obsin_segment"] = xr.DataArray(
+            np.zeros(nseg, dtype=np.int32),
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Observed inflow segment (0=none)"},
+        )
+
+        return ds
 
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters
