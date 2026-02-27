@@ -78,8 +78,6 @@ _DEFAULTS: dict[str, float] = {
     "radmax": 0.8,
     "radj_sppt": 0.44,
     "radj_wppt": 0.50,
-    # Routing
-    "x_coef": 0.2,
     # Initial conditions
     "soil_moist_init_frac": 0.5,
     "soil_rechr_init_frac": 0.5,
@@ -340,8 +338,8 @@ class PywatershedDerivation:
         -----
         Step execution order: 1 (geometry) -> 2 (topology) -> 3 (topo) ->
         4 (landcover) -> 5 (soils) -> 6 (waterbody) -> 8 (lookups) ->
-        9 (soltab) -> 10 (PET) -> 11 (transp) -> 13 (defaults) ->
-        14 (calibration) -> 7 (forcing) -> overrides.
+        12 (routing) -> 9 (soltab) -> 10 (PET) -> 11 (transp) ->
+        13 (defaults) -> 14 (calibration) -> 7 (forcing) -> overrides.
 
         Step 7 (forcing) runs late because it has no downstream
         dependencies within the static parameter DAG.
