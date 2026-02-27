@@ -42,6 +42,7 @@ import logging
 import shutil
 import subprocess
 import sys
+from datetime import date as _date
 from pathlib import Path
 
 from cyclopts import App
@@ -657,10 +658,8 @@ def _translate_pws_to_pipeline(
     lc_name = cfg.datasets.landcover
     if lc_name.startswith("nlcd_osn"):
         # Use end year of simulation period, clamped to NLCD availability (1985-2024)
-        from datetime import date as _date
-
         _end_year = _date.fromisoformat(cfg.time.end).year
-        _nlcd_year = min(_end_year, 2024)
+        _nlcd_year = max(1985, min(_end_year, 2024))
         datasets.append(
             DatasetRequest(
                 name=lc_name,
@@ -810,7 +809,12 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("  Output: %s", pws_config.output.path)
 
     # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
-    pipeline_config = _translate_pws_to_pipeline(pws_config)
+    try:
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+    except ValueError as exc:
+        logger.error("Config translation failed: %s", exc)
+        raise SystemExit(1) from exc
+
     logger.debug("Translated pipeline config: %s", pipeline_config.model_dump_json(indent=2))
     reg = _load_registry(registry)
 
@@ -874,8 +878,14 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     soltab_path = Path(pws_config.output.path) / pws_config.output.soltab_file
     if not soltab_path.exists():
         logger.info(
-            "soltab.nc was not produced (missing elevation/slope/aspect in SIR). "
-            "Solar radiation tables will not be available."
+            "soltab.nc was not produced. Ensure the topography dataset includes "
+            "elevation, slope, and aspect variables. Solar radiation tables will "
+            "not be available for this run."
+        )
+    elif soltab_path.stat().st_size == 0:
+        logger.warning(
+            "soltab.nc exists but is empty (0 bytes). This may indicate a write "
+            "failure. Solar radiation tables may not be usable."
         )
 
     logger.info("pywatershed model setup complete: %s", pws_config.output.path)

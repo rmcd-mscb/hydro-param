@@ -119,6 +119,27 @@ class TestPwsConfigTranslation:
         nlcd_ds = next(d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov")
         assert nlcd_ds.year == 2019  # end year, not 2021
 
+    def test_translate_landcover_year_clamped_to_2024(self) -> None:
+        """Land cover year is clamped to 2024 when end year exceeds NLCD availability."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2029-01-01", "end": "2030-12-31"},
+            climate={"source": "gridmet"},
+            datasets={"landcover": "nlcd_osn_lndcov"},
+        )
+
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+        nlcd_ds = next(d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov")
+        assert nlcd_ds.year == 2024  # clamped to max NLCD availability
+
     def test_translate_missing_fabric_raises(self) -> None:
         from hydro_param.cli import _translate_pws_to_pipeline
         from hydro_param.pywatershed_config import PywatershedRunConfig
