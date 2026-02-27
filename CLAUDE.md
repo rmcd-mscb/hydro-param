@@ -234,13 +234,12 @@ If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lo
 ## Open Work
 
 **Current priorities:**
-- Remaining pywatershed derivation step: 14 (calibration seeds)
 - Processing pathway bifurcation: polygon vs grid targets (gdptools vs xesmf)
 - Library-managed transparent data caching
 - Dockerfile + Apptainer docs
 
 **Implemented (done):**
-- Steps 1 (geometry), 2 (topology), 3 (topo), 4 (landcover), 5 (soils), 6 (waterbody), 8 (lookups), 9 (soltab), 10 (PET), 11 (transp), 12 (routing), 13 (defaults)
+- All 14 pywatershed derivation steps: 1 (geometry), 2 (topology), 3 (topo), 4 (landcover), 5 (soils), 6 (waterbody), 8 (lookups), 9 (soltab), 10 (PET), 11 (transp), 12 (routing), 13 (defaults), 14 (calibration seeds)
 - All 5 data access strategies (stac_cog, local_tiff, nhgf_stac static/temporal, climr_cat)
 - Temporal processing with calendar-year splitting
 - CLI: `hydro-param init`, `datasets list/info/download`, `run`, `pywatershed run/validate`
