@@ -1100,15 +1100,15 @@ class PywatershedDerivation:
             # Drop any existing slope column to avoid suffix collision
             # (the NHDPlus service may include VAA attributes)
             if "slope" in flowlines.columns:
-                flowlines = flowlines.drop(columns=["slope"])
+                flowlines = gpd.GeoDataFrame(flowlines.drop(columns=["slope"]))
 
-            flowlines = flowlines.merge(
+            merged = flowlines.merge(
                 vaa[["comid", "slope"]],
                 left_on=fl_comid_col,
                 right_on="comid",
                 how="left",
             )
-            return flowlines
+            return gpd.GeoDataFrame(merged)
 
         except (OSError, ValueError) as exc:
             logger.warning(
