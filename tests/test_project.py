@@ -148,12 +148,43 @@ class TestGeneratePipelineTemplate:
     def test_template_references_data_dirs(self):
         content = generate_pipeline_template("test_project")
         assert "data/fabrics/" in content
-        assert "data/land_cover/" in content
 
     def test_template_uses_project_name(self):
         content = generate_pipeline_template("my_watershed")
         parsed = yaml.safe_load(content)
         assert parsed["output"]["sir_name"] == "my_watershed"
+
+    def test_template_includes_all_dataset_strategies(self):
+        """Template covers all 5 access strategies via 7 dataset entries."""
+        content = generate_pipeline_template("test_project")
+        parsed = yaml.safe_load(content)
+        dataset_names = [d["name"] for d in parsed["datasets"]]
+        expected = [
+            "dem_3dep_10m",       # stac_cog
+            "gnatsgo_rasters",    # stac_cog
+            "polaris_30m",        # local_tiff
+            "nlcd_osn_lndcov",    # nhgf_stac static
+            "nlcd_osn_fctimp",    # nhgf_stac static
+            "snodas",             # nhgf_stac temporal
+            "gridmet",            # climr_cat
+        ]
+        assert dataset_names == expected
+
+    def test_template_temporal_datasets_have_time_period(self):
+        """SNODAS and gridMET entries include time_period."""
+        content = generate_pipeline_template("test_project")
+        parsed = yaml.safe_load(content)
+        datasets_by_name = {d["name"]: d for d in parsed["datasets"]}
+        assert "time_period" in datasets_by_name["snodas"]
+        assert "time_period" in datasets_by_name["gridmet"]
+
+    def test_template_nlcd_has_year(self):
+        """NLCD entries include year field."""
+        content = generate_pipeline_template("test_project")
+        parsed = yaml.safe_load(content)
+        datasets_by_name = {d["name"]: d for d in parsed["datasets"]}
+        assert "year" in datasets_by_name["nlcd_osn_lndcov"]
+        assert "year" in datasets_by_name["nlcd_osn_fctimp"]
 
 
 # ---------------------------------------------------------------------------
