@@ -109,17 +109,17 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_
 _IMPERV_STOR_MAX_DEFAULT = 0.03
 
 # Routing constants (Step 12)
-_MANNING_N = 0.04           # natural channel roughness coefficient
-_DEFAULT_DEPTH_FT = 1.0     # bankfull depth placeholder (feet)
-_MIN_SLOPE = 1e-7           # pywatershed floor for seg_slope
-_FALLBACK_SLOPE = 1e-4      # for segments with no NHDPlus match
-_K_COEF_MIN = 0.01          # hours
-_K_COEF_MAX = 24.0          # hours
-_DEFAULT_K_COEF = 1.0       # hours, when computation not possible
-_DEFAULT_X_COEF = 0.2       # standard Muskingum weighting
-_LAKE_K_COEF = 24.0         # travel time for lake segments
-_LAKE_SEGMENT_TYPE = 1      # segment_type value for lake
-_CHANNEL_SEGMENT_TYPE = 0   # segment_type value for channel
+_MANNING_N = 0.04  # natural channel roughness coefficient
+_DEFAULT_DEPTH_FT = 1.0  # bankfull depth placeholder (feet)
+_MIN_SLOPE = 1e-7  # pywatershed floor for seg_slope
+_FALLBACK_SLOPE = 1e-4  # for segments with no NHDPlus match
+_K_COEF_MIN = 0.01  # hours
+_K_COEF_MAX = 24.0  # hours
+_DEFAULT_K_COEF = 1.0  # hours, when computation not possible
+_DEFAULT_X_COEF = 0.2  # standard Muskingum weighting
+_LAKE_K_COEF = 24.0  # travel time for lake segments
+_LAKE_SEGMENT_TYPE = 1  # segment_type value for lake
+_CHANNEL_SEGMENT_TYPE = 0  # segment_type value for channel
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -780,7 +780,9 @@ class PywatershedDerivation:
         seg_comid_col = "comid" if "comid" in segments.columns else "COMID"
         comids = segments[seg_comid_col].values
 
-        vaa_slopes = dict(zip(vaa["comid"].values, vaa["slope"].values))
+        vaa_slopes = dict(
+            zip(vaa["comid"].values, vaa["slope"].values, strict=True)
+        )
 
         slopes = np.array(
             [vaa_slopes.get(c, _FALLBACK_SLOPE) for c in comids],
@@ -790,8 +792,7 @@ class PywatershedDerivation:
         n_missing = np.sum(slopes == _FALLBACK_SLOPE)
         if n_missing > 0:
             logger.warning(
-                "%d of %d segments have no matching COMID in VAA; "
-                "using fallback slope %.1e",
+                "%d of %d segments have no matching COMID in VAA; using fallback slope %.1e",
                 n_missing,
                 len(comids),
                 _FALLBACK_SLOPE,

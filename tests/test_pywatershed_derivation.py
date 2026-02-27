@@ -6,13 +6,12 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from shapely.geometry import LineString, Polygon
 
-import pandas as pd
-
-from hydro_param.derivations.pywatershed import PywatershedDerivation, _FALLBACK_SLOPE
+from hydro_param.derivations.pywatershed import _FALLBACK_SLOPE, PywatershedDerivation
 from hydro_param.plugins import DerivationContext
 from hydro_param.solar import NDOY
 
