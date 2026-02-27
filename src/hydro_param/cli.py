@@ -682,13 +682,14 @@ def _translate_pws_to_pipeline(
         )
     )
 
-    # Climate (temporal) — map user-facing PRMS names to registry/gdptools names
-    _CLIMATE_SOURCE_MAP = {
-        "gridmet": "gridmet",
-        "daymet_v4": "daymet_v4",
-        "conus404_ba": "conus404_ba",
-    }
-    climate_ds_name = _CLIMATE_SOURCE_MAP.get(cfg.climate.source, cfg.climate.source)
+    # Climate (temporal) — validate source and map variable names
+    _SUPPORTED_CLIMATE_SOURCES = {"gridmet"}
+    if cfg.climate.source not in _SUPPORTED_CLIMATE_SOURCES:
+        raise ValueError(
+            f"Climate source '{cfg.climate.source}' is not yet supported. "
+            f"Available sources: {', '.join(sorted(_SUPPORTED_CLIMATE_SOURCES))}"
+        )
+    climate_ds_name = cfg.climate.source
 
     _CLIMATE_VAR_MAP = {
         "prcp": "pr",

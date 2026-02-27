@@ -134,10 +134,11 @@ class PwsClimateConfig(BaseModel):
 
     Attributes
     ----------
-    source : {"daymet_v4", "gridmet", "conus404_ba"}
-        Climate dataset to use.  ``"gridmet"`` is accessed via OPeNDAP
-        (ClimRCatData strategy); ``"daymet_v4"`` and ``"conus404_ba"``
-        use the NHGF STAC temporal pathway.
+    source : str
+        Climate dataset name.  Accepts any string but only ``"gridmet"``
+        is currently supported (accessed via OPeNDAP / ClimRCatData).
+        Unsupported sources raise ``ValueError`` during pipeline
+        translation.
     method : {"area_weighted_mean"}
         Aggregation method for zonal statistics.
     variables : list[str]
@@ -151,7 +152,7 @@ class PwsClimateConfig(BaseModel):
     Use the ``climr_cat`` strategy (OPeNDAP) for gridMET access.
     """
 
-    source: Literal["daymet_v4", "gridmet", "conus404_ba"] = "daymet_v4"
+    source: str = "gridmet"
     method: Literal["area_weighted_mean"] = "area_weighted_mean"
     variables: list[str] = Field(default_factory=lambda: ["prcp", "tmax", "tmin"])
 

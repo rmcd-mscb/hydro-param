@@ -134,6 +134,25 @@ class TestPwsConfigTranslation:
         assert pipeline_config.output.sir_name == "pywatershed_sir"
         assert pipeline_config.output.format == "netcdf"
 
+    def test_translate_unsupported_climate_raises(self) -> None:
+        """Unsupported climate sources raise ValueError with helpful message."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2020-01-01", "end": "2021-12-31"},
+            climate={"source": "daymet_v4"},
+        )
+
+        with pytest.raises(ValueError, match="not yet supported"):
+            _translate_pws_to_pipeline(pws_config)
+
     def test_translate_includes_soils(self) -> None:
         """Soils dataset is included in translated pipeline config."""
         from hydro_param.cli import _translate_pws_to_pipeline
