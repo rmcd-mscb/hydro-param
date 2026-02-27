@@ -20,7 +20,7 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 9. Soltab --- potential solar radiation tables (Swift 1976)
 10. PET --- Jensen-Haise coefficients from climate normals
 11. Transpiration --- frost-free period timing from monthly tmin
-12. Routing --- Muskingum K_coef, x_coef, seg_slope via Manning's equation
+12. Routing --- Muskingum routing parameters (K_coef, x_coef, seg_slope, etc.)
 13. Defaults --- standard PRMS default values and initial conditions
 14. Calibration seeds --- physically-based initial values for calibration parameters
 
@@ -374,7 +374,7 @@ class PywatershedDerivation:
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
 
-        # Step 12: Routing coefficients (K_coef, x_coef, seg_slope)
+        # Step 12: Routing parameters
         ds = self._derive_routing(context, ds)
 
         # Step 9: Solar radiation tables (soltab)
@@ -745,6 +745,7 @@ class PywatershedDerivation:
     def _get_slopes_from_comid(
         segments: gpd.GeoDataFrame,
         vaa: pd.DataFrame,
+        comid_col: str,
     ) -> np.ndarray:
         """Look up NHDPlus VAA slope by COMID (direct join).
 
@@ -755,10 +756,13 @@ class PywatershedDerivation:
         Parameters
         ----------
         segments : gpd.GeoDataFrame
-            Segment GeoDataFrame with ``comid`` or ``COMID`` column.
+            Segment GeoDataFrame with a COMID column.
         vaa : pd.DataFrame
             NHDPlus VAA table with ``comid`` and ``slope`` columns.
             Slope is in dimensionless rise/run (decimal fraction).
+        comid_col : str
+            Name of the COMID column in ``segments`` (as returned by
+            ``_find_comid_column``).
 
         Returns
         -------
@@ -767,27 +771,24 @@ class PywatershedDerivation:
             Segments with no matching COMID in the VAA get
             ``_FALLBACK_SLOPE`` (1e-4).
 
-        Notes
-        -----
-        The column name check is case-insensitive (``comid`` or ``COMID``)
-        to accommodate variation across NHDPlus versions and GeoPackage
-        exports.
-
         See Also
         --------
+        _find_comid_column : Locate the COMID column name.
         _FALLBACK_SLOPE : Default slope for unmatched segments.
         """
-        seg_comid_col = "comid" if "comid" in segments.columns else "COMID"
-        comids = segments[seg_comid_col].values
+        comids = segments[comid_col].values
 
+        vaa_comids = set(vaa["comid"].values)
         vaa_slopes = dict(zip(vaa["comid"].values, vaa["slope"].values, strict=True))
 
-        slopes = np.array(
-            [vaa_slopes.get(c, _FALLBACK_SLOPE) for c in comids],
-            dtype=np.float64,
-        )
+        matched = np.array([c in vaa_comids for c in comids])
+        slopes = np.where(
+            matched,
+            [vaa_slopes.get(c, 0.0) for c in comids],
+            _FALLBACK_SLOPE,
+        ).astype(np.float64)
 
-        n_missing = np.sum(slopes == _FALLBACK_SLOPE)
+        n_missing = int(np.sum(~matched))
         if n_missing > 0:
             logger.warning(
                 "%d of %d segments have no matching COMID in VAA; using fallback slope %.1e",
@@ -852,6 +853,16 @@ class PywatershedDerivation:
         joined = gpd.sjoin(segs, nhd, how="left", predicate="intersects")
 
         slopes = np.full(len(segs), _FALLBACK_SLOPE, dtype=np.float64)
+        matched = np.zeros(len(segs), dtype=bool)
+
+        if "slope" not in joined.columns:
+            logger.warning(
+                "NHD flowlines lack 'slope' column after spatial join; "
+                "using fallback slope %.1e for all %d segments",
+                _FALLBACK_SLOPE,
+                len(segs),
+            )
+            return slopes
 
         for seg_idx in range(len(segs)):
             matches = joined[joined.index == seg_idx]
@@ -866,7 +877,15 @@ class PywatershedDerivation:
             for _, row in matches.iterrows():
                 nhd_idx = int(row["index_right"])
                 nhd_geom = nhd.geometry.iloc[nhd_idx]
-                intersection = seg_geom.intersection(nhd_geom)
+                try:
+                    intersection = seg_geom.intersection(nhd_geom)
+                except Exception:
+                    logger.warning(
+                        "Geometry intersection failed for segment %d with NHD index %d; skipping",
+                        seg_idx,
+                        nhd_idx,
+                    )
+                    continue
                 if intersection.is_empty:
                     continue
                 weights.append(intersection.length)
@@ -878,8 +897,9 @@ class PywatershedDerivation:
                 total_weight = weights_arr.sum()
                 if total_weight > 0:
                     slopes[seg_idx] = np.average(match_slopes_arr, weights=weights_arr)
+                    matched[seg_idx] = True
 
-        n_fallback = int(np.sum(slopes == _FALLBACK_SLOPE))
+        n_fallback = int(np.sum(~matched))
         if n_fallback > 0:
             logger.warning(
                 "%d of %d segments have no intersecting NHDPlus flowlines; "
@@ -925,6 +945,14 @@ class PywatershedDerivation:
         to 1.0 ft.  Both are module-level constants that can be refined
         in future work (e.g., BANKFULL_CONUS dataset for per-segment depth).
 
+        The formula follows pywatershed's ``muskingum_mann`` implementation,
+        which uses the SI form of Manning's equation (1/n rather than the
+        US customary 1.49/n).  Because the default depth is 1.0, the
+        depth term evaluates to unity and the unit system choice is
+        numerically irrelevant.  If ``_DEFAULT_DEPTH_FT`` is changed to a
+        non-unity value, the formula must be reconciled to a consistent
+        unit system.
+
         References
         ----------
         Hay, L.E., et al. (2023). USGS TM 6-B10, muskingum_mann module.
@@ -954,8 +982,8 @@ class PywatershedDerivation:
         return k_coef
 
     @staticmethod
-    def _has_comid(segments: gpd.GeoDataFrame) -> bool:
-        """Check whether segments carry a COMID column (NHD flowlines).
+    def _find_comid_column(segments: gpd.GeoDataFrame) -> str | None:
+        """Find the COMID column name in a segment GeoDataFrame.
 
         When segments originate from NHDPlus they include a ``comid``
         (Common Identifier) column that can be used for a direct join
@@ -969,48 +997,40 @@ class PywatershedDerivation:
 
         Returns
         -------
-        bool
-            ``True`` if a ``comid`` or ``COMID`` column exists.
+        str or None
+            The actual column name (preserving original case) if found,
+            or ``None`` if no COMID column exists.  The check is fully
+            case-insensitive.
 
         See Also
         --------
         _get_slopes_from_comid : Slope lookup when COMIDs are present.
         _get_slopes_spatial_join : Spatial join fallback for GF segments.
         """
-        cols_lower = {c.lower() for c in segments.columns}
-        return "comid" in cols_lower
+        for col in segments.columns:
+            if col.lower() == "comid":
+                return col
+        return None
 
     @staticmethod
-    def _fetch_nhd_slopes(
-        segments: gpd.GeoDataFrame,
-    ) -> tuple[pd.DataFrame | None, gpd.GeoDataFrame | None]:
-        """Fetch NHDPlus VAA slopes and flowlines for the segment extent.
+    def _fetch_vaa() -> pd.DataFrame | None:
+        """Fetch the NHDPlus Value Added Attributes (VAA) table.
 
-        Downloads the NHDPlus Value Added Attributes (VAA) table (cached
-        ~245 MB parquet on first download) to obtain ``slope`` values
-        keyed by ``comid``.  For the spatial-join path, also fetches
-        NHDPlus flowline geometries within the segment bounding box via
-        the pynhd ``WaterData`` service.
-
-        Parameters
-        ----------
-        segments : gpd.GeoDataFrame
-            Segment GeoDataFrame used to determine the bounding box for
-            the flowline query.
+        Downloads a cached ~245 MB parquet file on first call, then
+        returns it from the local pynhd cache on subsequent calls.
 
         Returns
         -------
-        tuple[pd.DataFrame | None, gpd.GeoDataFrame | None]
-            ``(vaa_df, nhd_flowlines)`` — VAA table with ``comid`` and
-            ``slope`` columns, and NHDPlus flowline GeoDataFrame.
-            Returns ``(None, None)`` if pynhd is not installed or the
-            fetch fails.
+        pd.DataFrame or None
+            VAA table with ``comid`` and ``slope`` columns (NaN slopes
+            removed), or ``None`` if pynhd is not installed or the
+            download fails.
 
         Notes
         -----
         pynhd is an optional dependency.  When it is not installed this
-        method logs a warning and returns ``(None, None)`` so that the
-        caller can fall back to default slope values.
+        method logs a warning and returns ``None`` so that the caller
+        can fall back to default slope values.
 
         References
         ----------
@@ -1021,23 +1041,81 @@ class PywatershedDerivation:
             import pynhd as nhd
         except ImportError:
             logger.warning("pynhd not installed; cannot fetch NHDPlus slopes")
-            return None, None
+            return None
 
         try:
-            # Fetch VAA (cached parquet, ~245 MB first download)
             vaa = nhd.nhdplus_vaa()
-            vaa = vaa[["comid", "slope"]].dropna(subset=["slope"])
+            return vaa[["comid", "slope"]].dropna(subset=["slope"])
+        except (OSError, KeyError) as exc:
+            logger.error(
+                "Failed to fetch or parse NHDPlus VAA table: %s",
+                exc,
+            )
+            return None
 
-            # Fetch flowlines for spatial join (only needed for GF path)
+    @staticmethod
+    def _fetch_nhd_flowlines(
+        segments: gpd.GeoDataFrame,
+        vaa: pd.DataFrame,
+    ) -> gpd.GeoDataFrame | None:
+        """Fetch NHDPlus flowline geometries and join VAA slopes.
+
+        Queries the NHDPlus flowline network for the bounding box of
+        the given segments, then merges VAA slope values onto the
+        flowlines by COMID so they are ready for spatial join.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame used to determine the bounding box.
+        vaa : pd.DataFrame
+            VAA table with ``comid`` and ``slope`` columns (from
+            ``_fetch_vaa``).
+
+        Returns
+        -------
+        gpd.GeoDataFrame or None
+            NHDPlus flowlines with a ``slope`` column, or ``None``
+            if the fetch fails.
+        """
+        try:
+            import pynhd as nhd
+        except ImportError:
+            return None
+
+        try:
             bbox = segments.to_crs("EPSG:4326").total_bounds
             wd = nhd.WaterData("nhdflowline_network")
             flowlines = wd.bybox(tuple(bbox))
 
-            return vaa, flowlines
+            # Join VAA slopes onto flowlines by COMID
+            fl_comid_col = next(
+                (c for c in flowlines.columns if c.lower() == "comid"),
+                None,
+            )
+            if fl_comid_col is None:
+                logger.warning("NHDPlus flowlines have no COMID column; cannot join VAA slopes")
+                return None
 
-        except Exception:
-            logger.exception("Failed to fetch NHDPlus data")
-            return None, None
+            # Drop any existing slope column to avoid suffix collision
+            # (the NHDPlus service may include VAA attributes)
+            if "slope" in flowlines.columns:
+                flowlines = flowlines.drop(columns=["slope"])
+
+            flowlines = flowlines.merge(
+                vaa[["comid", "slope"]],
+                left_on=fl_comid_col,
+                right_on="comid",
+                how="left",
+            )
+            return flowlines
+
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Failed to fetch NHDPlus flowlines for spatial join: %s",
+                exc,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Step 12: Routing coefficients
@@ -1066,8 +1144,9 @@ class PywatershedDerivation:
         ctx : DerivationContext
             Derivation context providing ``segments`` GeoDataFrame.
         ds : xr.Dataset
-            In-progress parameter dataset (must already contain
-            ``seg_length`` on ``nsegment`` from Step 2).
+            In-progress parameter dataset.  Should contain ``seg_length``
+            on ``nsegment`` from Step 2; if absent, all ``K_coef`` values
+            will be ``_DEFAULT_K_COEF``.
 
         Returns
         -------
@@ -1099,16 +1178,26 @@ class PywatershedDerivation:
             return ds
 
         # --- Fetch NHDPlus slopes ---
-        vaa, nhd_flowlines = self._fetch_nhd_slopes(segments)
+        comid_col = self._find_comid_column(segments)
+        vaa = self._fetch_vaa()
 
-        if vaa is not None and self._has_comid(segments):
-            # NHD path: direct COMID lookup
-            slopes = self._get_slopes_from_comid(segments, vaa)
-        elif vaa is not None and nhd_flowlines is not None:
-            # GF path: spatial join
-            slopes = self._get_slopes_spatial_join(segments, nhd_flowlines)
+        if vaa is not None and comid_col is not None:
+            # NHD path: direct COMID lookup (no flowline fetch needed)
+            slopes = self._get_slopes_from_comid(segments, vaa, comid_col)
+        elif vaa is not None:
+            # GF path: fetch flowlines for spatial join
+            nhd_flowlines = self._fetch_nhd_flowlines(segments, vaa)
+            if nhd_flowlines is not None:
+                slopes = self._get_slopes_spatial_join(segments, nhd_flowlines)
+            else:
+                logger.warning(
+                    "NHDPlus flowlines unavailable; using fallback slope %.1e for all %d segments",
+                    _FALLBACK_SLOPE,
+                    nseg,
+                )
+                slopes = np.full(nseg, _FALLBACK_SLOPE, dtype=np.float64)
         else:
-            # Fetch failed — use fallback slopes everywhere
+            # VAA fetch failed — use fallback slopes everywhere
             logger.warning(
                 "NHDPlus data unavailable; using fallback slope %.1e for all %d segments",
                 _FALLBACK_SLOPE,
@@ -1124,7 +1213,17 @@ class PywatershedDerivation:
         )
 
         # --- K_coef ---
-        seg_lengths = ds["seg_length"].values if "seg_length" in ds else np.zeros(nseg)
+        if "seg_length" in ds:
+            seg_lengths = ds["seg_length"].values
+        else:
+            logger.warning(
+                "seg_length not found in dataset; K_coef will use default "
+                "%.1f hours for all %d segments. Ensure Step 2 (topology) "
+                "completed successfully.",
+                _DEFAULT_K_COEF,
+                nseg,
+            )
+            seg_lengths = np.zeros(nseg)
         k_coef = self._compute_k_coef(slopes, seg_lengths)
 
         # --- segment_type ---

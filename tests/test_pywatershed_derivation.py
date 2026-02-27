@@ -2818,7 +2818,7 @@ class TestDeriveIntegrationWaterbody:
 
 
 class TestRoutingSlopes:
-    """Tests for _get_slopes_from_comid helper (step 12 routing)."""
+    """Tests for slope retrieval helpers (step 12 routing)."""
 
     def test_slopes_from_comid_direct(self) -> None:
         """All COMIDs present in VAA → correct slopes returned."""
@@ -2834,7 +2834,7 @@ class TestRoutingSlopes:
         )
         vaa = pd.DataFrame({"comid": [101, 102, 103], "slope": [0.01, 0.05, 0.001]})
 
-        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "comid")
 
         np.testing.assert_array_equal(slopes, [0.01, 0.05, 0.001])
         assert slopes.dtype == np.float64
@@ -2852,7 +2852,7 @@ class TestRoutingSlopes:
         )
         vaa = pd.DataFrame({"comid": [101], "slope": [0.02]})
 
-        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "comid")
 
         assert slopes[0] == 0.02
         assert slopes[1] == _FALLBACK_SLOPE
@@ -2870,7 +2870,7 @@ class TestRoutingSlopes:
         )
         vaa = pd.DataFrame({"comid": [201, 202], "slope": [0.03, 0.07]})
 
-        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "COMID")
 
         np.testing.assert_array_equal(slopes, [0.03, 0.07])
 
@@ -2987,34 +2987,43 @@ class TestManningKCoef:
 
 
 class TestSegmentTypeDetection:
-    """Tests for NHD vs GF segment detection."""
+    """Tests for NHD vs GF segment detection via _find_comid_column."""
 
-    def test_has_comid_lowercase(self, derivation: PywatershedDerivation) -> None:
-        """Segments with 'comid' column detected as NHD."""
+    def test_find_comid_lowercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'comid' column return the column name."""
         segments = gpd.GeoDataFrame(
             {"comid": [1], "tosegment": [0]},
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
-        assert derivation._has_comid(segments) is True
+        assert derivation._find_comid_column(segments) == "comid"
 
-    def test_has_comid_uppercase(self, derivation: PywatershedDerivation) -> None:
-        """Segments with 'COMID' column detected as NHD."""
+    def test_find_comid_uppercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'COMID' column return the column name."""
         segments = gpd.GeoDataFrame(
             {"COMID": [1], "tosegment": [0]},
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
-        assert derivation._has_comid(segments) is True
+        assert derivation._find_comid_column(segments) == "COMID"
+
+    def test_find_comid_mixed_case(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'Comid' column return the column name."""
+        segments = gpd.GeoDataFrame(
+            {"Comid": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._find_comid_column(segments) == "Comid"
 
     def test_no_comid(self, derivation: PywatershedDerivation) -> None:
-        """Segments without COMID column detected as GF."""
+        """Segments without COMID column return None."""
         segments = gpd.GeoDataFrame(
             {"nhm_seg": [1], "tosegment": [0]},
             geometry=[LineString([(0, 0), (1, 0)])],
             crs="EPSG:4326",
         )
-        assert derivation._has_comid(segments) is False
+        assert derivation._find_comid_column(segments) is None
 
 
 # ------------------------------------------------------------------
@@ -3054,8 +3063,8 @@ class TestDeriveRouting:
 
         monkeypatch.setattr(
             PywatershedDerivation,
-            "_fetch_nhd_slopes",
-            staticmethod(lambda segs: (vaa, None)),
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
         )
 
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
@@ -3119,8 +3128,13 @@ class TestDeriveRouting:
 
         monkeypatch.setattr(
             PywatershedDerivation,
-            "_fetch_nhd_slopes",
-            staticmethod(lambda segs: (vaa, nhd_flowlines)),
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
+        )
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_nhd_flowlines",
+            staticmethod(lambda segs, v: nhd_flowlines),
         )
 
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
@@ -3166,8 +3180,8 @@ class TestDeriveRouting:
 
         monkeypatch.setattr(
             PywatershedDerivation,
-            "_fetch_nhd_slopes",
-            staticmethod(lambda segs: (vaa, None)),
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
         )
 
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
@@ -3211,8 +3225,8 @@ class TestDeriveRouting:
 
         monkeypatch.setattr(
             PywatershedDerivation,
-            "_fetch_nhd_slopes",
-            staticmethod(lambda segs: (None, None)),
+            "_fetch_vaa",
+            staticmethod(lambda: None),
         )
 
         sir = xr.Dataset(coords={"nhm_id": [1, 2]})
