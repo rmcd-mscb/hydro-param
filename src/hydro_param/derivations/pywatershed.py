@@ -23,7 +23,7 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 13. Defaults --- standard PRMS default values and initial conditions
 14. Calibration seeds --- physically-based initial values for calibration parameters
 
-Step 12 (routing parameters) is not yet implemented.
+12. Routing --- Muskingum K_coef via Manning's equation (in progress)
 
 References
 ----------
@@ -893,6 +893,74 @@ class PywatershedDerivation:
                 _FALLBACK_SLOPE,
             )
         return slopes
+
+    @staticmethod
+    def _compute_k_coef(
+        slopes: np.ndarray,
+        seg_lengths_m: np.ndarray,
+    ) -> np.ndarray:
+        """Compute Muskingum K_coef via Manning's equation.
+
+        Velocity is computed from Manning's formula in PRMS internal units
+        (feet, hours):
+
+            velocity = (1 / n) * sqrt(slope) * depth^(2/3) * 3600
+
+        Travel time is then:
+
+            K_coef = seg_length_ft / velocity
+
+        Parameters
+        ----------
+        slopes : np.ndarray
+            Channel slope (m/m) per segment.
+        seg_lengths_m : np.ndarray
+            Segment lengths in meters.
+
+        Returns
+        -------
+        np.ndarray
+            K_coef in hours, clamped to ``[_K_COEF_MIN, _K_COEF_MAX]``.
+            Zero-length segments receive ``_DEFAULT_K_COEF``.
+
+        Notes
+        -----
+        Manning's n defaults to 0.04 (natural channel) and bankfull depth
+        to 1.0 ft.  Both are module-level constants that can be refined
+        in future work (e.g., BANKFULL_CONUS dataset for per-segment depth).
+
+        References
+        ----------
+        Hay, L.E., et al. (2023). USGS TM 6-B10, muskingum_mann module.
+        """
+        k_coef = np.full(len(slopes), _DEFAULT_K_COEF, dtype=np.float64)
+
+        # Mask valid segments (nonzero length)
+        valid = seg_lengths_m > 0
+        if not np.any(valid):
+            return k_coef
+
+        # Clamp slopes
+        s = np.clip(slopes[valid], _MIN_SLOPE, None)
+
+        # Manning's equation: velocity in ft/hr
+        velocity = (
+            (1.0 / _MANNING_N)
+            * np.sqrt(s)
+            * (_DEFAULT_DEPTH_FT ** (2.0 / 3.0))
+            * 3600.0
+        )
+
+        # Convert segment length from meters to feet
+        seg_length_ft = seg_lengths_m[valid] * 3.28084
+
+        # K = length / velocity (hours)
+        k_coef[valid] = seg_length_ft / velocity
+
+        # Clamp to valid range
+        k_coef = np.clip(k_coef, _K_COEF_MIN, _K_COEF_MAX)
+
+        return k_coef
 
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters

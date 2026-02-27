@@ -11,7 +11,13 @@ import pytest
 import xarray as xr
 from shapely.geometry import LineString, Polygon
 
-from hydro_param.derivations.pywatershed import _FALLBACK_SLOPE, PywatershedDerivation
+from hydro_param.derivations.pywatershed import (
+    _DEFAULT_K_COEF,
+    _FALLBACK_SLOPE,
+    _K_COEF_MAX,
+    _K_COEF_MIN,
+    PywatershedDerivation,
+)
 from hydro_param.plugins import DerivationContext
 from hydro_param.solar import NDOY
 
@@ -2926,3 +2932,54 @@ class TestRoutingSlopes:
 
         # Equal lengths → simple average: (0.02 + 0.06) / 2 = 0.04
         np.testing.assert_allclose(slopes[0], 0.04)
+
+
+# ------------------------------------------------------------------
+# Manning's equation K_coef computation
+# ------------------------------------------------------------------
+
+
+class TestManningKCoef:
+    """Tests for _compute_k_coef (Manning's equation K_coef)."""
+
+    def test_basic_k_coef(self) -> None:
+        """Known slope and length produce expected K_coef.
+
+        velocity = (1/0.04) * sqrt(0.01) * 1.0^(2/3) * 3600
+                 = 25 * 0.1 * 1.0 * 3600 = 9000 ft/hr
+        seg_length_ft = 10000 * 3.28084 = 32808.4 ft
+        K_coef = 32808.4 / 9000 ≈ 3.645 hours
+        """
+        slopes = np.array([0.01])
+        lengths = np.array([10000.0])
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        np.testing.assert_allclose(result[0], 32808.4 / 9000.0, rtol=1e-4)
+
+    def test_k_coef_clamped_max(self) -> None:
+        """Very low slope + long segment clamps K_coef to maximum."""
+        slopes = np.array([1e-7])
+        lengths = np.array([100_000.0])  # 100 km
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _K_COEF_MAX
+
+    def test_k_coef_clamped_min(self) -> None:
+        """Steep slope + very short segment clamps K_coef to minimum."""
+        slopes = np.array([1.0])
+        lengths = np.array([1.0])  # 1 meter
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _K_COEF_MIN
+
+    def test_slope_floor_applied(self) -> None:
+        """Zero and negative slopes both get clamped to _MIN_SLOPE."""
+        lengths = np.array([5000.0, 5000.0])
+        slopes_zero = np.array([0.0, -0.001])
+        result = PywatershedDerivation._compute_k_coef(slopes_zero, lengths)
+        # Both should produce the same K_coef since both clamp to 1e-7
+        np.testing.assert_allclose(result[0], result[1])
+
+    def test_zero_length_gets_default(self) -> None:
+        """Zero-length segment receives _DEFAULT_K_COEF."""
+        slopes = np.array([0.01])
+        lengths = np.array([0.0])
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _DEFAULT_K_COEF
