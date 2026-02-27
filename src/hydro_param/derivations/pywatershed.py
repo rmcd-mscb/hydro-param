@@ -962,6 +962,92 @@ class PywatershedDerivation:
 
         return k_coef
 
+    @staticmethod
+    def _has_comid(segments: gpd.GeoDataFrame) -> bool:
+        """Check whether segments carry a COMID column (NHD flowlines).
+
+        When segments originate from NHDPlus they include a ``comid``
+        (Common Identifier) column that can be used for a direct join
+        against the NHDPlus VAA table.  Segments from the Geospatial
+        Fabric (GF) lack this column and require a spatial join instead.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame to inspect.
+
+        Returns
+        -------
+        bool
+            ``True`` if a ``comid`` or ``COMID`` column exists.
+
+        See Also
+        --------
+        _get_slopes_from_comid : Slope lookup when COMIDs are present.
+        _get_slopes_spatial_join : Spatial join fallback for GF segments.
+        """
+        cols_lower = {c.lower() for c in segments.columns}
+        return "comid" in cols_lower
+
+    @staticmethod
+    def _fetch_nhd_slopes(
+        segments: gpd.GeoDataFrame,
+    ) -> tuple[pd.DataFrame | None, gpd.GeoDataFrame | None]:
+        """Fetch NHDPlus VAA slopes and flowlines for the segment extent.
+
+        Downloads the NHDPlus Value Added Attributes (VAA) table (cached
+        ~245 MB parquet on first download) to obtain ``slope`` values
+        keyed by ``comid``.  For the spatial-join path, also fetches
+        NHDPlus flowline geometries within the segment bounding box via
+        the pynhd ``WaterData`` service.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame used to determine the bounding box for
+            the flowline query.
+
+        Returns
+        -------
+        tuple[pd.DataFrame | None, gpd.GeoDataFrame | None]
+            ``(vaa_df, nhd_flowlines)`` — VAA table with ``comid`` and
+            ``slope`` columns, and NHDPlus flowline GeoDataFrame.
+            Returns ``(None, None)`` if pynhd is not installed or the
+            fetch fails.
+
+        Notes
+        -----
+        pynhd is an optional dependency.  When it is not installed this
+        method logs a warning and returns ``(None, None)`` so that the
+        caller can fall back to default slope values.
+
+        References
+        ----------
+        McKay, L., et al. (2012). NHDPlus Version 2: User Guide.
+            https://www.epa.gov/waterdata/nhdplus-national-data
+        """
+        try:
+            import pynhd as nhd
+        except ImportError:
+            logger.warning("pynhd not installed; cannot fetch NHDPlus slopes")
+            return None, None
+
+        try:
+            # Fetch VAA (cached parquet, ~245 MB first download)
+            vaa = nhd.nhdplus_vaa()
+            vaa = vaa[["comid", "slope"]].dropna(subset=["slope"])
+
+            # Fetch flowlines for spatial join (only needed for GF path)
+            bbox = segments.to_crs("EPSG:4326").total_bounds
+            wd = nhd.WaterData("nhdflowline_network")
+            flowlines = wd.bybox(tuple(bbox))
+
+            return vaa, flowlines
+
+        except Exception:
+            logger.exception("Failed to fetch NHDPlus data")
+            return None, None
+
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters
     # ------------------------------------------------------------------

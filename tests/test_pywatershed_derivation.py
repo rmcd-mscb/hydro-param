@@ -2983,3 +2983,34 @@ class TestManningKCoef:
         lengths = np.array([0.0])
         result = PywatershedDerivation._compute_k_coef(slopes, lengths)
         assert result[0] == _DEFAULT_K_COEF
+
+
+class TestSegmentTypeDetection:
+    """Tests for NHD vs GF segment detection."""
+
+    def test_has_comid_lowercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'comid' column detected as NHD."""
+        segments = gpd.GeoDataFrame(
+            {"comid": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._has_comid(segments) is True
+
+    def test_has_comid_uppercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'COMID' column detected as NHD."""
+        segments = gpd.GeoDataFrame(
+            {"COMID": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._has_comid(segments) is True
+
+    def test_no_comid(self, derivation: PywatershedDerivation) -> None:
+        """Segments without COMID column detected as GF."""
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._has_comid(segments) is False
