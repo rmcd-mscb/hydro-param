@@ -186,13 +186,17 @@ datasets:
     variables: [aws0_100, rootznemc, rootznaws]
     statistics: [mean]
 
-  # POLARIS soil texture properties, 30m (local_tiff via remote VRT)
+  # POLARIS soil texture properties, 30m (local_tiff — these variables have
+  # remote VRT source_overrides in the registry, so no local download needed.
+  # Adding other POLARIS variables may require a 'source:' path or download.)
   - name: polaris_30m
     variables: [sand, silt, clay, theta_s, ksat]
     statistics: [mean]
 
   # --- Land Cover ---
-  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (nhgf_stac)
+  # NLCD Land Cover via NHGF STAC OSN (nhgf_stac)
+  # LndCov is categorical — class fractions are computed automatically
+  # based on the registry's categorical flag; statistics is not used.
   - name: nlcd_osn_lndcov
     variables: [LndCov]
     statistics: [categorical]

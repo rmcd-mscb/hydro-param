@@ -186,6 +186,17 @@ class TestGeneratePipelineTemplate:
         assert "year" in datasets_by_name["nlcd_osn_lndcov"]
         assert "year" in datasets_by_name["nlcd_osn_fctimp"]
 
+    def test_template_conforms_to_pipeline_config_schema(self):
+        """Generated template must parse against PipelineConfig without error."""
+        from hydro_param.config import PipelineConfig
+
+        content = generate_pipeline_template("test_project")
+        parsed = yaml.safe_load(content)
+        config = PipelineConfig(**parsed)
+        assert config.processing.engine == "exactextract"
+        assert config.processing.batch_size == 500
+        assert config.output.format == "netcdf"
+
 
 # ---------------------------------------------------------------------------
 # generate_gitignore
