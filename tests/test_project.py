@@ -160,13 +160,13 @@ class TestGeneratePipelineTemplate:
         parsed = yaml.safe_load(content)
         dataset_names = [d["name"] for d in parsed["datasets"]]
         expected = [
-            "dem_3dep_10m",       # stac_cog
-            "gnatsgo_rasters",    # stac_cog
-            "polaris_30m",        # local_tiff
-            "nlcd_osn_lndcov",    # nhgf_stac static
-            "nlcd_osn_fctimp",    # nhgf_stac static
-            "snodas",             # nhgf_stac temporal
-            "gridmet",            # climr_cat
+            "dem_3dep_10m",  # stac_cog
+            "gnatsgo_rasters",  # stac_cog
+            "polaris_30m",  # local_tiff
+            "nlcd_osn_lndcov",  # nhgf_stac static
+            "nlcd_osn_fctimp",  # nhgf_stac static
+            "snodas",  # nhgf_stac temporal
+            "gridmet",  # climr_cat
         ]
         assert dataset_names == expected
 

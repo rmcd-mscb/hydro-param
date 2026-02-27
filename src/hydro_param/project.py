@@ -124,8 +124,9 @@ def generate_pipeline_template(project_name: str) -> str:
 
     Produce a starter ``pipeline.yml`` with inline comments explaining
     each section (target fabric, domain, datasets, output, processing).
-    The template includes a working DEM example and a commented-out NLCD
-    example to illustrate both remote STAC and local-file workflows.
+    The template includes all 7 tested dataset configurations covering
+    all 5 data access strategies (stac_cog, local_tiff, nhgf_stac
+    static, nhgf_stac temporal, climr_cat).
 
     Parameters
     ----------
@@ -171,28 +172,52 @@ target_fabric:
 # --- Datasets ---
 # Each entry references a dataset from the registry by name.
 # Use 'hydro-param datasets list' to see available datasets.
-#
-# For local_tiff datasets, set 'source' to the downloaded file path.
-# Downloads auto-route to data/<category>/ inside an initialized project.
+# Remove or comment out datasets you don't need.
 datasets:
-  # DEM example (remote via STAC — no download needed):
+  # --- Topography ---
+  # 3DEP 10m DEM — elevation, slope, aspect (stac_cog via Planetary Computer)
   - name: dem_3dep_10m
-    variables:
-      - elevation
-      - slope
-      - aspect
-    statistics:
-      - mean
+    variables: [elevation, slope, aspect]
+    statistics: [mean]
 
-  # NLCD example (requires download first):
-  # 1. Run: hydro-param datasets download nlcd_legacy --years 2021
-  # 2. Uncomment and update the source path below:
-  # - name: nlcd_legacy
-  #   source: data/land_cover/nlcd_2021_land_cover_l48_20230630.tif
-  #   variables:
-  #     - land_cover
-  #   statistics:
-  #     - majority
+  # --- Soils ---
+  # gNATSGO pre-summarized soil properties (stac_cog via Planetary Computer)
+  - name: gnatsgo_rasters
+    variables: [aws0_100, rootznemc, rootznaws]
+    statistics: [mean]
+
+  # POLARIS soil texture properties, 30m (local_tiff via remote VRT)
+  - name: polaris_30m
+    variables: [sand, silt, clay, theta_s, ksat]
+    statistics: [mean]
+
+  # --- Land Cover ---
+  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (nhgf_stac)
+  - name: nlcd_osn_lndcov
+    variables: [LndCov]
+    statistics: [categorical]
+    year: [2021]
+
+  # NLCD Fractional Impervious via NHGF STAC OSN (nhgf_stac)
+  - name: nlcd_osn_fctimp
+    variables: [FctImp]
+    statistics: [mean]
+    year: [2021]
+
+  # --- Snow ---
+  # SNODAS daily snow — historical SWE (nhgf_stac temporal)
+  - name: snodas
+    variables: [SWE]
+    statistics: [mean]
+    time_period: ["2020-01-01", "2021-12-31"]
+
+  # --- Climate ---
+  # gridMET daily climate via OPeNDAP (climr_cat)
+  # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
+  - name: gridmet
+    variables: [pr, tmmx, tmmn, srad, pet, vs]
+    statistics: [mean]
+    time_period: ["2020-01-01", "2021-12-31"]
 
 # --- Output ---
 # Where and how to write results.
