@@ -137,7 +137,7 @@ class TestPywatershedRunConfig:
 
     def test_defaults(self, minimal_config_dict: dict) -> None:
         cfg = PywatershedRunConfig(**minimal_config_dict)
-        assert cfg.climate.source == "daymet_v4"
+        assert cfg.climate.source == "gridmet"
         assert cfg.datasets.topography == "dem_3dep_10m"
         assert cfg.processing.zonal_method == "exactextract"
         assert cfg.calibration.generate_seeds is True
