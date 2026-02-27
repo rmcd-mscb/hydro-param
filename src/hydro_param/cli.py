@@ -673,6 +673,15 @@ def _translate_pws_to_pipeline(
             )
         )
 
+    # Soils
+    datasets.append(
+        DatasetRequest(
+            name=cfg.datasets.soils,
+            variables=["sand", "silt", "clay", "ksat", "theta_s", "bd"],
+            statistics=["mean"],
+        )
+    )
+
     # Climate (temporal) — map user-facing PRMS names to registry/gdptools names
     _CLIMATE_SOURCE_MAP = {
         "gridmet": "gridmet",
