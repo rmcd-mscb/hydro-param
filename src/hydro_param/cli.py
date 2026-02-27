@@ -847,12 +847,16 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 
     # Load temporal data from per-file paths and merge with model-specific transforms
     temporal = {name: xr.open_dataset(path) for name, path in result.temporal_files.items()}
-    derived = merge_temporal_into_derived(
-        derived,
-        temporal,
-        renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
-        conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
-    )
+    try:
+        derived = merge_temporal_into_derived(
+            derived,
+            temporal,
+            renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
+            conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
+        )
+    finally:
+        for ds in temporal.values():
+            ds.close()
 
     # Write using the model-specific formatter
     formatter = get_formatter("pywatershed")
@@ -896,6 +900,12 @@ def pws_validate_cmd(
     --------
     PywatershedFormatter.validate : Underlying validation logic.
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     import xarray as xr
 
     from hydro_param.formatters.pywatershed import PywatershedFormatter
