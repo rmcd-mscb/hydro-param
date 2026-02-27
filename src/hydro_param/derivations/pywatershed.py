@@ -48,6 +48,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pyproj
 import xarray as xr
 import yaml
@@ -106,6 +107,19 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
+
+# Routing constants (Step 12)
+_MANNING_N = 0.04           # natural channel roughness coefficient
+_DEFAULT_DEPTH_FT = 1.0     # bankfull depth placeholder (feet)
+_MIN_SLOPE = 1e-7           # pywatershed floor for seg_slope
+_FALLBACK_SLOPE = 1e-4      # for segments with no NHDPlus match
+_K_COEF_MIN = 0.01          # hours
+_K_COEF_MAX = 24.0          # hours
+_DEFAULT_K_COEF = 1.0       # hours, when computation not possible
+_DEFAULT_X_COEF = 0.2       # standard Muskingum weighting
+_LAKE_K_COEF = 24.0         # travel time for lake segments
+_LAKE_SEGMENT_TYPE = 1      # segment_type value for lake
+_CHANNEL_SEGMENT_TYPE = 0   # segment_type value for channel
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -726,6 +740,63 @@ class PywatershedDerivation:
         if np.any(hru_segment < 0) or np.any(hru_segment > nseg):
             bad = hru_segment[(hru_segment < 0) | (hru_segment > nseg)]
             raise ValueError(f"hru_segment values out of range [0, {nseg}]: {bad.tolist()}")
+
+    @staticmethod
+    def _get_slopes_from_comid(
+        segments: gpd.GeoDataFrame,
+        vaa: pd.DataFrame,
+    ) -> np.ndarray:
+        """Look up NHDPlus VAA slope by COMID (direct join).
+
+        Retrieve channel slopes from the NHDPlus Value Added Attributes
+        (VAA) table by matching segment COMIDs.  This is the primary
+        slope source for step 12 routing coefficient computation.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame with ``comid`` or ``COMID`` column.
+        vaa : pd.DataFrame
+            NHDPlus VAA table with ``comid`` and ``slope`` columns.
+            Slope is in dimensionless rise/run (decimal fraction).
+
+        Returns
+        -------
+        np.ndarray
+            Slope values (decimal fraction) aligned to segment order.
+            Segments with no matching COMID in the VAA get
+            ``_FALLBACK_SLOPE`` (1e-4).
+
+        Notes
+        -----
+        The column name check is case-insensitive (``comid`` or ``COMID``)
+        to accommodate variation across NHDPlus versions and GeoPackage
+        exports.
+
+        See Also
+        --------
+        _FALLBACK_SLOPE : Default slope for unmatched segments.
+        """
+        seg_comid_col = "comid" if "comid" in segments.columns else "COMID"
+        comids = segments[seg_comid_col].values
+
+        vaa_slopes = dict(zip(vaa["comid"].values, vaa["slope"].values))
+
+        slopes = np.array(
+            [vaa_slopes.get(c, _FALLBACK_SLOPE) for c in comids],
+            dtype=np.float64,
+        )
+
+        n_missing = np.sum(slopes == _FALLBACK_SLOPE)
+        if n_missing > 0:
+            logger.warning(
+                "%d of %d segments have no matching COMID in VAA; "
+                "using fallback slope %.1e",
+                n_missing,
+                len(comids),
+                _FALLBACK_SLOPE,
+            )
+        return slopes
 
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters

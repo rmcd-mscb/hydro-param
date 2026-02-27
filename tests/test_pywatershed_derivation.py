@@ -10,7 +10,9 @@ import pytest
 import xarray as xr
 from shapely.geometry import LineString, Polygon
 
-from hydro_param.derivations.pywatershed import PywatershedDerivation
+import pandas as pd
+
+from hydro_param.derivations.pywatershed import PywatershedDerivation, _FALLBACK_SLOPE
 from hydro_param.plugins import DerivationContext
 from hydro_param.solar import NDOY
 
@@ -2807,3 +2809,61 @@ class TestDeriveIntegrationWaterbody:
         assert ds["hru_type"].dtype == np.int32
         # HRU 1 should have 70% lake coverage → type 2
         assert ds["hru_type"].values[0] == 2
+
+
+class TestRoutingSlopes:
+    """Tests for _get_slopes_from_comid helper (step 12 routing)."""
+
+    def test_slopes_from_comid_direct(self) -> None:
+        """All COMIDs present in VAA → correct slopes returned."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 102, 103],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                    LineString([(2, 0), (3, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [101, 102, 103], "slope": [0.01, 0.05, 0.001]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+
+        np.testing.assert_array_equal(slopes, [0.01, 0.05, 0.001])
+        assert slopes.dtype == np.float64
+
+    def test_slopes_from_comid_missing_uses_fallback(self) -> None:
+        """COMID not in VAA → fallback slope assigned."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 999],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [101], "slope": [0.02]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+
+        assert slopes[0] == 0.02
+        assert slopes[1] == _FALLBACK_SLOPE
+
+    def test_slopes_from_comid_case_insensitive(self) -> None:
+        """Column named COMID (uppercase) still works."""
+        segments = gpd.GeoDataFrame(
+            {
+                "COMID": [201, 202],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [201, 202], "slope": [0.03, 0.07]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
+
+        np.testing.assert_array_equal(slopes, [0.03, 0.07])
