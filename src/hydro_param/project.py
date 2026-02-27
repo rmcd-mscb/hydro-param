@@ -252,16 +252,15 @@ version: "2.0"
 
 # --- Domain ---
 # Spatial extent for the model.
-# Methods: bbox, huc, pour_point, bandit.
+# Provide pre-existing HRU and segment fabric files (GeoPackage or GeoParquet).
+# Obtain fabrics with pynhd, pygeohydro, or similar upstream tools —
+# hydro-param does NOT fetch or subset fabrics.
 domain:
-  source: geospatial_fabric
-  gf_version: "1.1"
+  source: custom
   extraction_method: bbox
   bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] EPSG:4326
-  # extraction_method: huc
-  # huc_id: "01013500"                 # upstream of gage
-  # extraction_method: pour_point
-  # pour_point: [-73.95, 42.45]
+  fabric_path: "data/fabrics/nhru.gpkg"        # REQUIRED: path to HRU fabric
+  segment_path: "data/fabrics/nsegment.gpkg"   # path to segment/flowline fabric
   id_field: "nhm_id"
   segment_id_field: "nhm_seg"
 
@@ -275,7 +274,7 @@ time:
 # Source for area-weighted forcing time series.
 # Output is one-variable-per-NetCDF-file (prcp.nc, tmax.nc, tmin.nc).
 climate:
-  source: daymet_v4                     # daymet_v4, gridmet, or conus404_ba
+  source: gridmet                       # only gridmet is currently supported
   method: area_weighted_mean
   variables: [prcp, tmax, tmin]
 
@@ -476,7 +475,12 @@ def init_project(
     print(f"  {'.gitignore':<28s} Git ignore rules")
     print()
     print("Next steps:")
-    print("  1. Copy your target fabric to data/fabrics/")
-    print("  2. Edit configs/pipeline.yml")
+    print("  1. Obtain HRU/segment fabrics (pynhd, pygeohydro, or USGS GF)")
+    print("     and place them in data/fabrics/")
+    print("  2. Edit configs/pipeline.yml or configs/pywatershed_run.yml")
     print("  3. Download datasets:  hydro-param datasets download <name>")
-    print("  4. Run the pipeline:   hydro-param run configs/pipeline.yml")
+    print("  4. Run the pipeline:")
+    print("       hydro-param run configs/pipeline.yml")
+    print("     Or the pywatershed workflow:")
+    print("       hydro-param pywatershed run configs/pywatershed_run.yml")
+    print("       hydro-param pywatershed validate models/pywatershed/")
