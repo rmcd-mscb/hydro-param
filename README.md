@@ -4,7 +4,7 @@
 
 `hydro-param` is a Python tool for generating spatially distributed parameters from gridded and polygon geospatial datasets, mapped onto arbitrary hydrologic response unit (HRU) fabrics. It fills the "missing middle" between raw data access libraries and hydrologic model execution.
 
-> **Status:** Design & planning phase. See [`docs/design.md`](docs/design.md) for the full architecture document.
+> **Status:** Pre-alpha MVP. See [`docs/design.md`](docs/design.md) for the full architecture document.
 
 ## The Problem
 
@@ -14,19 +14,18 @@ Every hydrologic modeling project requires the same tedious workflow: download l
 
 - **Config-driven:** Declare what you want in YAML — target fabric, datasets, parameters, output format — and the engine handles the rest.
 - **Fabric-agnostic:** Works with NHM GFv1.1, NOAA NextGen hydrofabric, HUC12 watersheds, regular grids, or any polygon/grid mesh.
-- **Cloud-native data:** Reads directly from Zarr stores on S3/OSN. No bulk downloads required.
-- **Scalable:** Runs on a laptop (regional), HPC via SLURM (CONUS), or cloud via Coiled/AWS (burst computing). Same config, any backend.
-- **Honest about Dask:** Uses Dask for lazy I/O (what it's good at), not for distributed scheduling on HPC (where it's fragile). Parallelism via joblib and SLURM arrays.
+- **Multi-source data access:** Five strategies — STAC COG (3DEP, gNATSGO), NHGF STAC (NLCD on OSN), ClimR OPeNDAP (gridMET), local GeoTIFF (NLCD legacy, POLARIS), and temporal NHGF STAC (SNODAS, CONUS404-BA).
+- **Dask for lazy I/O only:** Uses Dask for efficient spatial subsetting of large stores. All computation uses numpy and gdptools.
 
 ## Key Design Decisions
 
-- **Spatial batching** for I/O-efficient parallel processing (Hilbert curve sorting)
-- **Three-tier data strategy:** native Zarr → virtual Zarr (Kerchunk) → converted Zarr
-- **POLARIS** (100m probabilistic) over SSURGO/gNATSGO for soils
+- **Spatial batching** for I/O-efficient parallel processing (KD-tree recursive bisection)
+- **Five data access strategies:** STAC COG, NHGF STAC (static and temporal), ClimR OPeNDAP, local GeoTIFF
+- **POLARIS** (30m) over SSURGO/gNATSGO for soils
 - **Plugin output formatters** for PRMS, NextGen, pywatershed, generic Parquet/NetCDF
-- **Separate data package** (`hydro-param-data`) for standalone dataset access
+- **Two-phase separation:** Generic pipeline produces a Standardized Internal Representation (SIR); all model-specific logic lives in plugins
 
-## Planned Architecture
+## Architecture
 
 ```
 YAML Config  →  Engine  →  Standardized Internal Representation  →  Formatter  →  Model Input
@@ -41,14 +40,35 @@ YAML Config  →  Engine  →  Standardized Internal Representation  →  Format
 
 ```
 hydro-param/
-├── docs/
-│   └── design.md          # Full architecture & design document
-├── src/
-│   └── hydro_param/       # Package source (coming soon)
-├── tests/                  # Test suite (coming soon)
-├── pyproject.toml          # Package metadata
-├── LICENSE
-└── README.md
+├── src/hydro_param/       # Package source
+│   ├── cli.py             # CLI (cyclopts)
+│   ├── config.py          # Pydantic config
+│   ├── pipeline.py        # 5-stage orchestrator
+│   ├── processing.py      # gdptools wrapper
+│   ├── derivations/       # Model-specific derivations
+│   └── formatters/        # Output formatters
+├── configs/               # Dataset registry + examples
+├── tests/                 # 635 tests
+├── docs/                  # MkDocs documentation
+└── pyproject.toml         # Package + pixi config
+```
+
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/rmcd-mscb/hydro-param.git
+cd hydro-param && pixi install
+
+# Initialize a project
+hydro-param init my-project && cd my-project
+
+# Explore datasets
+hydro-param datasets list
+hydro-param datasets info dem_3dep_10m
+
+# Run the pipeline
+hydro-param run configs/pipeline.yml
 ```
 
 ## Related Projects

@@ -318,7 +318,7 @@ def dataset_fingerprint(
     Notes
     -----
     Deliberately excluded fields (do not affect output content):
-    ``resume``, ``failure_mode``, ``description``, ``download``,
+    ``resume``, ``description``, ``download``,
     ``year_range`` (informational only).
 
     The JSON serialization uses sorted keys and compact separators

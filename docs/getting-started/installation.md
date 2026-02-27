@@ -22,13 +22,10 @@ pixi install
 pip install hydro-param
 ```
 
-For full processing capabilities, install optional dependency groups:
-
-```bash
-pip install hydro-param[gdp]     # gdptools + exactextract
-pip install hydro-param[stac]    # STAC catalog access
-pip install hydro-param[regrid]  # xESMF grid regridding
-```
+!!! note
+    pip installation requires that GDAL, GEOS, and PROJ system libraries
+    are already installed. Using pixi (above) is recommended as it handles
+    these automatically.
 
 ## Verify installation
 

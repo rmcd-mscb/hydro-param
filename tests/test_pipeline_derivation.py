@@ -80,7 +80,7 @@ class TestPwsConfigTranslation:
         assert not hasattr(pipeline_config.output, "derivation")
         assert pipeline_config.target_fabric.id_field == "nhm_id"
         assert pipeline_config.domain.type == "bbox"
-        assert len(pipeline_config.datasets) == 3  # topo + landcover + climate
+        assert len(pipeline_config.datasets) == 4  # topo + landcover + soils + climate
 
         # Check datasets
         ds_names = [d.name for d in pipeline_config.datasets]
@@ -97,6 +97,48 @@ class TestPwsConfigTranslation:
         gridmet_ds = next(d for d in pipeline_config.datasets if d.name == "gridmet")
         assert gridmet_ds.time_period == ["2020-01-01", "2021-12-31"]
         assert gridmet_ds.variables == ["pr", "tmmx", "tmmn"]
+
+    def test_translate_landcover_year_from_time_period(self) -> None:
+        """Land cover year uses end year of time period, not hardcoded 2021."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2018-01-01", "end": "2019-12-31"},
+            climate={"source": "gridmet"},
+            datasets={"landcover": "nlcd_osn_lndcov"},
+        )
+
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+        nlcd_ds = next(d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov")
+        assert nlcd_ds.year == 2019  # end year, not 2021
+
+    def test_translate_landcover_year_clamped_to_2024(self) -> None:
+        """Land cover year is clamped to 2024 when end year exceeds NLCD availability."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2029-01-01", "end": "2030-12-31"},
+            climate={"source": "gridmet"},
+            datasets={"landcover": "nlcd_osn_lndcov"},
+        )
+
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+        nlcd_ds = next(d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov")
+        assert nlcd_ds.year == 2024  # clamped to max NLCD availability
 
     def test_translate_missing_fabric_raises(self) -> None:
         from hydro_param.cli import _translate_pws_to_pipeline
@@ -133,3 +175,55 @@ class TestPwsConfigTranslation:
         # OutputConfig should only have path, format, sir_name
         assert pipeline_config.output.sir_name == "pywatershed_sir"
         assert pipeline_config.output.format == "netcdf"
+
+    def test_translate_unsupported_climate_raises(self) -> None:
+        """Unsupported climate sources raise ValueError with helpful message."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2020-01-01", "end": "2021-12-31"},
+            climate={"source": "daymet_v4"},
+        )
+
+        with pytest.raises(ValueError, match="not yet supported"):
+            _translate_pws_to_pipeline(pws_config)
+
+    def test_translate_includes_soils(self) -> None:
+        """Soils dataset is included in translated pipeline config."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+                "segment_path": "data/nsegment.gpkg",
+            },
+            time={"start": "2020-01-01", "end": "2021-12-31"},
+            climate={"source": "gridmet", "variables": ["prcp", "tmax", "tmin"]},
+            datasets={
+                "topography": "dem_3dep_10m",
+                "landcover": "nlcd_osn_lndcov",
+                "soils": "polaris_30m",
+            },
+        )
+
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+        ds_names = [d.name for d in pipeline_config.datasets]
+        assert "polaris_30m" in ds_names
+        assert len(pipeline_config.datasets) == 4  # topo + landcover + soils + climate
+
+        soils_ds = next(d for d in pipeline_config.datasets if d.name == "polaris_30m")
+        assert "sand" in soils_ds.variables
+        assert "clay" in soils_ds.variables
+        assert "silt" in soils_ds.variables
+        assert soils_ds.statistics == ["mean"]

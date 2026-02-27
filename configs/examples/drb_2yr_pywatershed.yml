@@ -3,6 +3,10 @@
 #
 # Usage:
 #   hydro-param pywatershed run configs/examples/drb_2yr_pywatershed.yml
+#
+# NOTE: This config references DRB test fabric files that are not shipped
+# with the repository. Obtain fabric files via pynhd/pygeohydro or from
+# the USGS Geospatial Fabric before running.
 
 target_model: pywatershed
 version: "2.0"

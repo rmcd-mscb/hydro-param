@@ -9,19 +9,30 @@ hydro-param init delaware-demo
 cd delaware-demo
 ```
 
-## 2. Explore available datasets
+## 2. Obtain a target fabric
+
+hydro-param does not fetch or subset fabrics. You need a pre-existing
+GeoPackage or GeoParquet file containing your HRU polygons. Options:
+
+- **pynhd/pygeohydro**: `pygeohydro.get_camels()` or NHDPlus catchments
+- **USGS Geospatial Fabric**: Download from ScienceBase
+- **Custom**: Any polygon mesh with a unique ID column
+
+Copy your fabric to `data/fabrics/` inside the project.
+
+## 3. Explore available datasets
 
 ```bash
 hydro-param datasets list
 ```
 
-## 3. Get details on a specific dataset
+## 4. Get details on a specific dataset
 
 ```bash
 hydro-param datasets info dem_3dep_10m
 ```
 
-## 4. Edit the pipeline config
+## 5. Edit the pipeline config
 
 Edit `configs/pipeline.yml` to specify your target fabric, domain, and
 datasets. See [Configuration](../user-guide/configuration.md) for details.
@@ -51,12 +62,18 @@ processing:
   batch_size: 500
 ```
 
-## 5. Run the pipeline
+## 6. Run the pipeline
 
 ```bash
 hydro-param run configs/pipeline.yml
 ```
 
-## 6. Inspect results
+## 7. Inspect results
 
-Output is written to `output/` as NetCDF or Parquet, depending on your config.
+The pipeline writes files to `output/`:
+
+- `output/<category>/<variable>.csv` — raw zonal statistics per variable
+- `output/sir/<variable>.csv` — normalized SIR (standardized names/units)
+- `output/.hydro_param_manifest.json` — resume manifest
+
+For temporal datasets, output is `output/<category>/<dataset>_<year>_temporal.nc`.

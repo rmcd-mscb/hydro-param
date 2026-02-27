@@ -42,6 +42,7 @@ import logging
 import shutil
 import subprocess
 import sys
+from datetime import date as _date
 from pathlib import Path
 
 from cyclopts import App
@@ -110,7 +111,7 @@ def _access_status(entry: DatasetEntry) -> str:
             return "download required"
         return "not configured"
     if entry.strategy in ("stac_cog", "native_zarr", "climr_cat", "nhgf_stac"):
-        return "remote"
+        return "remote (no download needed)"
     if entry.strategy == "converted_zarr":
         return "not yet available"
     return entry.strategy
@@ -656,12 +657,15 @@ def _translate_pws_to_pipeline(
     # Land cover (categorical fractions)
     lc_name = cfg.datasets.landcover
     if lc_name.startswith("nlcd_osn"):
+        # Use end year of simulation period, clamped to NLCD availability (1985-2024)
+        _end_year = _date.fromisoformat(cfg.time.end).year
+        _nlcd_year = max(1985, min(_end_year, 2024))
         datasets.append(
             DatasetRequest(
                 name=lc_name,
                 variables=["LndCov"],
                 statistics=["categorical"],
-                year=2021,
+                year=_nlcd_year,
             )
         )
     else:
@@ -673,13 +677,23 @@ def _translate_pws_to_pipeline(
             )
         )
 
-    # Climate (temporal) — map user-facing PRMS names to registry/gdptools names
-    _CLIMATE_SOURCE_MAP = {
-        "gridmet": "gridmet",
-        "daymet_v4": "daymet_v4",
-        "conus404_ba": "conus404_ba",
-    }
-    climate_ds_name = _CLIMATE_SOURCE_MAP.get(cfg.climate.source, cfg.climate.source)
+    # Soils
+    datasets.append(
+        DatasetRequest(
+            name=cfg.datasets.soils,
+            variables=["sand", "silt", "clay", "ksat", "theta_s", "bd"],
+            statistics=["mean"],
+        )
+    )
+
+    # Climate (temporal) — validate source and map variable names
+    _SUPPORTED_CLIMATE_SOURCES = {"gridmet"}
+    if cfg.climate.source not in _SUPPORTED_CLIMATE_SOURCES:
+        raise ValueError(
+            f"Climate source '{cfg.climate.source}' is not yet supported. "
+            f"Available sources: {', '.join(sorted(_SUPPORTED_CLIMATE_SOURCES))}"
+        )
+    climate_ds_name = cfg.climate.source
 
     _CLIMATE_VAR_MAP = {
         "prcp": "pr",
@@ -795,7 +809,13 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("  Output: %s", pws_config.output.path)
 
     # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
-    pipeline_config = _translate_pws_to_pipeline(pws_config)
+    try:
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+    except ValueError as exc:
+        logger.error("Config translation failed: %s", exc)
+        raise SystemExit(1) from exc
+
+    logger.debug("Translated pipeline config: %s", pipeline_config.model_dump_json(indent=2))
     reg = _load_registry(registry)
 
     try:
@@ -832,12 +852,16 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 
     # Load temporal data from per-file paths and merge with model-specific transforms
     temporal = {name: xr.open_dataset(path) for name, path in result.temporal_files.items()}
-    derived = merge_temporal_into_derived(
-        derived,
-        temporal,
-        renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
-        conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
-    )
+    try:
+        derived = merge_temporal_into_derived(
+            derived,
+            temporal,
+            renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
+            conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
+        )
+    finally:
+        for ds in temporal.values():
+            ds.close()
 
     # Write using the model-specific formatter
     formatter = get_formatter("pywatershed")
@@ -850,6 +874,19 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         "end": pws_config.time.end,
     }
     formatter.write(derived, pws_config.output.path, formatter_config)
+
+    soltab_path = Path(pws_config.output.path) / pws_config.output.soltab_file
+    if not soltab_path.exists():
+        logger.info(
+            "soltab.nc was not produced. Ensure the topography dataset includes "
+            "elevation, slope, and aspect variables. Solar radiation tables will "
+            "not be available for this run."
+        )
+    elif soltab_path.stat().st_size == 0:
+        logger.warning(
+            "soltab.nc exists but is empty (0 bytes). This may indicate a write "
+            "failure. Solar radiation tables may not be usable."
+        )
 
     logger.info("pywatershed model setup complete: %s", pws_config.output.path)
 
@@ -881,6 +918,12 @@ def pws_validate_cmd(
     --------
     PywatershedFormatter.validate : Underlying validation logic.
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     import xarray as xr
 
     from hydro_param.formatters.pywatershed import PywatershedFormatter
