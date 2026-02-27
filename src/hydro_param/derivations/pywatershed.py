@@ -20,10 +20,9 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 9. Soltab --- potential solar radiation tables (Swift 1976)
 10. PET --- Jensen-Haise coefficients from climate normals
 11. Transpiration --- frost-free period timing from monthly tmin
+12. Routing --- Muskingum routing parameters (K_coef, x_coef, seg_slope, etc.)
 13. Defaults --- standard PRMS default values and initial conditions
 14. Calibration seeds --- physically-based initial values for calibration parameters
-
-Step 12 (routing parameters) is not yet implemented.
 
 References
 ----------
@@ -48,6 +47,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pyproj
 import xarray as xr
 import yaml
@@ -78,8 +78,6 @@ _DEFAULTS: dict[str, float] = {
     "radmax": 0.8,
     "radj_sppt": 0.44,
     "radj_wppt": 0.50,
-    # Routing
-    "x_coef": 0.2,
     # Initial conditions
     "soil_moist_init_frac": 0.5,
     "soil_rechr_init_frac": 0.5,
@@ -106,6 +104,19 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
+
+# Routing constants (Step 12)
+_MANNING_N = 0.04  # natural channel roughness coefficient
+_DEFAULT_DEPTH_FT = 1.0  # bankfull depth placeholder (feet)
+_MIN_SLOPE = 1e-7  # pywatershed floor for seg_slope
+_FALLBACK_SLOPE = 1e-4  # for segments with no NHDPlus match
+_K_COEF_MIN = 0.01  # hours
+_K_COEF_MAX = 24.0  # hours
+_DEFAULT_K_COEF = 1.0  # hours, when computation not possible
+_DEFAULT_X_COEF = 0.2  # standard Muskingum weighting
+_LAKE_K_COEF = 24.0  # travel time for lake segments
+_LAKE_SEGMENT_TYPE = 1  # segment_type value for lake
+_CHANNEL_SEGMENT_TYPE = 0  # segment_type value for channel
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -327,8 +338,8 @@ class PywatershedDerivation:
         -----
         Step execution order: 1 (geometry) -> 2 (topology) -> 3 (topo) ->
         4 (landcover) -> 5 (soils) -> 6 (waterbody) -> 8 (lookups) ->
-        9 (soltab) -> 10 (PET) -> 11 (transp) -> 13 (defaults) ->
-        14 (calibration) -> 7 (forcing) -> overrides.
+        12 (routing) -> 9 (soltab) -> 10 (PET) -> 11 (transp) ->
+        13 (defaults) -> 14 (calibration) -> 7 (forcing) -> overrides.
 
         Step 7 (forcing) runs late because it has no downstream
         dependencies within the static parameter DAG.
@@ -362,6 +373,9 @@ class PywatershedDerivation:
 
         # Step 8: Lookup table application
         ds = self._apply_lookup_tables(context, ds)
+
+        # Step 12: Routing parameters
+        ds = self._derive_routing(context, ds)
 
         # Step 9: Solar radiation tables (soltab)
         ds = self._derive_soltab(context, ds)
@@ -726,6 +740,530 @@ class PywatershedDerivation:
         if np.any(hru_segment < 0) or np.any(hru_segment > nseg):
             bad = hru_segment[(hru_segment < 0) | (hru_segment > nseg)]
             raise ValueError(f"hru_segment values out of range [0, {nseg}]: {bad.tolist()}")
+
+    @staticmethod
+    def _get_slopes_from_comid(
+        segments: gpd.GeoDataFrame,
+        vaa: pd.DataFrame,
+        comid_col: str,
+    ) -> np.ndarray:
+        """Look up NHDPlus VAA slope by COMID (direct join).
+
+        Retrieve channel slopes from the NHDPlus Value Added Attributes
+        (VAA) table by matching segment COMIDs.  This is the primary
+        slope source for step 12 routing coefficient computation.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame with a COMID column.
+        vaa : pd.DataFrame
+            NHDPlus VAA table with ``comid`` and ``slope`` columns.
+            Slope is in dimensionless rise/run (decimal fraction).
+        comid_col : str
+            Name of the COMID column in ``segments`` (as returned by
+            ``_find_comid_column``).
+
+        Returns
+        -------
+        np.ndarray
+            Slope values (decimal fraction) aligned to segment order.
+            Segments with no matching COMID in the VAA get
+            ``_FALLBACK_SLOPE`` (1e-4).
+
+        See Also
+        --------
+        _find_comid_column : Locate the COMID column name.
+        _FALLBACK_SLOPE : Default slope for unmatched segments.
+        """
+        comids = segments[comid_col].values
+
+        vaa_comids = set(vaa["comid"].values)
+        vaa_slopes = dict(zip(vaa["comid"].values, vaa["slope"].values, strict=True))
+
+        matched = np.array([c in vaa_comids for c in comids])
+        slopes = np.where(
+            matched,
+            [vaa_slopes.get(c, 0.0) for c in comids],
+            _FALLBACK_SLOPE,
+        ).astype(np.float64)
+
+        n_missing = int(np.sum(~matched))
+        if n_missing > 0:
+            logger.warning(
+                "%d of %d segments have no matching COMID in VAA; using fallback slope %.1e",
+                n_missing,
+                len(comids),
+                _FALLBACK_SLOPE,
+            )
+        return slopes
+
+    @staticmethod
+    def _get_slopes_spatial_join(
+        segments: gpd.GeoDataFrame,
+        nhd_flowlines: gpd.GeoDataFrame,
+    ) -> np.ndarray:
+        """Get slopes via spatial join to NHDPlus flowlines (length-weighted).
+
+        For each segment, find all NHDPlus flowlines that intersect it,
+        compute the intersection length, and return a length-weighted
+        mean slope.  This handles GF/PRMS segments that have been
+        post-processed from NHD (split at POIs, trimmed to catchment
+        boundaries) and therefore lack COMIDs for a direct VAA join.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame (no COMID column).  Must have line
+            geometries and a CRS set.
+        nhd_flowlines : gpd.GeoDataFrame
+            NHDPlus flowlines with ``slope`` column (dimensionless
+            rise/run, decimal fraction) and line geometries.
+
+        Returns
+        -------
+        np.ndarray
+            Length-weighted mean slope per segment.  Segments with no
+            intersecting NHD flowlines receive ``_FALLBACK_SLOPE``.
+
+        Notes
+        -----
+        The weighting uses actual intersection geometry length rather
+        than total flowline length.  This correctly handles partial
+        overlaps where a segment only intersects part of a longer NHD
+        reach.
+
+        CRS alignment is enforced: if the two GeoDataFrames differ in
+        CRS, the NHD flowlines are reprojected to match the segments.
+
+        See Also
+        --------
+        _get_slopes_from_comid : Primary slope lookup via COMID join.
+        _FALLBACK_SLOPE : Default slope for unmatched segments.
+        """
+        # Ensure same CRS
+        if segments.crs != nhd_flowlines.crs:
+            nhd_flowlines = nhd_flowlines.to_crs(segments.crs)
+
+        # Reset index to use positional alignment
+        segs = segments.reset_index(drop=True)
+        nhd = nhd_flowlines.reset_index(drop=True)
+
+        # Spatial join — find all NHD flowlines intersecting each segment
+        joined = gpd.sjoin(segs, nhd, how="left", predicate="intersects")
+
+        slopes = np.full(len(segs), _FALLBACK_SLOPE, dtype=np.float64)
+        matched = np.zeros(len(segs), dtype=bool)
+
+        if "slope" not in joined.columns:
+            logger.warning(
+                "NHD flowlines lack 'slope' column after spatial join; "
+                "using fallback slope %.1e for all %d segments",
+                _FALLBACK_SLOPE,
+                len(segs),
+            )
+            return slopes
+
+        for seg_idx in range(len(segs)):
+            matches = joined[joined.index == seg_idx]
+            matches = matches.dropna(subset=["slope"])
+            if matches.empty:
+                continue
+
+            # Compute intersection lengths for weighting
+            seg_geom = segs.geometry.iloc[seg_idx]
+            weights: list[float] = []
+            match_slopes: list[float] = []
+            for _, row in matches.iterrows():
+                nhd_idx = int(row["index_right"])
+                nhd_geom = nhd.geometry.iloc[nhd_idx]
+                try:
+                    intersection = seg_geom.intersection(nhd_geom)
+                except Exception:
+                    logger.warning(
+                        "Geometry intersection failed for segment %d with NHD index %d; skipping",
+                        seg_idx,
+                        nhd_idx,
+                    )
+                    continue
+                if intersection.is_empty:
+                    continue
+                weights.append(intersection.length)
+                match_slopes.append(row["slope"])
+
+            if weights:
+                weights_arr = np.array(weights)
+                match_slopes_arr = np.array(match_slopes)
+                total_weight = weights_arr.sum()
+                if total_weight > 0:
+                    slopes[seg_idx] = np.average(match_slopes_arr, weights=weights_arr)
+                    matched[seg_idx] = True
+
+        n_fallback = int(np.sum(~matched))
+        if n_fallback > 0:
+            logger.warning(
+                "%d of %d segments have no intersecting NHDPlus flowlines; "
+                "using fallback slope %.1e",
+                n_fallback,
+                len(segs),
+                _FALLBACK_SLOPE,
+            )
+        return slopes
+
+    @staticmethod
+    def _compute_k_coef(
+        slopes: np.ndarray,
+        seg_lengths_m: np.ndarray,
+    ) -> np.ndarray:
+        """Compute Muskingum K_coef via Manning's equation.
+
+        Velocity is computed from Manning's formula in PRMS internal units
+        (feet, hours):
+
+            velocity = (1 / n) * sqrt(slope) * depth^(2/3) * 3600
+
+        Travel time is then:
+
+            K_coef = seg_length_ft / velocity
+
+        Parameters
+        ----------
+        slopes : np.ndarray
+            Channel slope (m/m) per segment.
+        seg_lengths_m : np.ndarray
+            Segment lengths in meters.
+
+        Returns
+        -------
+        np.ndarray
+            K_coef in hours, clamped to ``[_K_COEF_MIN, _K_COEF_MAX]``.
+            Zero-length segments receive ``_DEFAULT_K_COEF``.
+
+        Notes
+        -----
+        Manning's n defaults to 0.04 (natural channel) and bankfull depth
+        to 1.0 ft.  Both are module-level constants that can be refined
+        in future work (e.g., BANKFULL_CONUS dataset for per-segment depth).
+
+        The formula follows pywatershed's ``muskingum_mann`` implementation,
+        which uses the SI form of Manning's equation (1/n rather than the
+        US customary 1.49/n).  Because the default depth is 1.0, the
+        depth term evaluates to unity and the unit system choice is
+        numerically irrelevant.  If ``_DEFAULT_DEPTH_FT`` is changed to a
+        non-unity value, the formula must be reconciled to a consistent
+        unit system.
+
+        References
+        ----------
+        Hay, L.E., et al. (2023). USGS TM 6-B10, muskingum_mann module.
+        """
+        k_coef = np.full(len(slopes), _DEFAULT_K_COEF, dtype=np.float64)
+
+        # Mask valid segments (nonzero length)
+        valid = seg_lengths_m > 0
+        if not np.any(valid):
+            return k_coef
+
+        # Clamp slopes
+        s = np.clip(slopes[valid], _MIN_SLOPE, None)
+
+        # Manning's equation: velocity in ft/hr
+        velocity = (1.0 / _MANNING_N) * np.sqrt(s) * (_DEFAULT_DEPTH_FT ** (2.0 / 3.0)) * 3600.0
+
+        # Convert segment length from meters to feet
+        seg_length_ft = seg_lengths_m[valid] * 3.28084
+
+        # K = length / velocity (hours)
+        k_coef[valid] = seg_length_ft / velocity
+
+        # Clamp to valid range
+        k_coef = np.clip(k_coef, _K_COEF_MIN, _K_COEF_MAX)
+
+        return k_coef
+
+    @staticmethod
+    def _find_comid_column(segments: gpd.GeoDataFrame) -> str | None:
+        """Find the COMID column name in a segment GeoDataFrame.
+
+        When segments originate from NHDPlus they include a ``comid``
+        (Common Identifier) column that can be used for a direct join
+        against the NHDPlus VAA table.  Segments from the Geospatial
+        Fabric (GF) lack this column and require a spatial join instead.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame to inspect.
+
+        Returns
+        -------
+        str or None
+            The actual column name (preserving original case) if found,
+            or ``None`` if no COMID column exists.  The check is fully
+            case-insensitive.
+
+        See Also
+        --------
+        _get_slopes_from_comid : Slope lookup when COMIDs are present.
+        _get_slopes_spatial_join : Spatial join fallback for GF segments.
+        """
+        for col in segments.columns:
+            if col.lower() == "comid":
+                return col
+        return None
+
+    @staticmethod
+    def _fetch_vaa() -> pd.DataFrame | None:
+        """Fetch the NHDPlus Value Added Attributes (VAA) table.
+
+        Downloads a cached ~245 MB parquet file on first call, then
+        returns it from the local pynhd cache on subsequent calls.
+
+        Returns
+        -------
+        pd.DataFrame or None
+            VAA table with ``comid`` and ``slope`` columns (NaN slopes
+            removed), or ``None`` if pynhd is not installed or the
+            download fails.
+
+        Notes
+        -----
+        pynhd is an optional dependency.  When it is not installed this
+        method logs a warning and returns ``None`` so that the caller
+        can fall back to default slope values.
+
+        References
+        ----------
+        McKay, L., et al. (2012). NHDPlus Version 2: User Guide.
+            https://www.epa.gov/waterdata/nhdplus-national-data
+        """
+        try:
+            import pynhd as nhd
+        except ImportError:
+            logger.warning("pynhd not installed; cannot fetch NHDPlus slopes")
+            return None
+
+        try:
+            vaa = nhd.nhdplus_vaa()
+            return vaa[["comid", "slope"]].dropna(subset=["slope"])
+        except (OSError, KeyError) as exc:
+            logger.error(
+                "Failed to fetch or parse NHDPlus VAA table: %s",
+                exc,
+            )
+            return None
+
+    @staticmethod
+    def _fetch_nhd_flowlines(
+        segments: gpd.GeoDataFrame,
+        vaa: pd.DataFrame,
+    ) -> gpd.GeoDataFrame | None:
+        """Fetch NHDPlus flowline geometries and join VAA slopes.
+
+        Queries the NHDPlus flowline network for the bounding box of
+        the given segments, then merges VAA slope values onto the
+        flowlines by COMID so they are ready for spatial join.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame used to determine the bounding box.
+        vaa : pd.DataFrame
+            VAA table with ``comid`` and ``slope`` columns (from
+            ``_fetch_vaa``).
+
+        Returns
+        -------
+        gpd.GeoDataFrame or None
+            NHDPlus flowlines with a ``slope`` column, or ``None``
+            if the fetch fails.
+        """
+        try:
+            import pynhd as nhd
+        except ImportError:
+            return None
+
+        try:
+            bbox = segments.to_crs("EPSG:4326").total_bounds
+            wd = nhd.WaterData("nhdflowline_network")
+            flowlines = wd.bybox(tuple(bbox))
+
+            # Join VAA slopes onto flowlines by COMID
+            fl_comid_col = next(
+                (c for c in flowlines.columns if c.lower() == "comid"),
+                None,
+            )
+            if fl_comid_col is None:
+                logger.warning("NHDPlus flowlines have no COMID column; cannot join VAA slopes")
+                return None
+
+            # Drop any existing slope column to avoid suffix collision
+            # (the NHDPlus service may include VAA attributes)
+            if "slope" in flowlines.columns:
+                flowlines = gpd.GeoDataFrame(flowlines.drop(columns=["slope"]))
+
+            merged = flowlines.merge(
+                vaa[["comid", "slope"]],
+                left_on=fl_comid_col,
+                right_on="comid",
+                how="left",
+            )
+            return gpd.GeoDataFrame(merged)
+
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Failed to fetch NHDPlus flowlines for spatial join: %s",
+                exc,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Step 12: Routing coefficients
+    # ------------------------------------------------------------------
+
+    def _derive_routing(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Derive Muskingum routing parameters from channel geometry (step 12).
+
+        Compute ``K_coef`` (travel time) via Manning's equation using
+        NHDPlus VAA slopes, and assign ``x_coef``, ``seg_slope``,
+        ``segment_type``, and ``obsin_segment``.
+
+        Supports two segment types:
+
+        - **NHD segments** (have ``comid``/``COMID`` column): direct
+          COMID-to-VAA slope lookup.
+        - **GF/PRMS segments** (no COMID): spatial join to NHDPlus
+          flowlines with length-weighted slope averaging.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context providing ``segments`` GeoDataFrame.
+        ds : xr.Dataset
+            In-progress parameter dataset.  Should contain ``seg_length``
+            on ``nsegment`` from Step 2; if absent, all ``K_coef`` values
+            will be ``_DEFAULT_K_COEF``.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``K_coef`` (hours), ``x_coef`` (dimensionless),
+            ``seg_slope`` (m/m), ``segment_type`` (integer), and
+            ``obsin_segment`` (integer) added on ``nsegment``.
+            Returns ``ds`` unchanged if ``ctx.segments`` is ``None``.
+
+        Notes
+        -----
+        Step 12 of the derivation DAG.  Runs after Step 8 (lookups) and
+        before Step 9 (soltab).  See the design document at
+        ``docs/plans/2026-02-26-step12-routing-design.md``.
+
+        References
+        ----------
+        Hay, L.E., et al. 2023. Parameter estimation at the CONUS scale.
+            USGS TM 6-B10.
+        """
+        segments = ctx.segments
+        if segments is None:
+            logger.warning("No segments provided; skipping routing derivation")
+            return ds
+
+        nseg = len(segments)
+        if "nsegment" not in ds.dims:
+            logger.warning("nsegment dimension not in dataset; skipping routing")
+            return ds
+
+        # --- Fetch NHDPlus slopes ---
+        comid_col = self._find_comid_column(segments)
+        vaa = self._fetch_vaa()
+
+        if vaa is not None and comid_col is not None:
+            # NHD path: direct COMID lookup (no flowline fetch needed)
+            slopes = self._get_slopes_from_comid(segments, vaa, comid_col)
+        elif vaa is not None:
+            # GF path: fetch flowlines for spatial join
+            nhd_flowlines = self._fetch_nhd_flowlines(segments, vaa)
+            if nhd_flowlines is not None:
+                slopes = self._get_slopes_spatial_join(segments, nhd_flowlines)
+            else:
+                logger.warning(
+                    "NHDPlus flowlines unavailable; using fallback slope %.1e for all %d segments",
+                    _FALLBACK_SLOPE,
+                    nseg,
+                )
+                slopes = np.full(nseg, _FALLBACK_SLOPE, dtype=np.float64)
+        else:
+            # VAA fetch failed — use fallback slopes everywhere
+            logger.warning(
+                "NHDPlus data unavailable; using fallback slope %.1e for all %d segments",
+                _FALLBACK_SLOPE,
+                nseg,
+            )
+            slopes = np.full(nseg, _FALLBACK_SLOPE, dtype=np.float64)
+
+        # --- seg_slope ---
+        ds["seg_slope"] = xr.DataArray(
+            slopes,
+            dims="nsegment",
+            attrs={"units": "m/m", "long_name": "Channel slope"},
+        )
+
+        # --- K_coef ---
+        if "seg_length" in ds:
+            seg_lengths = ds["seg_length"].values
+        else:
+            logger.warning(
+                "seg_length not found in dataset; K_coef will use default "
+                "%.1f hours for all %d segments. Ensure Step 2 (topology) "
+                "completed successfully.",
+                _DEFAULT_K_COEF,
+                nseg,
+            )
+            seg_lengths = np.zeros(nseg)
+        k_coef = self._compute_k_coef(slopes, seg_lengths)
+
+        # --- segment_type ---
+        if "segment_type" in segments.columns:
+            seg_type = segments["segment_type"].values.astype(np.int32)
+        else:
+            seg_type = np.full(nseg, _CHANNEL_SEGMENT_TYPE, dtype=np.int32)
+
+        # Force lake segments to max K_coef
+        lake_mask = seg_type == _LAKE_SEGMENT_TYPE
+        k_coef[lake_mask] = _LAKE_K_COEF
+
+        ds["K_coef"] = xr.DataArray(
+            k_coef,
+            dims="nsegment",
+            attrs={"units": "hours", "long_name": "Muskingum storage time coefficient"},
+        )
+
+        # --- x_coef ---
+        ds["x_coef"] = xr.DataArray(
+            np.full(nseg, _DEFAULT_X_COEF, dtype=np.float64),
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Muskingum routing weighting factor"},
+        )
+
+        # --- segment_type ---
+        ds["segment_type"] = xr.DataArray(
+            seg_type,
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Segment type (0=channel, 1=lake)"},
+        )
+
+        # --- obsin_segment ---
+        ds["obsin_segment"] = xr.DataArray(
+            np.zeros(nseg, dtype=np.int32),
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Observed inflow segment (0=none)"},
+        )
+
+        return ds
 
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters

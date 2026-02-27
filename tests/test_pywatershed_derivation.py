@@ -6,11 +6,19 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from shapely.geometry import LineString, Polygon
 
-from hydro_param.derivations.pywatershed import PywatershedDerivation
+from hydro_param.derivations.pywatershed import (
+    _DEFAULT_K_COEF,
+    _FALLBACK_SLOPE,
+    _K_COEF_MAX,
+    _K_COEF_MIN,
+    _LAKE_K_COEF,
+    PywatershedDerivation,
+)
 from hydro_param.plugins import DerivationContext
 from hydro_param.solar import NDOY
 
@@ -2807,3 +2815,439 @@ class TestDeriveIntegrationWaterbody:
         assert ds["hru_type"].dtype == np.int32
         # HRU 1 should have 70% lake coverage → type 2
         assert ds["hru_type"].values[0] == 2
+
+
+class TestRoutingSlopes:
+    """Tests for slope retrieval helpers (step 12 routing)."""
+
+    def test_slopes_from_comid_direct(self) -> None:
+        """All COMIDs present in VAA → correct slopes returned."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 102, 103],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                    LineString([(2, 0), (3, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [101, 102, 103], "slope": [0.01, 0.05, 0.001]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "comid")
+
+        np.testing.assert_array_equal(slopes, [0.01, 0.05, 0.001])
+        assert slopes.dtype == np.float64
+
+    def test_slopes_from_comid_missing_uses_fallback(self) -> None:
+        """COMID not in VAA → fallback slope assigned."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 999],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [101], "slope": [0.02]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "comid")
+
+        assert slopes[0] == 0.02
+        assert slopes[1] == _FALLBACK_SLOPE
+
+    def test_slopes_from_comid_case_insensitive(self) -> None:
+        """Column named COMID (uppercase) still works."""
+        segments = gpd.GeoDataFrame(
+            {
+                "COMID": [201, 202],
+                "geometry": [
+                    LineString([(0, 0), (1, 0)]),
+                    LineString([(1, 0), (2, 0)]),
+                ],
+            },
+        )
+        vaa = pd.DataFrame({"comid": [201, 202], "slope": [0.03, 0.07]})
+
+        slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa, "COMID")
+
+        np.testing.assert_array_equal(slopes, [0.03, 0.07])
+
+    # -- Spatial join slope tests --
+
+    def test_slopes_spatial_join_basic(self) -> None:
+        """Two GF segments each overlapping one NHD flowline → correct slopes."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.01, 0.05],
+                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        np.testing.assert_allclose(slopes, [0.01, 0.05])
+        assert slopes.dtype == np.float64
+
+    def test_slopes_spatial_join_no_match_uses_fallback(self) -> None:
+        """GF segment far from any NHD flowline → fallback slope."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(100, 100), (101, 100)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.02],
+                "geometry": [LineString([(0, 0), (1, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        assert slopes[0] == _FALLBACK_SLOPE
+
+    def test_slopes_spatial_join_multiple_nhd_per_segment(self) -> None:
+        """One GF segment spanning two equal-length NHD flowlines → average."""
+        # Segment spans from (0,0) to (2,0)
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (2, 0)])]},
+            crs="EPSG:5070",
+        )
+        # Two NHD flowlines of equal length, both overlapping the segment
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.02, 0.06],
+                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        # Equal lengths → simple average: (0.02 + 0.06) / 2 = 0.04
+        np.testing.assert_allclose(slopes[0], 0.04)
+
+
+# ------------------------------------------------------------------
+# Manning's equation K_coef computation
+# ------------------------------------------------------------------
+
+
+class TestManningKCoef:
+    """Tests for _compute_k_coef (Manning's equation K_coef)."""
+
+    def test_basic_k_coef(self) -> None:
+        """Known slope and length produce expected K_coef.
+
+        velocity = (1/0.04) * sqrt(0.01) * 1.0^(2/3) * 3600
+                 = 25 * 0.1 * 1.0 * 3600 = 9000 ft/hr
+        seg_length_ft = 10000 * 3.28084 = 32808.4 ft
+        K_coef = 32808.4 / 9000 ≈ 3.645 hours
+        """
+        slopes = np.array([0.01])
+        lengths = np.array([10000.0])
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        np.testing.assert_allclose(result[0], 32808.4 / 9000.0, rtol=1e-4)
+
+    def test_k_coef_clamped_max(self) -> None:
+        """Very low slope + long segment clamps K_coef to maximum."""
+        slopes = np.array([1e-7])
+        lengths = np.array([100_000.0])  # 100 km
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _K_COEF_MAX
+
+    def test_k_coef_clamped_min(self) -> None:
+        """Steep slope + very short segment clamps K_coef to minimum."""
+        slopes = np.array([1.0])
+        lengths = np.array([1.0])  # 1 meter
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _K_COEF_MIN
+
+    def test_slope_floor_applied(self) -> None:
+        """Zero and negative slopes both get clamped to _MIN_SLOPE."""
+        lengths = np.array([5000.0, 5000.0])
+        slopes_zero = np.array([0.0, -0.001])
+        result = PywatershedDerivation._compute_k_coef(slopes_zero, lengths)
+        # Both should produce the same K_coef since both clamp to 1e-7
+        np.testing.assert_allclose(result[0], result[1])
+
+    def test_zero_length_gets_default(self) -> None:
+        """Zero-length segment receives _DEFAULT_K_COEF."""
+        slopes = np.array([0.01])
+        lengths = np.array([0.0])
+        result = PywatershedDerivation._compute_k_coef(slopes, lengths)
+        assert result[0] == _DEFAULT_K_COEF
+
+
+class TestSegmentTypeDetection:
+    """Tests for NHD vs GF segment detection via _find_comid_column."""
+
+    def test_find_comid_lowercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'comid' column return the column name."""
+        segments = gpd.GeoDataFrame(
+            {"comid": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._find_comid_column(segments) == "comid"
+
+    def test_find_comid_uppercase(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'COMID' column return the column name."""
+        segments = gpd.GeoDataFrame(
+            {"COMID": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._find_comid_column(segments) == "COMID"
+
+    def test_find_comid_mixed_case(self, derivation: PywatershedDerivation) -> None:
+        """Segments with 'Comid' column return the column name."""
+        segments = gpd.GeoDataFrame(
+            {"Comid": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._find_comid_column(segments) == "Comid"
+
+    def test_no_comid(self, derivation: PywatershedDerivation) -> None:
+        """Segments without COMID column return None."""
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1], "tosegment": [0]},
+            geometry=[LineString([(0, 0), (1, 0)])],
+            crs="EPSG:4326",
+        )
+        assert derivation._find_comid_column(segments) is None
+
+
+# ------------------------------------------------------------------
+# Step 12: _derive_routing orchestration
+# ------------------------------------------------------------------
+
+
+class TestDeriveRouting:
+    """Tests for Step 12: _derive_routing orchestration."""
+
+    def test_routing_no_segments_returns_unchanged(self, derivation: PywatershedDerivation) -> None:
+        """No segments -> warn and return ds unchanged."""
+        sir = xr.Dataset(coords={"nhm_id": [1, 2, 3]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = xr.Dataset()
+        ds = ds.assign_coords(nhru=sir["nhm_id"].values)
+        ds = derivation._derive_routing(ctx, ds)
+        assert "K_coef" not in ds
+        assert "x_coef" not in ds
+
+    def test_routing_with_comid_segments(
+        self, derivation: PywatershedDerivation, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """NHD segments with COMID produce K_coef from VAA slope."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 102],
+                "tosegment": [2, 0],
+            },
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        vaa = pd.DataFrame({"comid": [101, 102], "slope": [0.01, 0.005]})
+
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
+        )
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="comid",
+        )
+
+        ds = derivation.derive(ctx)
+
+        assert "K_coef" in ds
+        assert "x_coef" in ds
+        assert "seg_slope" in ds
+        assert "segment_type" in ds
+        assert "obsin_segment" in ds
+        assert ds["K_coef"].dims == ("nsegment",)
+        assert np.all(ds["K_coef"].values > 0)
+        assert np.all(ds["K_coef"].values <= 24.0)
+        np.testing.assert_array_almost_equal(ds["x_coef"].values, [0.2, 0.2])
+        np.testing.assert_array_equal(ds["segment_type"].values, [0, 0])
+        np.testing.assert_array_equal(ds["obsin_segment"].values, [0, 0])
+
+    def test_routing_gf_segments_spatial_join(
+        self, derivation: PywatershedDerivation, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GF segments without COMID use spatial join for slopes."""
+        segments = gpd.GeoDataFrame(
+            {
+                "nhm_seg": [1, 2],
+                "tosegment": [2, 0],
+            },
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "comid": [101, 102],
+                "slope": [0.01, 0.005],
+            },
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        vaa = pd.DataFrame({"comid": [101, 102], "slope": [0.01, 0.005]})
+
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
+        )
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_nhd_flowlines",
+            staticmethod(lambda segs, v: nhd_flowlines),
+        )
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+
+        ds = derivation.derive(ctx)
+
+        assert "K_coef" in ds
+        assert "seg_slope" in ds
+        np.testing.assert_array_almost_equal(ds["seg_slope"].values, [0.01, 0.005])
+
+    def test_routing_segment_type_passthrough(
+        self, derivation: PywatershedDerivation, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """segment_type column in segments GeoDataFrame is passed through."""
+        segments = gpd.GeoDataFrame(
+            {
+                "comid": [101, 102],
+                "tosegment": [2, 0],
+                "segment_type": [0, 1],  # channel, lake
+            },
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        vaa = pd.DataFrame({"comid": [101, 102], "slope": [0.01, 0.005]})
+
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: vaa),
+        )
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="comid",
+        )
+
+        ds = derivation.derive(ctx)
+
+        np.testing.assert_array_equal(ds["segment_type"].values, [0, 1])
+        # Lake segment should have K_coef = 24.0
+        assert ds["K_coef"].values[1] == _LAKE_K_COEF
+
+    def test_routing_fetch_failure_uses_fallbacks(
+        self, derivation: PywatershedDerivation, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failed NHD fetch produces fallback slopes."""
+        segments = gpd.GeoDataFrame(
+            {
+                "nhm_seg": [1, 2],
+                "tosegment": [2, 0],
+            },
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: None),
+        )
+
+        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+
+        ds = derivation.derive(ctx)
+
+        assert "K_coef" in ds
+        assert "seg_slope" in ds
+        np.testing.assert_array_equal(ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE])
