@@ -10,7 +10,7 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 
 ## Current Status
 
-**Pre-alpha MVP.** The 5-stage config-driven pipeline works end-to-end with 337 tests passing. Five data access strategies are implemented:
+**Pre-alpha MVP.** The 5-stage config-driven pipeline works end-to-end with 635 tests passing. Five data access strategies are implemented:
 
 | Stage | Status | Module |
 |-------|--------|--------|
@@ -234,14 +234,13 @@ If you modified `pyproject.toml`, also run `pixi install` to regenerate `pixi.lo
 ## Open Work
 
 **Current priorities:**
-- SIR normalization layer + `validate_sir()` function
-- Remaining pywatershed derivation steps: 5 (soils), 6 (waterbody), 9 (soltab), 10 (PET), 11 (transp), 12 (routing), 14 (calibration)
+- Remaining pywatershed derivation step: 14 (calibration seeds)
 - Processing pathway bifurcation: polygon vs grid targets (gdptools vs xesmf)
 - Library-managed transparent data caching
 - Dockerfile + Apptainer docs
 
 **Implemented (done):**
-- Steps 1 (geometry), 2 (topology), 3 (topo), 4 (landcover), 8 (lookups), 13 (defaults)
+- Steps 1 (geometry), 2 (topology), 3 (topo), 4 (landcover), 5 (soils), 6 (waterbody), 8 (lookups), 9 (soltab), 10 (PET), 11 (transp), 12 (routing), 13 (defaults)
 - All 5 data access strategies (stac_cog, local_tiff, nhgf_stac static/temporal, climr_cat)
 - Temporal processing with calendar-year splitting
 - CLI: `hydro-param init`, `datasets list/info/download`, `run`, `pywatershed run/validate`
