@@ -52,3 +52,6 @@ CONTRIBUTING_files/
 # Claude local config (machine-specific)
 .claude/settings.local.json
 .claude/notes/
+
+# Git worktrees
+.worktrees/
