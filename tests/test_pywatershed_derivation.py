@@ -3025,9 +3025,7 @@ class TestSegmentTypeDetection:
 class TestDeriveRouting:
     """Tests for Step 12: _derive_routing orchestration."""
 
-    def test_routing_no_segments_returns_unchanged(
-        self, derivation: PywatershedDerivation
-    ) -> None:
+    def test_routing_no_segments_returns_unchanged(self, derivation: PywatershedDerivation) -> None:
         """No segments -> warn and return ds unchanged."""
         sir = xr.Dataset(coords={"nhm_id": [1, 2, 3]})
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
@@ -3238,6 +3236,4 @@ class TestDeriveRouting:
 
         assert "K_coef" in ds
         assert "seg_slope" in ds
-        np.testing.assert_array_equal(
-            ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE]
-        )
+        np.testing.assert_array_equal(ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE])
