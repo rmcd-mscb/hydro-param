@@ -110,7 +110,7 @@ def _access_status(entry: DatasetEntry) -> str:
             return "download required"
         return "not configured"
     if entry.strategy in ("stac_cog", "native_zarr", "climr_cat", "nhgf_stac"):
-        return "remote"
+        return "remote (no download needed)"
     if entry.strategy == "converted_zarr":
         return "not yet available"
     return entry.strategy
@@ -811,6 +811,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 
     # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
     pipeline_config = _translate_pws_to_pipeline(pws_config)
+    logger.debug("Translated pipeline config: %s", pipeline_config.model_dump_json(indent=2))
     reg = _load_registry(registry)
 
     try:
@@ -869,6 +870,13 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         "end": pws_config.time.end,
     }
     formatter.write(derived, pws_config.output.path, formatter_config)
+
+    soltab_path = Path(pws_config.output.path) / pws_config.output.soltab_file
+    if not soltab_path.exists():
+        logger.info(
+            "soltab.nc was not produced (missing elevation/slope/aspect in SIR). "
+            "Solar radiation tables will not be available."
+        )
 
     logger.info("pywatershed model setup complete: %s", pws_config.output.path)
 
