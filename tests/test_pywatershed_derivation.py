@@ -2866,3 +2866,63 @@ class TestRoutingSlopes:
         slopes = PywatershedDerivation._get_slopes_from_comid(segments, vaa)
 
         np.testing.assert_array_equal(slopes, [0.03, 0.07])
+
+    # -- Spatial join slope tests --
+
+    def test_slopes_spatial_join_basic(self) -> None:
+        """Two GF segments each overlapping one NHD flowline → correct slopes."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.01, 0.05],
+                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        np.testing.assert_allclose(slopes, [0.01, 0.05])
+        assert slopes.dtype == np.float64
+
+    def test_slopes_spatial_join_no_match_uses_fallback(self) -> None:
+        """GF segment far from any NHD flowline → fallback slope."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(100, 100), (101, 100)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.02],
+                "geometry": [LineString([(0, 0), (1, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        assert slopes[0] == _FALLBACK_SLOPE
+
+    def test_slopes_spatial_join_multiple_nhd_per_segment(self) -> None:
+        """One GF segment spanning two equal-length NHD flowlines → average."""
+        # Segment spans from (0,0) to (2,0)
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(0, 0), (2, 0)])]},
+            crs="EPSG:5070",
+        )
+        # Two NHD flowlines of equal length, both overlapping the segment
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.02, 0.06],
+                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)])],
+            },
+            crs="EPSG:5070",
+        )
+
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+        # Equal lengths → simple average: (0.02 + 0.06) / 2 = 0.04
+        np.testing.assert_allclose(slopes[0], 0.04)

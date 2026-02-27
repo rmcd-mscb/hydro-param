@@ -799,6 +799,101 @@ class PywatershedDerivation:
             )
         return slopes
 
+    @staticmethod
+    def _get_slopes_spatial_join(
+        segments: gpd.GeoDataFrame,
+        nhd_flowlines: gpd.GeoDataFrame,
+    ) -> np.ndarray:
+        """Get slopes via spatial join to NHDPlus flowlines (length-weighted).
+
+        For each segment, find all NHDPlus flowlines that intersect it,
+        compute the intersection length, and return a length-weighted
+        mean slope.  This handles GF/PRMS segments that have been
+        post-processed from NHD (split at POIs, trimmed to catchment
+        boundaries) and therefore lack COMIDs for a direct VAA join.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame (no COMID column).  Must have line
+            geometries and a CRS set.
+        nhd_flowlines : gpd.GeoDataFrame
+            NHDPlus flowlines with ``slope`` column (dimensionless
+            rise/run, decimal fraction) and line geometries.
+
+        Returns
+        -------
+        np.ndarray
+            Length-weighted mean slope per segment.  Segments with no
+            intersecting NHD flowlines receive ``_FALLBACK_SLOPE``.
+
+        Notes
+        -----
+        The weighting uses actual intersection geometry length rather
+        than total flowline length.  This correctly handles partial
+        overlaps where a segment only intersects part of a longer NHD
+        reach.
+
+        CRS alignment is enforced: if the two GeoDataFrames differ in
+        CRS, the NHD flowlines are reprojected to match the segments.
+
+        See Also
+        --------
+        _get_slopes_from_comid : Primary slope lookup via COMID join.
+        _FALLBACK_SLOPE : Default slope for unmatched segments.
+        """
+        # Ensure same CRS
+        if segments.crs != nhd_flowlines.crs:
+            nhd_flowlines = nhd_flowlines.to_crs(segments.crs)
+
+        # Reset index to use positional alignment
+        segs = segments.reset_index(drop=True)
+        nhd = nhd_flowlines.reset_index(drop=True)
+
+        # Spatial join — find all NHD flowlines intersecting each segment
+        joined = gpd.sjoin(segs, nhd, how="left", predicate="intersects")
+
+        slopes = np.full(len(segs), _FALLBACK_SLOPE, dtype=np.float64)
+
+        for seg_idx in range(len(segs)):
+            matches = joined[joined.index == seg_idx]
+            matches = matches.dropna(subset=["slope"])
+            if matches.empty:
+                continue
+
+            # Compute intersection lengths for weighting
+            seg_geom = segs.geometry.iloc[seg_idx]
+            weights: list[float] = []
+            match_slopes: list[float] = []
+            for _, row in matches.iterrows():
+                nhd_idx = int(row["index_right"])
+                nhd_geom = nhd.geometry.iloc[nhd_idx]
+                intersection = seg_geom.intersection(nhd_geom)
+                if intersection.is_empty:
+                    continue
+                weights.append(intersection.length)
+                match_slopes.append(row["slope"])
+
+            if weights:
+                weights_arr = np.array(weights)
+                match_slopes_arr = np.array(match_slopes)
+                total_weight = weights_arr.sum()
+                if total_weight > 0:
+                    slopes[seg_idx] = np.average(
+                        match_slopes_arr, weights=weights_arr
+                    )
+
+        n_fallback = int(np.sum(slopes == _FALLBACK_SLOPE))
+        if n_fallback > 0:
+            logger.warning(
+                "%d of %d segments have no intersecting NHDPlus flowlines; "
+                "using fallback slope %.1e",
+                n_fallback,
+                len(segs),
+                _FALLBACK_SLOPE,
+            )
+        return slopes
+
     # ------------------------------------------------------------------
     # Step 3: Topographic parameters
     # ------------------------------------------------------------------
