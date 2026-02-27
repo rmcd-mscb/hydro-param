@@ -656,12 +656,17 @@ def _translate_pws_to_pipeline(
     # Land cover (categorical fractions)
     lc_name = cfg.datasets.landcover
     if lc_name.startswith("nlcd_osn"):
+        # Use end year of simulation period, clamped to NLCD availability (1985-2024)
+        from datetime import date as _date
+
+        _end_year = _date.fromisoformat(cfg.time.end).year
+        _nlcd_year = min(_end_year, 2024)
         datasets.append(
             DatasetRequest(
                 name=lc_name,
                 variables=["LndCov"],
                 statistics=["categorical"],
-                year=2021,
+                year=_nlcd_year,
             )
         )
     else:

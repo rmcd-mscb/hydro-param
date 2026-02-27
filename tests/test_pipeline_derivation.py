@@ -98,6 +98,29 @@ class TestPwsConfigTranslation:
         assert gridmet_ds.time_period == ["2020-01-01", "2021-12-31"]
         assert gridmet_ds.variables == ["pr", "tmmx", "tmmn"]
 
+    def test_translate_landcover_year_from_time_period(self) -> None:
+        """Land cover year uses end year of time period, not hardcoded 2021."""
+        from hydro_param.cli import _translate_pws_to_pipeline
+        from hydro_param.pywatershed_config import PywatershedRunConfig
+
+        pws_config = PywatershedRunConfig(
+            domain={
+                "source": "custom",
+                "extraction_method": "bbox",
+                "bbox": [-75.8, 39.6, -74.4, 42.5],
+                "fabric_path": "data/nhru.gpkg",
+            },
+            time={"start": "2018-01-01", "end": "2019-12-31"},
+            climate={"source": "gridmet"},
+            datasets={"landcover": "nlcd_osn_lndcov"},
+        )
+
+        pipeline_config = _translate_pws_to_pipeline(pws_config)
+        nlcd_ds = next(
+            d for d in pipeline_config.datasets if d.name == "nlcd_osn_lndcov"
+        )
+        assert nlcd_ds.year == 2019  # end year, not 2021
+
     def test_translate_missing_fabric_raises(self) -> None:
         from hydro_param.cli import _translate_pws_to_pipeline
         from hydro_param.pywatershed_config import PywatershedRunConfig
