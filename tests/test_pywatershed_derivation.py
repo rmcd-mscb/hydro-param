@@ -12,13 +12,11 @@ import xarray as xr
 from shapely.geometry import LineString, Polygon
 
 from hydro_param.derivations.pywatershed import (
-    _CHANNEL_SEGMENT_TYPE,
     _DEFAULT_K_COEF,
     _FALLBACK_SLOPE,
     _K_COEF_MAX,
     _K_COEF_MIN,
     _LAKE_K_COEF,
-    _LAKE_SEGMENT_TYPE,
     PywatershedDerivation,
 )
 from hydro_param.plugins import DerivationContext
