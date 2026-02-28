@@ -143,7 +143,7 @@ class DerivationContext:
                     f"Lookup tables directory does not exist: '{self.lookup_tables_dir}'"
                 )
             return self.lookup_tables_dir
-        return Path(str(files("hydro_param").joinpath("data/lookup_tables")))
+        return Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
 
 
 @runtime_checkable
