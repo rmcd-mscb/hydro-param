@@ -89,6 +89,18 @@ class TestPwsDomainConfig:
         )
         assert cfg.fabric_path == Path("/some/fabric.gpkg")
 
+    def test_waterbody_path_default_none(self) -> None:
+        cfg = PwsDomainConfig(extraction_method="bbox", bbox=[-76.5, 38.5, -74.0, 42.6])
+        assert cfg.waterbody_path is None
+
+    def test_waterbody_path_accepted(self) -> None:
+        cfg = PwsDomainConfig(
+            extraction_method="bbox",
+            bbox=[-76.5, 38.5, -74.0, 42.6],
+            waterbody_path=Path("/some/waterbodies.gpkg"),
+        )
+        assert cfg.waterbody_path == Path("/some/waterbodies.gpkg")
+
 
 class TestPwsTimeConfig:
     """Tests for time configuration."""

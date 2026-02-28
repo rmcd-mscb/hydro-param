@@ -61,6 +61,11 @@ class PwsDomainConfig(BaseModel):
         GeoParquet).  Required when ``source="custom"``.
     segment_path : Path or None
         Path to the segment/flowline fabric file for routing topology.
+    waterbody_path : Path or None
+        Path to NHDPlus waterbody polygon file (GeoPackage or GeoParquet)
+        for depression storage overlay (step 6).  Must contain an ``ftype``
+        column with values like ``"LakePond"`` and ``"Reservoir"``.
+        When ``None``, step 6 uses zero defaults.
     id_field : str
         Feature ID column name in the fabric (default ``"nhm_id"``).
     segment_id_field : str
@@ -82,6 +87,7 @@ class PwsDomainConfig(BaseModel):
     pour_point: list[float] | None = None
     fabric_path: Path | None = None
     segment_path: Path | None = None
+    waterbody_path: Path | None = None
     id_field: str = "nhm_id"
     segment_id_field: str = "nhm_seg"
 
