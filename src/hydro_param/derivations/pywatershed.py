@@ -346,12 +346,35 @@ class PywatershedDerivation:
         """
         sir = context.sir
         id_field = context.fabric_id_field
-        nhru = sir.sizes.get(id_field, 0)
+        fabric = context.fabric
+
+        # Derive nhru count and IDs from fabric (authoritative source).
+        # Fall back to SIR first variable length when no fabric is provided
+        # (e.g., library API use without a fabric file).
+        if fabric is not None and id_field in fabric.columns:
+            nhru = len(fabric)
+            hru_ids = fabric[id_field].values
+        elif sir.data_vars:
+            first_var = sir.data_vars[0]
+            first_da = sir[first_var]
+            nhru = len(first_da)
+            # Try to recover HRU IDs from the SIR variable's coordinates.
+            if id_field in first_da.dims and id_field in first_da.coords:
+                hru_ids = first_da.coords[id_field].values
+            else:
+                hru_ids = None
+        elif hasattr(sir, "sizes") and id_field in sir.sizes:
+            nhru = sir.sizes[id_field]
+            hru_ids = np.arange(1, nhru + 1)
+        else:
+            nhru = 0
+            hru_ids = None
+
         ds = xr.Dataset()
 
         # Carry HRU coordinates so derived params retain stable indexing
-        if id_field in sir.coords:
-            ds = ds.assign_coords(nhru=sir[id_field].values)
+        if hru_ids is not None:
+            ds = ds.assign_coords(nhru=hru_ids)
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(context, ds)
@@ -451,12 +474,7 @@ class PywatershedDerivation:
         id_field = ctx.fabric_id_field
 
         if fabric is not None and id_field in fabric.columns:
-            # Align fabric rows to SIR HRU ordering
-            hru_ids = sir[id_field].values if id_field in sir.coords else None
-            if hru_ids is not None:
-                fab = fabric.set_index(id_field).loc[hru_ids].reset_index()
-            else:
-                fab = fabric
+            fab = fabric
 
             # Area via equal-area projection (EPSG:5070 = CONUS Albers)
             fab_5070 = fab.to_crs(epsg=5070)
@@ -1481,7 +1499,7 @@ class PywatershedDerivation:
         are required to compute a meaningful majority.
         """
         for prefix in prefixes:
-            fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+            fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
             if len(fraction_vars) < 2:
                 continue
 
@@ -1646,7 +1664,7 @@ class PywatershedDerivation:
         """
         # Check data availability before loading lookup table
         prefix = "soil_texture_frac_"
-        fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+        fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
         has_single = any(c in sir for c in ("soil_texture", "soil_texture_majority"))
 
         if len(fraction_vars) < 2 and not has_single:
@@ -1873,8 +1891,8 @@ class PywatershedDerivation:
         intersections["_clip_area_m2"] = intersections.geometry.area
         area_by_hru = intersections.groupby(id_field)["_clip_area_m2"].sum()
 
-        # Vectorized alignment to SIR coordinate order
-        hru_ids = ctx.sir[id_field].values
+        # Vectorized alignment to fabric HRU order
+        hru_ids = ctx.fabric[id_field].values
         clipped_acres = area_by_hru.reindex(hru_ids, fill_value=0.0).values / _M2_PER_ACRE
 
         # Compute fraction from hru_area (already in acres from step 1)
