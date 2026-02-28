@@ -668,7 +668,7 @@ def pws_run_cmd(config: Path) -> None:
     try:
         fabric = gpd.read_file(fabric_path)
     except Exception as exc:
-        logger.error("Failed to read fabric file '%s': %s", fabric_path, exc)
+        logger.exception("Failed to read fabric file '%s'.", fabric_path)
         raise SystemExit(1) from exc
 
     # ── Load optional segments / waterbodies ──
@@ -685,11 +685,9 @@ def pws_run_cmd(config: Path) -> None:
         try:
             segments = gpd.read_file(seg_path)
         except Exception as exc:
-            logger.error(
-                "Failed to read segment file '%s': %s. "
-                "Ensure it is a valid GeoPackage or GeoParquet.",
+            logger.exception(
+                "Failed to read segment file '%s'. Ensure it is a valid GeoPackage or GeoParquet.",
                 seg_path,
-                exc,
             )
             raise SystemExit(1) from exc
 
@@ -706,11 +704,10 @@ def pws_run_cmd(config: Path) -> None:
         try:
             waterbodies = gpd.read_file(wb_path)
         except Exception as exc:
-            logger.error(
-                "Failed to read waterbody file '%s': %s. "
+            logger.exception(
+                "Failed to read waterbody file '%s'. "
                 "Ensure it is a valid GeoPackage or GeoParquet.",
                 wb_path,
-                exc,
             )
             raise SystemExit(1) from exc
         if "ftype" not in waterbodies.columns:
@@ -751,8 +748,13 @@ def pws_run_cmd(config: Path) -> None:
 
     # ── Load and merge temporal data ──
     temporal = {}
-    for name in sir.available_temporal():
-        temporal[name] = sir.load_temporal(name)
+    try:
+        for name in sir.available_temporal():
+            temporal[name] = sir.load_temporal(name)
+    except (OSError, KeyError) as exc:
+        logger.error("Failed to load temporal SIR data: %s", exc)
+        logger.error("Re-run 'hydro-param run pipeline.yml' to regenerate SIR output.")
+        raise SystemExit(1) from exc
     try:
         derived = merge_temporal_into_derived(
             derived,

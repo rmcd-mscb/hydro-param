@@ -174,10 +174,13 @@ def merge_temporal_into_derived(
     """Merge temporal forcing data into the derived parameter dataset.
 
     .. note::
-        This standalone function predates the plugin architecture.  A future
-        release will wire temporal data through ``DerivationContext.temporal``
-        and ``PywatershedDerivation._derive_forcing()`` instead.  The CLI
-        currently still uses this function for temporal merge.
+        ``_derive_forcing()`` and ``_compute_monthly_normals()`` already exist
+        in ``PywatershedDerivation`` and work when ``DerivationContext.temporal``
+        is populated.  However, the CLI (``pws_run_cmd``) does not yet pass
+        temporal data through the context -- it uses this standalone function
+        instead.  As a result, steps 10 (PET) and 11 (transpiration) fall back
+        to scalar defaults when run via the CLI.  A future PR should pass
+        temporal data through the context to enable climate-derived parameters.
 
     Concatenate multi-year temporal chunks (keyed with ``_YYYY`` suffixes),
     rename variables to PRMS conventions, apply unit conversions, and align
@@ -204,11 +207,6 @@ def merge_temporal_into_derived(
     xr.Dataset
         Derived dataset with temporal variables merged in.
 
-    Notes
-    -----
-    A future release will integrate this logic into
-    ``PywatershedDerivation._derive_forcing()`` via
-    ``DerivationContext.temporal``.
     """
     renames = renames or {}
     conversions = conversions or {}
@@ -314,7 +312,9 @@ class PywatershedDerivation:
             Typed input bundle containing the SIR dataset, target fabric
             GeoDataFrame, segment GeoDataFrame, waterbody GeoDataFrame,
             temporal forcing datasets, lookup table directory, and
-            pipeline configuration.
+            pipeline configuration.  When invoked via the CLI
+            ``pws_run_cmd``, ``temporal`` is ``None`` and forcing data
+            is merged separately after ``derive()`` returns.
 
         Returns
         -------
@@ -354,9 +354,11 @@ class PywatershedDerivation:
             else:
                 hru_ids = None
         else:
-            nhru = 0
-            hru_ids = None
-            logger.warning("Could not determine nhru count from fabric or SIR variables.")
+            raise ValueError(
+                f"Cannot determine HRU count: fabric is None or missing "
+                f"'{id_field}' column, and SIR contains no static variables. "
+                f"Provide a fabric GeoDataFrame with an '{id_field}' column."
+            )
 
         ds = xr.Dataset()
 
@@ -1867,6 +1869,8 @@ class PywatershedDerivation:
                 wb[["geometry"]],
                 how="intersection",
             )
+        except MemoryError:
+            raise
         except Exception:
             logger.warning(
                 "gpd.overlay failed in step 6 (waterbody); using zero defaults "

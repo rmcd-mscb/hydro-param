@@ -396,3 +396,26 @@ class TestSIRManifestEntry:
         assert load_manifest(tmp_path) is not None
         # No .tmp file should remain
         assert not (tmp_path / ".manifest.yml.tmp").exists()
+
+    def test_manifest_atomic_write_cleanup_on_failure(self, tmp_path):
+        """If rename fails, tmp file should be cleaned up."""
+        from unittest.mock import patch
+
+        from hydro_param.manifest import SIRManifestEntry
+
+        sir = SIRManifestEntry(static_files={"a": "sir/a.csv"})
+        manifest = PipelineManifest(sir=sir)
+        # First, save a good manifest
+        manifest.save(tmp_path)
+        original = load_manifest(tmp_path)
+        assert original is not None
+
+        # Now simulate a replace failure
+        with patch("pathlib.Path.replace", side_effect=OSError("mock replace error")):
+            with pytest.raises(OSError, match="mock replace error"):
+                manifest.save(tmp_path)
+
+        # .tmp file should be cleaned up
+        assert not (tmp_path / ".manifest.yml.tmp").exists()
+        # Original manifest should be preserved
+        assert load_manifest(tmp_path) is not None

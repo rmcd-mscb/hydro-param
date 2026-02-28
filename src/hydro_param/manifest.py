@@ -82,18 +82,18 @@ class ManifestEntry(BaseModel):
     fingerprint: str
     static_files: dict[str, str] = {}
     temporal_files: dict[str, str] = {}
-    completed_at: datetime = datetime.min
+    completed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
 
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
         """Parse ISO date strings and accept empty strings for legacy manifests."""
         if isinstance(v, str):
-            return datetime.fromisoformat(v) if v else datetime.min
+            return datetime.fromisoformat(v) if v else datetime.min.replace(tzinfo=timezone.utc)
         return v
 
 
-class SIRSchemaEntry(TypedDict, total=False):
+class SIRSchemaEntry(TypedDict):
     """Schema metadata for a single SIR variable.
 
     Attributes
@@ -146,14 +146,14 @@ class SIRManifestEntry(BaseModel):
     static_files: dict[str, str] = {}
     temporal_files: dict[str, str] = {}
     sir_schema: list[SIRSchemaEntry] = []
-    completed_at: datetime = datetime.min
+    completed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
 
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
         """Parse ISO date strings and accept empty strings for legacy entries."""
         if isinstance(v, str):
-            return datetime.fromisoformat(v) if v else datetime.min
+            return datetime.fromisoformat(v) if v else datetime.min.replace(tzinfo=timezone.utc)
         return v
 
 
@@ -170,15 +170,17 @@ class PipelineManifest(BaseModel):
     version : int
         Manifest schema version.  Must be one of ``_SUPPORTED_VERSIONS``
         (currently {1, 2}).  Incompatible versions cause a validation error.
-    sir : SIRManifestEntry or None
-        SIR output tracking for Phase 2 consumers.  ``None`` for v1
-        manifests created before SIR normalization was implemented.
     fabric_fingerprint : str
         Fingerprint of the target fabric file (format:
         ``"{filename}|{mtime}|{size}"``).  Empty string for new
         manifests.
     entries : dict[str, ManifestEntry]
         Per-dataset manifest entries, keyed by dataset name.
+    sir : SIRManifestEntry or None
+        SIR output tracking for Phase 2 consumers.  ``None`` for v1
+        manifests created before SIR normalization was implemented,
+        and also valid for v2 manifests that have not yet run SIR
+        normalization.
     """
 
     version: int = _CURRENT_VERSION

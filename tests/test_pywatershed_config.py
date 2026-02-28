@@ -112,6 +112,21 @@ class TestPwsTimeConfig:
         with pytest.raises(ValidationError, match="Invalid date"):
             PwsTimeConfig(start="1980-10-01", end="2020-13-45")
 
+    def test_start_after_end_raises(self) -> None:
+        """Reversed date range is rejected."""
+        with pytest.raises(ValidationError, match="must be on or before"):
+            PwsTimeConfig(start="2021-01-01", end="2020-01-01")
+
+    def test_same_start_end_allowed(self) -> None:
+        """Same start and end date (single day) is valid."""
+        cfg = PwsTimeConfig(start="2020-06-15", end="2020-06-15")
+        assert cfg.start == "2020-06-15"
+
+    def test_empty_date_raises(self) -> None:
+        """Empty string date is rejected."""
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="", end="2020-12-31")
+
 
 class TestPwsOutputConfig:
     """Tests for output configuration, including cbh_dir migration."""

@@ -114,12 +114,12 @@ def get_data_categories(registry_path: Path | None = None) -> list[str]:
         categories = {entry.category for entry in reg.datasets.values() if entry.category}
         if categories:
             return sorted(categories | set(DEFAULT_CATEGORIES))
-    except Exception:
+    except (OSError, ValueError, KeyError) as exc:
         logger.warning(
             "Could not load registry at '%s' for category discovery; "
-            "using built-in defaults. Check that the registry file exists "
-            "and is valid YAML.",
+            "using built-in defaults. Error: %s",
             registry_path,
+            exc,
         )
     return list(DEFAULT_CATEGORIES)
 

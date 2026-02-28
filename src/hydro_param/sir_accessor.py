@@ -99,25 +99,28 @@ class SIRAccessor:
     def _validate_files(self) -> None:
         """Verify all referenced files exist on disk.
 
+        Check all static and temporal file references and report all
+        missing files in a single error, not just the first.  This is
+        performed eagerly at construction time so that all
+        ``FileNotFoundError`` exceptions surface at instantiation, not
+        during later ``load_variable()`` calls.
+
         Raises
         ------
         FileNotFoundError
             If any referenced file is missing.
         """
-        for name, rel_path in self._static.items():
+        missing: list[str] = []
+        for name, rel_path in {**self._static, **self._temporal}.items():
             full = self._output_dir / rel_path
             if not full.exists():
-                raise FileNotFoundError(
-                    f"SIR static file for '{name}' not found at {full}. "
-                    f"Re-run 'hydro-param run pipeline.yml' to regenerate."
-                )
-        for name, rel_path in self._temporal.items():
-            full = self._output_dir / rel_path
-            if not full.exists():
-                raise FileNotFoundError(
-                    f"SIR temporal file for '{name}' not found at {full}. "
-                    f"Re-run 'hydro-param run pipeline.yml' to regenerate."
-                )
+                missing.append(f"  '{name}' -> {full}")
+        if missing:
+            raise FileNotFoundError(
+                "Missing SIR files:\n"
+                + "\n".join(missing)
+                + "\nRe-run 'hydro-param run pipeline.yml' to regenerate."
+            )
 
     def available_variables(self) -> list[str]:
         """List all static SIR variable names.
@@ -141,7 +144,10 @@ class SIRAccessor:
 
     @property
     def data_vars(self) -> list[str]:
-        """Return static variable names (Dataset-compatible API).
+        """Return static variable names as a convenience list.
+
+        Unlike ``xr.Dataset.data_vars``, this returns a plain
+        ``list[str]``, not a mapping.
 
         Returns
         -------
@@ -255,13 +261,20 @@ class SIRAccessor:
         Check both static and temporal variable maps.  Use
         ``available_variables()`` or ``available_temporal()`` to query
         each map separately.
+
+        Notes
+        -----
+        ``__contains__`` checks both static and temporal keys, but
+        ``__getitem__`` only loads static variables.  Use
+        ``load_temporal()`` explicitly for temporal datasets.
         """
         return isinstance(name, str) and (name in self._static or name in self._temporal)
 
     def __getitem__(self, name: str) -> xr.DataArray:
-        """Load a variable by name (Dataset-compatible API).
+        """Load a static variable by name (Dataset-compatible API).
 
-        Equivalent to ``load_variable(name)``.
+        Equivalent to ``load_variable(name)``.  For temporal datasets,
+        use ``load_temporal()`` instead.
         """
         return self.load_variable(name)
 

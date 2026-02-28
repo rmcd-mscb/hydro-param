@@ -6,6 +6,7 @@ Processing tests are integration-level and require gdptools.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import geopandas as gpd
@@ -2344,7 +2345,7 @@ def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
         mock_temporal.return_value = mock_temporal_result
         mock_validate.return_value = []
 
-        sir_files, _schema, _warnings, _sir_manifest = stage5_normalize_sir(
+        sir_files, _schema, _warnings, sir_manifest = stage5_normalize_sir(
             stage4,
             resolved,
             config,  # type: ignore[arg-type]
@@ -2355,6 +2356,13 @@ def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
 
         # Result includes temporal files
         assert "tmmx_C_mean" in sir_files
+
+        # SIR manifest entry has correct structure
+        assert sir_manifest is not None
+        assert "tmmx_C_mean" in sir_manifest.temporal_files
+        assert sir_manifest.completed_at > datetime.min.replace(
+            tzinfo=sir_manifest.completed_at.tzinfo
+        )
 
 
 def test_stage5_skips_temporal_when_no_temporal_files(tmp_path: Path) -> None:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import datetime as _dt
 import warnings
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -97,6 +97,15 @@ class PwsTimeConfig(BaseModel):
         except ValueError:
             raise ValueError(f"Invalid date '{v}'. Expected ISO format (YYYY-MM-DD).") from None
         return v
+
+    @model_validator(mode="after")
+    def _check_date_order(self) -> Self:
+        """Validate that start date is on or before end date."""
+        start = _dt.date.fromisoformat(self.start)
+        end = _dt.date.fromisoformat(self.end)
+        if start > end:
+            raise ValueError(f"start ({self.start}) must be on or before end ({self.end}).")
+        return self
 
 
 class PwsParameterOverrides(BaseModel):
@@ -282,6 +291,13 @@ def load_pywatershed_config(path: str | Path) -> PywatershedRunConfig:
     pydantic.ValidationError
         If the config fails schema validation (missing required
         fields, type mismatches, extra fields).
+
+    Notes
+    -----
+    Path fields (``sir_path``, ``domain.fabric_path``, etc.) are
+    returned as-is from the YAML.  Relative paths are resolved against
+    the config file's parent directory by the CLI consumer
+    (``pws_run_cmd``), not by this loader.
     """
     with open(path) as f:
         raw = yaml.safe_load(f)

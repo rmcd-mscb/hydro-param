@@ -31,6 +31,7 @@ design.md : Full architecture document (section 4: pipeline stages,
     section 11: MVP implementation).
 hydro_param.config : Pydantic config schema consumed by every stage.
 hydro_param.sir : SIR normalization and validation utilities.
+hydro_param.sir_accessor : Lazy SIR loader used by Phase 2 plugins.
 """
 
 from __future__ import annotations

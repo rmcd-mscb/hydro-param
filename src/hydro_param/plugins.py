@@ -115,6 +115,17 @@ class DerivationContext:
                 f"fabric_id_field '{self.fabric_id_field}' not found in fabric columns. "
                 f"Available columns: {sorted(self.fabric.columns.tolist())}"
             )
+        # Validate SIR id_field lazily by probing the first variable
+        if self.sir.data_vars:
+            first_var = self.sir.data_vars[0]
+            first_da = self.sir[first_var]
+            if self.fabric_id_field not in first_da.dims:
+                raise KeyError(
+                    f"Expected dimension '{self.fabric_id_field}' not found in "
+                    f"SIR variable '{first_var}'. Available dims: "
+                    f"{list(first_da.dims)}. Ensure the pipeline was run with "
+                    f"the same id_field."
+                )
 
     @property
     def resolved_lookup_tables_dir(self) -> Path:

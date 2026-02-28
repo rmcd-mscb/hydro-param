@@ -84,6 +84,16 @@ class TestDerivationContext:
         with pytest.raises(AttributeError):
             ctx.fabric_id_field = "other"  # type: ignore[misc]
 
+    def test_sir_id_field_mismatch_raises(self, tmp_path: Path) -> None:
+        """SIR variable indexed by wrong id_field raises KeyError at init."""
+        sir = _make_sir_accessor(
+            tmp_path,
+            variables={"elev": [1.0, 2.0]},
+            index_name="nhm_id",
+        )
+        with pytest.raises(KeyError, match="Expected dimension 'featureid'"):
+            DerivationContext(sir=sir, fabric_id_field="featureid")
+
 
 class TestProtocolSatisfaction:
     """Verify plugin implementations satisfy their protocols."""

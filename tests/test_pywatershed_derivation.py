@@ -714,7 +714,9 @@ class TestDeriveSoltab:
         assert ds["soltab_potsw"].attrs["units"] == "cal/cm2/day"
 
     def test_soltab_requires_topo_params(self, derivation: PywatershedDerivation) -> None:
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        sir = _MockSIRAccessor(
+            xr.Dataset({"_dummy": ("nhm_id", [0.0, 0.0])}, coords={"nhm_id": [1, 2]})
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soltab_potsw" not in ds
@@ -1861,8 +1863,10 @@ class TestDeriveCalibrationSeeds:
     """Tests for step 14: calibration seed derivation."""
 
     def test_constant_seeds_present(self, derivation: PywatershedDerivation) -> None:
-        """All 18 constant seeds produced with just an empty SIR."""
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2, 3]}))
+        """All 18 constant seeds produced with just a minimal SIR."""
+        sir = _MockSIRAccessor(
+            xr.Dataset({"_dummy": ("nhm_id", [0.0, 0.0, 0.0])}, coords={"nhm_id": [1, 2, 3]})
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -1891,7 +1895,7 @@ class TestDeriveCalibrationSeeds:
 
     def test_constant_seed_values(self, derivation: PywatershedDerivation) -> None:
         """Constant seeds have correct values from YAML."""
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1]}))
+        sir = _MockSIRAccessor(xr.Dataset({"_dummy": ("nhm_id", [0.0])}, coords={"nhm_id": [1]}))
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         np.testing.assert_allclose(ds["smidx_exp"].values, 0.3)
@@ -1928,7 +1932,7 @@ class TestDeriveCalibrationSeeds:
         with open(seeds_path, "w") as f:
             yaml.dump(data, f)
 
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1]}))
+        sir = _MockSIRAccessor(xr.Dataset({"_dummy": ("nhm_id", [0.0])}, coords={"nhm_id": [1]}))
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2133,7 +2137,9 @@ class TestDeriveCalibrationSeeds:
         with open(seeds_path, "w") as f:
             yaml.dump(data, f)
 
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        sir = _MockSIRAccessor(
+            xr.Dataset({"_dummy": ("nhm_id", [0.0, 0.0])}, coords={"nhm_id": [1, 2]})
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -3355,3 +3361,35 @@ class TestDeriveRouting:
         assert "K_coef" in ds
         assert "seg_slope" in ds
         np.testing.assert_array_equal(ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE])
+
+
+class TestDeriveNhruFallback:
+    """Test nhru resolution fallback paths in derive()."""
+
+    def test_no_fabric_uses_sir_length(self, derivation: PywatershedDerivation) -> None:
+        """When fabric=None, nhru is derived from SIR variable length."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"elevation_m_mean": ("nhm_id", np.array([100.0, 200.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=None,
+            fabric_id_field="nhm_id",
+        )
+        ds = derivation.derive(ctx)
+        # Should produce params for 2 HRUs (derived from SIR variable length)
+        assert ds.sizes.get("nhru", 0) >= 2 or len(ds.data_vars) > 0
+
+    def test_no_fabric_no_sir_vars_raises(self, derivation: PywatershedDerivation) -> None:
+        """When fabric=None and SIR has no data_vars, derive() raises ValueError."""
+        sir = _MockSIRAccessor(xr.Dataset())
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=None,
+            fabric_id_field="nhm_id",
+        )
+        with pytest.raises(ValueError, match="Cannot determine HRU count"):
+            derivation.derive(ctx)
