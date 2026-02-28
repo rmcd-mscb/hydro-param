@@ -285,6 +285,12 @@ def load_config(path: str | Path) -> PipelineConfig:
     construction, so any schema violations raise immediately with
     descriptive error messages.
 
+    After validation, all relative paths (``target_fabric.path``,
+    ``output.path``, per-dataset ``source``) are resolved to absolute
+    paths using the current working directory.  This ensures that
+    downstream operations (manifest save/load, file existence checks)
+    work consistently regardless of internal path manipulation.
+
     Parameters
     ----------
     path : str or Path
@@ -293,7 +299,8 @@ def load_config(path: str | Path) -> PipelineConfig:
     Returns
     -------
     PipelineConfig
-        Validated pipeline configuration ready for
+        Validated pipeline configuration with all paths resolved to
+        absolute paths, ready for
         :func:`~hydro_param.pipeline.run_pipeline_from_config`.
 
     Raises
@@ -304,7 +311,46 @@ def load_config(path: str | Path) -> PipelineConfig:
         If the file is not valid YAML.
     pydantic.ValidationError
         If the YAML content does not match the config schema.
+
+    Notes
+    -----
+    Relative paths in the YAML are interpreted relative to the current
+    working directory (the standard convention when running
+    ``hydro-param run configs/pipeline.yml`` from the project root).
+    Absolute paths are left unchanged.
     """
     with open(path) as f:
         raw = yaml.safe_load(f)
-    return PipelineConfig(**raw)
+    config = PipelineConfig(**raw)
+    return _resolve_paths(config)
+
+
+def _resolve_paths(config: PipelineConfig) -> PipelineConfig:
+    """Resolve all relative paths in a PipelineConfig to absolute.
+
+    Convert ``target_fabric.path``, ``output.path``, and per-dataset
+    ``source`` fields from relative to absolute using
+    ``Path.resolve()`` (which anchors to the current working directory).
+    Absolute paths remain absolute.
+
+    Parameters
+    ----------
+    config : PipelineConfig
+        Configuration with potentially relative paths.
+
+    Returns
+    -------
+    PipelineConfig
+        The same *config* object with path fields resolved in place.
+
+    Notes
+    -----
+    This function mutates *config* in place and returns the same object
+    for call-chaining convenience.  No copy is made.
+    """
+    config.target_fabric.path = config.target_fabric.path.resolve()
+    config.output.path = config.output.path.resolve()
+    for ds in config.datasets:
+        if ds.source is not None:
+            ds.source = ds.source.resolve()
+    return config
