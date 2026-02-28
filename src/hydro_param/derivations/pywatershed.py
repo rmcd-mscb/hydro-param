@@ -53,6 +53,7 @@ import xarray as xr
 import yaml
 
 from hydro_param.plugins import DerivationContext
+from hydro_param.sir_accessor import SIRAccessor
 from hydro_param.solar import compute_soltab
 from hydro_param.units import convert
 
@@ -1464,7 +1465,7 @@ class PywatershedDerivation:
 
     @staticmethod
     def _compute_majority_from_fractions(
-        sir: xr.Dataset,
+        sir: SIRAccessor,
         prefixes: tuple[str, ...] = ("lndcov_frac_",),
     ) -> np.ndarray | None:
         """Compute majority NLCD class from categorical fraction columns.
@@ -1479,7 +1480,7 @@ class PywatershedDerivation:
 
         Parameters
         ----------
-        sir : xr.Dataset
+        sir : SIRAccessor
             SIR dataset potentially containing fraction columns.
         prefixes : tuple[str, ...]
             Variable name prefixes to search for (default:
@@ -1641,7 +1642,7 @@ class PywatershedDerivation:
 
         return ds
 
-    def _compute_soil_type(self, sir: xr.Dataset, ctx: DerivationContext) -> np.ndarray | None:
+    def _compute_soil_type(self, sir: SIRAccessor, ctx: DerivationContext) -> np.ndarray | None:
         """Compute PRMS soil_type from SIR soil texture data.
 
         Try fraction columns first (argmax across texture classes), then
@@ -1650,7 +1651,7 @@ class PywatershedDerivation:
 
         Parameters
         ----------
-        sir : xr.Dataset
+        sir : SIRAccessor
             SIR dataset with soil texture variables.
         ctx : DerivationContext
             Derivation context providing the lookup tables directory.
@@ -1892,7 +1893,7 @@ class PywatershedDerivation:
         area_by_hru = intersections.groupby(id_field)["_clip_area_m2"].sum()
 
         # Vectorized alignment to fabric HRU order
-        hru_ids = ctx.fabric[id_field].values
+        hru_ids = fabric[id_field].values
         clipped_acres = area_by_hru.reindex(hru_ids, fill_value=0.0).values / _M2_PER_ACRE
 
         # Compute fraction from hru_area (already in acres from step 1)

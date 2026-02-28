@@ -58,7 +58,7 @@ class _MockSIRAccessor:
         return self._ds[name]
 
     def load_temporal(self, name: str) -> xr.Dataset:
-        raise KeyError(f"No temporal data in mock accessor")
+        raise KeyError("No temporal data in mock accessor")
 
     def __contains__(self, name: object) -> bool:
         return isinstance(name, str) and name in self._ds
@@ -153,9 +153,7 @@ def sir_full(
     sir_geometry: _MockSIRAccessor,
 ) -> _MockSIRAccessor:
     """Synthetic SIR with all foundation data."""
-    return _MockSIRAccessor(
-        xr.merge([sir_topography._ds, sir_landcover._ds, sir_geometry._ds])
-    )
+    return _MockSIRAccessor(xr.merge([sir_topography._ds, sir_landcover._ds, sir_geometry._ds]))
 
 
 @pytest.fixture()
@@ -348,10 +346,12 @@ class TestDeriveLandcover:
 
     def test_covden_fallback_without_canopy(self, derivation: PywatershedDerivation) -> None:
         """When tree_canopy is absent, covden_sum uses lookup fallback."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"land_cover": ("nhm_id", np.array([42, 71]))},
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"land_cover": ("nhm_id", np.array([42, 71]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "covden_sum" in ds
@@ -397,15 +397,17 @@ class TestDeriveSoils:
 
     def test_soil_moist_max_clipped(self, derivation: PywatershedDerivation) -> None:
         """Very low AWC clips to 0.5 inches, very high clips to 20.0 inches."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
-                "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
-                "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
-                "awc_mm_mean": ("nhm_id", np.array([1.0, 1000.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                    "awc_mm_mean": ("nhm_id", np.array([1.0, 1000.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         # 1.0mm / 25.4 = 0.039 inches -> clips to 0.5
@@ -415,10 +417,12 @@ class TestDeriveSoils:
 
     def test_soils_missing_sir_vars(self, derivation: PywatershedDerivation) -> None:
         """Graceful skip when no soil data in SIR."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" not in ds
@@ -427,13 +431,15 @@ class TestDeriveSoils:
 
     def test_soil_type_single_value_fallback(self, derivation: PywatershedDerivation) -> None:
         """Falls back to single soil_texture variable if no fractions."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "soil_texture": ("nhm_id", np.array(["clay", "sand", "loam"])),
-                "awc_mm_mean": ("nhm_id", np.array([80.0, 60.0, 100.0])),
-            },
-            coords={"nhm_id": [1, 2, 3]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture": ("nhm_id", np.array(["clay", "sand", "loam"])),
+                    "awc_mm_mean": ("nhm_id", np.array([80.0, 60.0, 100.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" in ds
@@ -442,13 +448,15 @@ class TestDeriveSoils:
 
     def test_soil_texture_majority_fallback(self, derivation: PywatershedDerivation) -> None:
         """Falls back to soil_texture_majority when soil_texture absent."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "soil_texture_majority": ("nhm_id", np.array(["sand", "clay"])),
-                "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_majority": ("nhm_id", np.array(["sand", "clay"])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" in ds
@@ -456,13 +464,15 @@ class TestDeriveSoils:
 
     def test_unknown_texture_defaults_to_loam(self, derivation: PywatershedDerivation) -> None:
         """Unrecognized texture class defaults to loam (soil_type=2) with warning."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "soil_texture": ("nhm_id", np.array(["sand", "organic", "clay"])),
-                "awc_mm_mean": ("nhm_id", np.array([50.0, 70.0, 80.0])),
-            },
-            coords={"nhm_id": [1, 2, 3]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture": ("nhm_id", np.array(["sand", "organic", "clay"])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 70.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         # sand -> 1, organic (unknown) -> 2 (loam default), clay -> 3
@@ -472,15 +482,17 @@ class TestDeriveSoils:
         self, derivation: PywatershedDerivation
     ) -> None:
         """Fraction columns with names not in lookup table are filtered out."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "soil_texture_frac_sand": ("nhm_id", np.array([0.6, 0.2])),
-                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.7])),
-                "soil_texture_frac_bogus": ("nhm_id", np.array([0.1, 0.1])),
-                "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.6, 0.2])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.7])),
+                    "soil_texture_frac_bogus": ("nhm_id", np.array([0.1, 0.1])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" in ds
@@ -489,10 +501,12 @@ class TestDeriveSoils:
 
     def test_soil_moist_max_without_soil_type(self, derivation: PywatershedDerivation) -> None:
         """soil_moist_max produced even when no texture data (soil_type absent)."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"awc_mm_mean": ("nhm_id", np.array([100.0]))},
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"awc_mm_mean": ("nhm_id", np.array([100.0]))},
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_moist_max" in ds
@@ -552,10 +566,12 @@ class TestApplyDefaults:
 
     def test_defaults_not_overwritten(self, derivation: PywatershedDerivation) -> None:
         """If a default param is already derived from data, it's preserved."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         # hru_elev was derived from data, not from defaults
@@ -606,10 +622,12 @@ class TestLandCoverMajorityFallback:
     """Tests for land_cover_majority variable name fallback."""
 
     def test_land_cover_majority_accepted(self, derivation: PywatershedDerivation) -> None:
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"land_cover_majority": ("nhm_id", np.array([42, 71]))},
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"land_cover_majority": ("nhm_id", np.array([42, 71]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "cov_type" in ds
@@ -1209,13 +1227,15 @@ class TestDeriveGeometryFromFabric:
 
     def test_fabric_geometry_overrides_sir(self, derivation: PywatershedDerivation) -> None:
         """When fabric is provided, SIR hru_area_m2/hru_lat are ignored."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "hru_area_m2": ("nhm_id", np.array([1.0, 1.0])),
-                "hru_lat": ("nhm_id", np.array([0.0, 0.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([1.0, 1.0])),
+                    "hru_lat": ("nhm_id", np.array([0.0, 0.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
             geometry=[
@@ -1251,15 +1271,17 @@ class TestCategoricalFractionMajority:
 
     def test_majority_from_lndcov_fractions(self, derivation: PywatershedDerivation) -> None:
         """Majority class extracted from lndcov_frac_ fraction columns."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "lndcov_frac_11": ("nhm_id", np.array([0.1, 0.0, 0.0])),
-                "lndcov_frac_41": ("nhm_id", np.array([0.8, 0.1, 0.2])),
-                "lndcov_frac_42": ("nhm_id", np.array([0.05, 0.0, 0.7])),
-                "lndcov_frac_71": ("nhm_id", np.array([0.05, 0.9, 0.1])),
-            },
-            coords={"nhm_id": [1, 2, 3]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_11": ("nhm_id", np.array([0.1, 0.0, 0.0])),
+                    "lndcov_frac_41": ("nhm_id", np.array([0.8, 0.1, 0.2])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.05, 0.0, 0.7])),
+                    "lndcov_frac_71": ("nhm_id", np.array([0.05, 0.9, 0.1])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "cov_type" in ds
@@ -1272,10 +1294,12 @@ class TestCategoricalFractionMajority:
 
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
         """When no fraction columns exist, falls back to land_cover."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {"land_cover": ("nhm_id", np.array([42, 71]))},
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"land_cover": ("nhm_id", np.array([42, 71]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "cov_type" in ds
@@ -1490,14 +1514,16 @@ class TestFractionSuffixDebugLog:
         """Debug log emitted when fraction variable has non-integer suffix."""
         import logging
 
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "lndcov_frac_11": ("nhm_id", np.array([0.8, 0.2])),
-                "lndcov_frac_42": ("nhm_id", np.array([0.2, 0.8])),
-                "lndcov_frac_meta": ("nhm_id", np.array([0.0, 0.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_11": ("nhm_id", np.array([0.8, 0.2])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.2, 0.8])),
+                    "lndcov_frac_meta": ("nhm_id", np.array([0.0, 0.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         with caplog.at_level(logging.DEBUG, logger="hydro_param.derivations.pywatershed"):
             derivation.derive(ctx)
@@ -1918,12 +1944,14 @@ class TestDeriveCalibrationSeeds:
 
     def test_linear_seed_carea_max(self, derivation: PywatershedDerivation) -> None:
         """carea_max = 0.6 * hru_percent_imperv + 0.2."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 50.0, 0.0])),
-            },
-            coords={"nhm_id": [1, 2, 3]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "fctimp_pct_mean": ("nhm_id", np.array([10.0, 50.0, 0.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -1935,15 +1963,17 @@ class TestDeriveCalibrationSeeds:
 
     def test_exponential_seed_smidx_coef(self, derivation: PywatershedDerivation) -> None:
         """smidx_coef = 0.005 * exp(3.0 * hru_slope)."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([100.0, 200.0])),
-                "slope_deg_mean": ("nhm_id", np.array([5.0, 10.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
-                "hru_lat": ("nhm_id", np.array([42.0, 42.0])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 200.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 10.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 42.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -1955,15 +1985,17 @@ class TestDeriveCalibrationSeeds:
 
     def test_fraction_of_seed(self, derivation: PywatershedDerivation) -> None:
         """soil2gw_max = 0.1 * soil_moist_max."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "awc_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
-                "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
-                "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
-                "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
-            },
-            coords={"nhm_id": [1, 2, 3]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -1984,15 +2016,17 @@ class TestDeriveCalibrationSeeds:
 
     def test_range_clipping(self, derivation: PywatershedDerivation) -> None:
         """Very steep slope -> smidx_coef clipped to 0.06."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([100.0])),
-                "slope_deg_mean": ("nhm_id", np.array([80.0])),  # Very steep
-                "aspect_deg_mean": ("nhm_id", np.array([0.0])),
-                "hru_lat": ("nhm_id", np.array([42.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([80.0])),  # Very steep
+                    "aspect_deg_mean": ("nhm_id", np.array([0.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -2016,20 +2050,22 @@ class TestDeriveCalibrationSeeds:
 
     def test_all_seeds_produced(self, derivation: PywatershedDerivation) -> None:
         """All 22 seeds present when inputs are available."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([500.0, 1000.0])),
-                "slope_deg_mean": ("nhm_id", np.array([10.0, 20.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0, 270.0])),
-                "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
-                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
-                "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
-                "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
-                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
-                "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([500.0, 1000.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([10.0, 20.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0, 270.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
+                    "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -2355,16 +2391,18 @@ class TestDeriveTranspTiming:
                 coords={"time": times, "nhm_id": [1]},
             )
         }
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([100.0])),
-                "slope_deg_mean": ("nhm_id", np.array([5.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
-                "hru_lat": ("nhm_id", np.array([30.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                    "hru_lat": ("nhm_id", np.array([30.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
         ds = derivation.derive(ctx)
         assert ds["transp_beg"].values[0] == 1
@@ -2389,16 +2427,18 @@ class TestDeriveTranspTiming:
                 coords={"time": times, "nhm_id": [1]},
             )
         }
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([2000.0])),
-                "slope_deg_mean": ("nhm_id", np.array([10.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
-                "hru_lat": ("nhm_id", np.array([45.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([2000.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([10.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                    "hru_lat": ("nhm_id", np.array([45.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
         ds = derivation.derive(ctx)
         # June onset (month 6) expected
@@ -2452,23 +2492,25 @@ class TestDeriveIntegrationPetTransp:
             "gridmet_2021": _make_ds(2021),
         }
 
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([200.0, 800.0])),
-                "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0, 90.0])),
-                "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0])),
-                "land_cover": ("nhm_id", np.array([42, 71])),
-                "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
-                "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0])),
-                "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
-                "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
-                "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
-                "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([200.0, 800.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0, 90.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 43.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0, 8093712.0])),
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                    "fctimp_pct_mean": ("nhm_id", np.array([10.0, 5.0])),
+                    "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.2])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.6])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
 
         ctx = DerivationContext(
             sir=sir,
@@ -2510,16 +2552,18 @@ class TestClimateNormalsEdgeCases:
                 coords={"time": times, "nhm_id": [1]},
             )
         }
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([3000.0])),
-                "slope_deg_mean": ("nhm_id", np.array([10.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
-                "hru_lat": ("nhm_id", np.array([70.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([3000.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([10.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                    "hru_lat": ("nhm_id", np.array([70.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
         ds = derivation.derive(ctx)
         # Never thaws -> default April
@@ -2541,16 +2585,18 @@ class TestClimateNormalsEdgeCases:
                 coords={"time": times, "nhm_id": [1]},
             )
         }
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([50.0])),
-                "slope_deg_mean": ("nhm_id", np.array([2.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
-                "hru_lat": ("nhm_id", np.array([25.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([50.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([2.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                    "hru_lat": ("nhm_id", np.array([25.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
         ds = derivation.derive(ctx)
         # Never freezes -> beg=1 (January), end=10 (default October)
@@ -2572,16 +2618,18 @@ class TestClimateNormalsEdgeCases:
                 coords={"time": times, "nhm_id": [1]},
             )
         }
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "elevation_m_mean": ("nhm_id", np.array([500.0])),
-                "slope_deg_mean": ("nhm_id", np.array([5.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([180.0])),
-                "hru_lat": ("nhm_id", np.array([42.0])),
-                "hru_area_m2": ("nhm_id", np.array([4046856.0])),
-            },
-            coords={"nhm_id": [1]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([180.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0])),
+                    "hru_area_m2": ("nhm_id", np.array([4046856.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", temporal=temporal)
         # Normals should return None -> defaults used
         result = derivation._compute_monthly_normals(ctx)
@@ -2845,17 +2893,19 @@ class TestDeriveIntegrationWaterbody:
 
     def test_full_derive_with_waterbodies(self, derivation, waterbody_fabric):
         """Full pipeline produces waterbody params when waterbodies provided."""
-        sir = _MockSIRAccessor(xr.Dataset(
-            {
-                "hru_area_m2": ("nhm_id", np.array([10000.0, 10000.0])),
-                "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0])),
-                "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
-                "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
-                "hru_lat": ("nhm_id", np.array([42.0, 41.5])),
-                "land_cover": ("nhm_id", np.array([42, 71])),
-            },
-            coords={"nhm_id": [1, 2]},
-        ))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "hru_area_m2": ("nhm_id", np.array([10000.0, 10000.0])),
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 41.5])),
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         wb = gpd.GeoDataFrame(
             {
                 "comid": [101],

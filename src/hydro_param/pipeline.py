@@ -1332,7 +1332,12 @@ def stage5_normalize_sir(
     stage4: Stage4Results,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
     config: PipelineConfig,
-) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning], _manifest_mod.SIRManifestEntry]:
+) -> tuple[
+    dict[str, Path],
+    list[SIRVariableSchema],
+    list[SIRValidationWarning],
+    _manifest_mod.SIRManifestEntry,
+]:
     """Stage 5: Normalize raw stage 4 output to canonical SIR format.
 
     Build a SIR schema from the resolved datasets, then normalize each
@@ -1531,6 +1536,10 @@ def run_pipeline_from_config(
         sir_files, sir_schema, sir_warnings, sir_manifest_entry = stage5_normalize_sir(
             results, resolved, config
         )
+        # Load manifest written by stage4 and append SIR section
+        manifest = _manifest_mod.load_manifest(config.output.path)
+        if manifest is None:
+            manifest = _manifest_mod.PipelineManifest()
         manifest.sir = sir_manifest_entry
         _save_manifest_to_disk(manifest, config.output.path)
         logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)

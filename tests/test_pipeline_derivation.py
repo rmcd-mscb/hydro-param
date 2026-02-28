@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import xarray as xr
 
 from hydro_param.pipeline import PipelineResult

@@ -162,8 +162,7 @@ class SIRAccessor:
         """
         if name not in self._static:
             raise KeyError(
-                f"SIR variable '{name}' not found. "
-                f"Available: {sorted(self._static.keys())}"
+                f"SIR variable '{name}' not found. Available: {sorted(self._static.keys())}"
             )
         path = self._output_dir / self._static[name]
         df = pd.read_csv(path, index_col=0)

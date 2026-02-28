@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 
 from hydro_param.plugins import (
     DerivationContext,
@@ -18,6 +16,7 @@ from hydro_param.plugins import (
     get_derivation,
     get_formatter,
 )
+from hydro_param.sir_accessor import SIRAccessor
 
 
 def _make_sir_accessor(
@@ -25,7 +24,7 @@ def _make_sir_accessor(
     variables: dict[str, list[float]] | None = None,
     index_name: str = "nhm_id",
     index_values: list[int] | None = None,
-) -> "SIRAccessor":
+) -> SIRAccessor:
     """Create a SIRAccessor from simple variable data for testing."""
     from hydro_param.manifest import PipelineManifest, SIRManifestEntry
     from hydro_param.sir_accessor import SIRAccessor

@@ -748,7 +748,6 @@ def _setup_pws_project(tmp_path: Path) -> tuple[Path, Path]:
         (fabric_path, sir_output_dir)
     """
     import geopandas as gpd
-    import numpy as np
     import pandas as pd
     from shapely.geometry import box
 
