@@ -186,6 +186,12 @@ class TestGeneratePipelineTemplate:
         assert "year" in datasets_by_name["nlcd_osn_lndcov"]
         assert "year" in datasets_by_name["nlcd_osn_fctimp"]
 
+    def test_template_enables_resume_by_default(self):
+        """Generated template includes resume: true in processing section."""
+        content = generate_pipeline_template("test_project")
+        parsed = yaml.safe_load(content)
+        assert parsed["processing"]["resume"] is True
+
     def test_template_conforms_to_pipeline_config_schema(self):
         """Generated template must parse against PipelineConfig without error."""
         from hydro_param.config import PipelineConfig
@@ -195,6 +201,7 @@ class TestGeneratePipelineTemplate:
         config = PipelineConfig(**parsed)
         assert config.processing.engine == "exactextract"
         assert config.processing.batch_size == 500
+        assert config.processing.resume is True
         assert config.output.format == "netcdf"
 
 

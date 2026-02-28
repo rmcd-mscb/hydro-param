@@ -113,7 +113,9 @@ def test_dataset_request_source_from_yaml(tmp_path: Path):
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
-    assert config.datasets[0].source == Path("data/nlcd.tif")
+    assert config.datasets[0].source is not None
+    assert config.datasets[0].source.is_absolute()
+    assert config.datasets[0].source.name == "nlcd.tif"
 
 
 def test_target_fabric_requires_path_and_id():
@@ -324,3 +326,58 @@ def test_processing_config_network_timeout_rejects_negative() -> None:
     """network_timeout rejects negative values."""
     with pytest.raises(ValueError):
         ProcessingConfig(network_timeout=-10)
+
+
+# ---------------------------------------------------------------------------
+# Path resolution in load_config
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_resolves_relative_paths(tmp_path: Path):
+    """load_config resolves relative paths to absolute."""
+    raw = {
+        "target_fabric": {"path": "data/catchments.gpkg", "id_field": "id"},
+        "datasets": [
+            {"name": "dem", "variables": ["elevation"]},
+        ],
+        "output": {"path": "output"},
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert config.target_fabric.path.is_absolute()
+    assert config.output.path.is_absolute()
+
+
+def test_load_config_preserves_absolute_paths(tmp_path: Path):
+    """load_config does not modify already-absolute paths."""
+    raw = {
+        "target_fabric": {"path": "/abs/data/catchments.gpkg", "id_field": "id"},
+        "datasets": [],
+        "output": {"path": "/abs/output"},
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert str(config.target_fabric.path) == "/abs/data/catchments.gpkg"
+    assert str(config.output.path) == "/abs/output"
+
+
+def test_load_config_resolves_dataset_source(tmp_path: Path):
+    """load_config resolves relative dataset source paths to absolute."""
+    raw = {
+        "target_fabric": {"path": "fabric.gpkg", "id_field": "id"},
+        "datasets": [
+            {"name": "nlcd", "source": "data/nlcd.tif", "variables": ["lc"]},
+            {"name": "dem", "variables": ["elevation"]},
+        ],
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert config.datasets[0].source is not None
+    assert config.datasets[0].source.is_absolute()
+    assert config.datasets[1].source is None

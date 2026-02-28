@@ -235,6 +235,7 @@ output:
 processing:
   engine: exactextract                    # exactextract or serial
   batch_size: 500                         # Number of features per spatial batch
+  resume: true                            # Skip already-completed datasets on re-run
 """
 
 
