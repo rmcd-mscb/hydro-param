@@ -2344,7 +2344,7 @@ def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
         mock_temporal.return_value = mock_temporal_result
         mock_validate.return_value = []
 
-        sir_files, _schema, _warnings = stage5_normalize_sir(
+        sir_files, _schema, _warnings, _sir_manifest = stage5_normalize_sir(
             stage4,
             resolved,
             config,  # type: ignore[arg-type]

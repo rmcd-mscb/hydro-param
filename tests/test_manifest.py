@@ -329,3 +329,70 @@ def test_make_manifest_entry_relative_paths(tmp_path: Path):
     assert entry.static_files["elevation"] == "topo/elevation.csv"
     assert entry.fingerprint == "sha256:abc"
     assert entry.completed_at > datetime.min.replace(tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# SIRManifestEntry and version 2
+# ---------------------------------------------------------------------------
+
+
+class TestSIRManifestEntry:
+    """Test the SIR section of the pipeline manifest."""
+
+    def test_sir_manifest_entry_defaults(self):
+        from hydro_param.manifest import SIRManifestEntry
+
+        entry = SIRManifestEntry()
+        assert entry.static_files == {}
+        assert entry.temporal_files == {}
+        assert entry.sir_schema == []
+
+    def test_sir_manifest_entry_roundtrip(self):
+        from hydro_param.manifest import SIRManifestEntry
+
+        entry = SIRManifestEntry(
+            static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
+            temporal_files={"gridmet_2020": "sir/gridmet_2020.nc"},
+            sir_schema=[{"name": "elevation_m_mean", "units": "m", "statistic": "mean"}],
+        )
+        data = entry.model_dump(mode="json")
+        restored = SIRManifestEntry(**data)
+        assert restored.static_files == entry.static_files
+        assert restored.temporal_files == entry.temporal_files
+        assert restored.sir_schema == entry.sir_schema
+
+    def test_manifest_version_2_with_sir(self, tmp_path):
+        from hydro_param.manifest import SIRManifestEntry
+
+        sir = SIRManifestEntry(
+            static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
+        )
+        manifest = PipelineManifest(version=2, sir=sir)
+        manifest.save(tmp_path)
+
+        loaded = load_manifest(tmp_path)
+        assert loaded is not None
+        assert loaded.version == 2
+        assert loaded.sir is not None
+        assert loaded.sir.static_files == {"elevation_m_mean": "sir/elevation_m_mean.csv"}
+
+    def test_manifest_version_1_has_no_sir(self, tmp_path):
+        """Version 1 manifests loaded as version 2 should have sir=None."""
+        manifest = PipelineManifest(sir=None)
+        manifest.save(tmp_path)
+
+        loaded = load_manifest(tmp_path)
+        assert loaded is not None
+        assert loaded.sir is None
+
+    def test_manifest_atomic_write(self, tmp_path):
+        """Manifest save should be atomic (no partial writes)."""
+        from hydro_param.manifest import SIRManifestEntry
+
+        sir = SIRManifestEntry(static_files={"a": "sir/a.csv"})
+        manifest = PipelineManifest(sir=sir)
+        manifest.save(tmp_path)
+        # File should exist and be valid
+        assert load_manifest(tmp_path) is not None
+        # No .tmp file should remain
+        assert not (tmp_path / ".manifest.yml.tmp").exists()

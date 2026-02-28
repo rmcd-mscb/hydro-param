@@ -1332,7 +1332,7 @@ def stage5_normalize_sir(
     stage4: Stage4Results,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
     config: PipelineConfig,
-) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]:
+) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning], _manifest_mod.SIRManifestEntry]:
     """Stage 5: Normalize raw stage 4 output to canonical SIR format.
 
     Build a SIR schema from the resolved datasets, then normalize each
@@ -1356,10 +1356,11 @@ def stage5_normalize_sir(
 
     Returns
     -------
-    tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]
+    tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning], SIRManifestEntry]
         - Normalized SIR file paths (``sir/`` subdirectory)
         - Schema entries describing each SIR variable
         - Validation warnings (empty if all checks pass)
+        - SIR manifest entry for persisting to the pipeline manifest
 
     Raises
     ------
@@ -1405,7 +1406,24 @@ def stage5_normalize_sir(
     else:
         logger.info("  SIR validation: passed")
 
-    return sir_files, schema, warnings
+    # Build SIR manifest entry for Phase 2 discovery
+    output_path = config.output.path
+    sir_manifest = _manifest_mod.SIRManifestEntry(
+        static_files={
+            k: str(v.relative_to(output_path))
+            for k, v in sir_files.items()
+            if str(v).endswith(".csv")
+        },
+        temporal_files={
+            k: str(v.relative_to(output_path))
+            for k, v in sir_files.items()
+            if str(v).endswith(".nc")
+        },
+        sir_schema=[s.model_dump() if hasattr(s, "model_dump") else s.__dict__ for s in schema],
+        completed_at=datetime.now(timezone.utc),
+    )
+
+    return sir_files, schema, warnings, sir_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -1510,7 +1528,11 @@ def run_pipeline_from_config(
 
         # Stage 5: Normalize SIR
         t5 = time.perf_counter()
-        sir_files, sir_schema, sir_warnings = stage5_normalize_sir(results, resolved, config)
+        sir_files, sir_schema, sir_warnings, sir_manifest_entry = stage5_normalize_sir(
+            results, resolved, config
+        )
+        manifest.sir = sir_manifest_entry
+        _save_manifest_to_disk(manifest, config.output.path)
         logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)
 
         elapsed = time.perf_counter() - t0

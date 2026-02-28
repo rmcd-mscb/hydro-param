@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = ".manifest.yml"
 
-_SUPPORTED_VERSION = 1
+_SUPPORTED_VERSIONS = {1, 2}
+_CURRENT_VERSION = 2
 
 
 class ManifestEntry(BaseModel):
@@ -86,6 +87,41 @@ class ManifestEntry(BaseModel):
         return v
 
 
+class SIRManifestEntry(BaseModel):
+    """Track normalized SIR output from stage 5.
+
+    Record the file paths, schema metadata, and completion time for
+    the SIR normalization step.  Used by Phase 2 (model plugins) to
+    discover what the pipeline produced without re-running it.
+
+    Attributes
+    ----------
+    static_files : dict[str, str]
+        Mapping of SIR variable names to file paths relative to the
+        output directory (e.g., ``{"elevation_m_mean": "sir/elevation_m_mean.csv"}``).
+    temporal_files : dict[str, str]
+        Mapping of temporal dataset keys to file paths relative to the
+        output directory (e.g., ``{"gridmet_2020": "sir/gridmet_2020.nc"}``).
+    sir_schema : list[dict]
+        Serialized SIR variable schema entries from ``build_sir_schema()``.
+    completed_at : datetime
+        UTC timestamp when SIR normalization completed.
+    """
+
+    static_files: dict[str, str] = {}
+    temporal_files: dict[str, str] = {}
+    sir_schema: list[dict] = []
+    completed_at: datetime = datetime.min
+
+    @field_validator("completed_at", mode="before")
+    @classmethod
+    def _parse_completed_at(cls, v: object) -> object:
+        """Parse ISO date strings and accept empty strings for legacy entries."""
+        if isinstance(v, str):
+            return datetime.fromisoformat(v) if v else datetime.min
+        return v
+
+
 class PipelineManifest(BaseModel):
     """Record what configuration produced each output file.
 
@@ -107,20 +143,27 @@ class PipelineManifest(BaseModel):
         Per-dataset manifest entries, keyed by dataset name.
     """
 
-    version: int = _SUPPORTED_VERSION
+    version: int = _CURRENT_VERSION
     fabric_fingerprint: str = ""
     entries: dict[str, ManifestEntry] = {}
+    sir: SIRManifestEntry | None = None
 
     @field_validator("version")
     @classmethod
     def _check_version(cls, v: int) -> int:
         """Reject manifest versions that don't match the current schema."""
-        if v != _SUPPORTED_VERSION:
-            raise ValueError(f"Unsupported manifest version {v} (expected {_SUPPORTED_VERSION})")
+        if v not in _SUPPORTED_VERSIONS:
+            raise ValueError(
+                f"Unsupported manifest version {v} (expected one of {sorted(_SUPPORTED_VERSIONS)})"
+            )
         return v
 
     def save(self, output_dir: Path) -> None:
-        """Write the manifest to ``{output_dir}/.manifest.yml``.
+        """Write the manifest atomically to ``{output_dir}/.manifest.yml``.
+
+        Write to a temporary file first, then atomically rename.
+        This prevents corrupt manifests from partial writes (e.g.,
+        disk-full or interrupted process).
 
         Parameters
         ----------
@@ -129,8 +172,10 @@ class PipelineManifest(BaseModel):
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
+        tmp_path = output_dir / f"{MANIFEST_FILENAME}.tmp"
         data = self.model_dump(mode="json")
-        manifest_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        tmp_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+        tmp_path.replace(manifest_path)
 
     def is_fabric_current(self, expected_fingerprint: str) -> bool:
         """Check whether the stored fabric fingerprint matches the expected value.
