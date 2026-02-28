@@ -842,6 +842,10 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     if pws_config.domain.segment_path is not None:
         segments = gpd.read_file(pws_config.domain.segment_path)
 
+    waterbodies = None
+    if pws_config.domain.waterbody_path is not None:
+        waterbodies = gpd.read_file(pws_config.domain.waterbody_path)
+
     derivation_config: dict = {}
     if pws_config.parameter_overrides.values:
         derivation_config["parameter_overrides"] = {
@@ -852,6 +856,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         sir=sir,
         fabric=result.fabric,
         segments=segments,
+        waterbodies=waterbodies,
         fabric_id_field=pws_config.domain.id_field,
         segment_id_field=pws_config.domain.segment_id_field,
         config=derivation_config,
