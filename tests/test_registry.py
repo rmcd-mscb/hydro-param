@@ -914,9 +914,5 @@ def test_bundled_temporal_datasets_have_year_range_and_time_step():
     registry = load_registry(DEFAULT_REGISTRY)
     for name, entry in registry.datasets.items():
         if entry.temporal:
-            assert entry.year_range is not None, (
-                f"Temporal dataset '{name}' missing year_range"
-            )
-            assert entry.time_step is not None, (
-                f"Temporal dataset '{name}' missing time_step"
-            )
+            assert entry.year_range is not None, f"Temporal dataset '{name}' missing year_range"
+            assert entry.time_step is not None, f"Temporal dataset '{name}' missing time_step"

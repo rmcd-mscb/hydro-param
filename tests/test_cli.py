@@ -151,9 +151,7 @@ def test_datasets_list_shows_strategy(registry_yaml: Path, capsys: pytest.Captur
     assert "local_tiff" in out
 
 
-def test_datasets_list_shows_temporal_info(
-    registry_yaml: Path, capsys: pytest.CaptureFixture[str]
-):
+def test_datasets_list_shows_temporal_info(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
     """datasets list shows time_step and year_range for temporal datasets."""
     _run("datasets", "list", "--registry", str(registry_yaml))
     out = capsys.readouterr().out
