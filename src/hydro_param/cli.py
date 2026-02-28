@@ -42,12 +42,11 @@ import logging
 import shutil
 import subprocess
 import sys
-from datetime import date as _date
 from pathlib import Path
 
 from cyclopts import App
 
-from hydro_param.config import PipelineConfig, load_config
+from hydro_param.config import load_config
 from hydro_param.dataset_registry import DatasetEntry, DatasetRegistry, load_registry
 from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline_from_config
 from hydro_param.project import find_project_root, init_project
@@ -574,190 +573,22 @@ def init_cmd(
 
 
 # ---------------------------------------------------------------------------
-# pywatershed helpers
-# ---------------------------------------------------------------------------
-
-
-def _translate_pws_to_pipeline(
-    pws_config: object,
-) -> PipelineConfig:
-    """Translate a PywatershedRunConfig into a generic PipelineConfig.
-
-    Map the pywatershed-specific configuration schema onto the generic
-    pipeline config so stages 1--5 can produce a raw SIR and temporal
-    data.  This is the bridge between the model-specific user interface
-    and the model-agnostic pipeline engine.
-
-    No model-specific transforms (derivation, variable renaming, unit
-    conversion) are included in the translated config -- those happen
-    in ``pws_run_cmd()`` after the pipeline completes (two-phase
-    separation).
-
-    Parameters
-    ----------
-    pws_config
-        A validated ``PywatershedRunConfig`` instance (typed as
-        ``object`` to avoid circular imports at module level).
-
-    Returns
-    -------
-    PipelineConfig
-        Generic pipeline configuration ready for
-        ``run_pipeline_from_config()``.
-
-    Raises
-    ------
-    ValueError
-        If required fields (e.g., ``fabric_path``) are missing.
-    NotImplementedError
-        If an unsupported extraction method is requested.
-
-    Notes
-    -----
-    Climate variable names are mapped from PRMS user-facing names
-    (``prcp``, ``tmax``, ``tmin``) to registry/gdptools source names
-    (``pr``, ``tmmx``, ``tmmn``) for the pipeline request.  The reverse
-    mapping happens during pywatershed post-processing.
-
-    See Also
-    --------
-    pws_run_cmd : Two-phase pywatershed workflow that calls this function.
-    """
-    from hydro_param.config import (
-        DatasetRequest,
-        DomainConfig,
-        OutputConfig,
-        ProcessingConfig,
-        TargetFabricConfig,
-    )  # noqa: F811 — local import for clarity
-    from hydro_param.pywatershed_config import PywatershedRunConfig
-
-    cfg: PywatershedRunConfig = pws_config  # type: ignore[assignment]
-
-    # Target fabric
-    if cfg.domain.fabric_path is None:
-        raise ValueError("pywatershed config requires 'fabric_path' in domain")
-    target_fabric = TargetFabricConfig(
-        path=cfg.domain.fabric_path,
-        id_field=cfg.domain.id_field,
-    )
-
-    # Domain
-    if cfg.domain.extraction_method == "bbox":
-        domain = DomainConfig(type="bbox", bbox=cfg.domain.bbox)
-    else:
-        raise NotImplementedError(
-            f"Extraction method '{cfg.domain.extraction_method}' not yet supported"
-        )
-
-    # Datasets
-    datasets: list[DatasetRequest] = []
-
-    # Topography
-    datasets.append(
-        DatasetRequest(
-            name=cfg.datasets.topography,
-            variables=["elevation", "slope", "aspect"],
-            statistics=["mean"],
-        )
-    )
-
-    # Land cover (categorical fractions)
-    lc_name = cfg.datasets.landcover
-    if lc_name.startswith("nlcd_osn"):
-        # Use end year of simulation period, clamped to NLCD availability (1985-2024)
-        _end_year = _date.fromisoformat(cfg.time.end).year
-        _nlcd_year = max(1985, min(_end_year, 2024))
-        datasets.append(
-            DatasetRequest(
-                name=lc_name,
-                variables=["LndCov"],
-                statistics=["categorical"],
-                year=_nlcd_year,
-            )
-        )
-    else:
-        datasets.append(
-            DatasetRequest(
-                name=lc_name,
-                variables=["land_cover"],
-                statistics=["majority"],
-            )
-        )
-
-    # Soils
-    datasets.append(
-        DatasetRequest(
-            name=cfg.datasets.soils,
-            variables=["sand", "silt", "clay", "ksat", "theta_s", "bd"],
-            statistics=["mean"],
-        )
-    )
-
-    # Climate (temporal) — validate source and map variable names
-    _SUPPORTED_CLIMATE_SOURCES = {"gridmet"}
-    if cfg.climate.source not in _SUPPORTED_CLIMATE_SOURCES:
-        raise ValueError(
-            f"Climate source '{cfg.climate.source}' is not yet supported. "
-            f"Available sources: {', '.join(sorted(_SUPPORTED_CLIMATE_SOURCES))}"
-        )
-    climate_ds_name = cfg.climate.source
-
-    _CLIMATE_VAR_MAP = {
-        "prcp": "pr",
-        "tmax": "tmmx",
-        "tmin": "tmmn",
-    }
-    climate_vars = [_CLIMATE_VAR_MAP.get(v, v) for v in cfg.climate.variables]
-    datasets.append(
-        DatasetRequest(
-            name=climate_ds_name,
-            variables=climate_vars,
-            statistics=["mean"],
-            time_period=[cfg.time.start, cfg.time.end],
-        )
-    )
-
-    output = OutputConfig(
-        path=cfg.output.path,
-        format="netcdf",
-        sir_name="pywatershed_sir",
-    )
-
-    processing = ProcessingConfig(
-        engine=cfg.processing.zonal_method,
-        batch_size=cfg.processing.batch_size,
-    )
-
-    return PipelineConfig(
-        target_fabric=target_fabric,
-        domain=domain,
-        datasets=datasets,
-        output=output,
-        processing=processing,
-    )
-
-
-# ---------------------------------------------------------------------------
 # pywatershed run
 # ---------------------------------------------------------------------------
 
 
 @pws_app.command(name="run")
-def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
-    """Generate a complete pywatershed model setup.
+def pws_run_cmd(config: Path) -> None:
+    """Generate a complete pywatershed model setup from existing SIR output.
 
-    Execute the full two-phase workflow to produce all files needed
-    for a pywatershed (NHM-PRMS) simulation:
+    Consume pre-built SIR (Standardized Internal Representation) output
+    produced by ``hydro-param run`` and derive all PRMS parameters needed
+    for a pywatershed (NHM-PRMS) simulation.
 
-    1. **Generic pipeline** (phase 1) -- run stages 1--5 to produce a
-       raw SIR (source units, source variable names) and temporal
-       climate data files.
-    2. **pywatershed post-processing** (phase 2) -- derive PRMS
-       parameters from the SIR (geometry, topology, topography,
-       landcover, lookups, defaults), merge temporal data with
-       variable renaming and unit conversion (K to C, mm to in),
-       and write output files.
+    This command executes Phase 2 only -- it does **not** re-run the
+    generic pipeline.  Run ``hydro-param run pipeline.yml`` first to
+    produce SIR output, then run this command to derive model-specific
+    parameters.
 
     Output files produced:
 
@@ -771,16 +602,13 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     Parameters
     ----------
     config
-        Path to a pywatershed run config YAML file.  See
+        Path to a pywatershed run config YAML file (v3.0).  See
         ``PywatershedRunConfig`` for the expected schema.
-    registry
-        Path to a custom dataset registry YAML file or directory.
-        When omitted, the bundled default registry is used.
 
     Raises
     ------
     SystemExit
-        If config loading or either pipeline phase fails (exit code 1).
+        If config loading, SIR loading, or derivation fails (exit code 1).
 
     See Also
     --------
@@ -795,7 +623,6 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     )
 
     import geopandas as gpd
-    import xarray as xr
 
     from hydro_param.derivations.pywatershed import (
         PywatershedDerivation,
@@ -803,6 +630,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     )
     from hydro_param.plugins import DerivationContext, get_formatter
     from hydro_param.pywatershed_config import load_pywatershed_config
+    from hydro_param.sir_accessor import SIRAccessor
 
     try:
         pws_config = load_pywatershed_config(config)
@@ -811,14 +639,39 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         raise SystemExit(1) from exc
 
     logger.info("pywatershed config validated: %s", config)
-    logger.info("  Domain: %s %s", pws_config.domain.extraction_method, pws_config.domain.bbox)
     logger.info("  Time: %s to %s", pws_config.time.start, pws_config.time.end)
-    logger.info("  Climate: %s", pws_config.climate.source)
+    logger.info("  SIR path: %s", pws_config.sir_path)
     logger.info("  Output: %s", pws_config.output.path)
 
-    # ── Validate Phase 2 geospatial inputs before running Phase 1 ──
-    # These files are not needed until Phase 2, but validating early avoids
-    # wasting potentially hours of pipeline compute on a doomed run.
+    # ── Resolve SIR path ──
+    sir_path = pws_config.sir_path
+    if not sir_path.is_absolute():
+        sir_path = config.parent / sir_path
+    sir_path = sir_path.resolve()
+
+    try:
+        sir = SIRAccessor(sir_path)
+    except FileNotFoundError as exc:
+        logger.error("SIR output not found: %s", exc)
+        logger.error("Run 'hydro-param run pipeline.yml' first to produce SIR output.")
+        raise SystemExit(1) from exc
+
+    # ── Load fabric ──
+    fabric_path = pws_config.domain.fabric_path
+    if not fabric_path.exists():
+        logger.error(
+            "Fabric file not found: '%s'. Check domain.fabric_path in '%s'.",
+            fabric_path,
+            config,
+        )
+        raise SystemExit(1)
+    try:
+        fabric = gpd.read_file(fabric_path)
+    except Exception as exc:
+        logger.error("Failed to read fabric file '%s': %s", fabric_path, exc)
+        raise SystemExit(1) from exc
+
+    # ── Load optional segments / waterbodies ──
     segments = None
     if pws_config.domain.segment_path is not None:
         seg_path = pws_config.domain.segment_path
@@ -870,27 +723,8 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
             )
             raise SystemExit(1)
 
-    # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
-    try:
-        pipeline_config = _translate_pws_to_pipeline(pws_config)
-    except ValueError as exc:
-        logger.error("Config translation failed: %s", exc)
-        raise SystemExit(1) from exc
-
-    logger.debug("Translated pipeline config: %s", pipeline_config.model_dump_json(indent=2))
-    reg = _load_registry(registry)
-
-    try:
-        result = run_pipeline_from_config(pipeline_config, reg)
-    except Exception as exc:
-        logger.exception("Pipeline failed (phase 1). Check config '%s'.", config)
-        raise SystemExit(1) from exc
-
-    # ── Phase 2: pywatershed post-processing ──
-    logger.info("Phase 2: pywatershed derivation + formatting")
-
-    plugin = PywatershedDerivation()
-    sir = result.load_sir()
+    # ── Derive parameters ──
+    logger.info("Deriving pywatershed parameters from SIR")
 
     derivation_config: dict = {}
     if pws_config.parameter_overrides.values:
@@ -900,17 +734,21 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
 
     ctx = DerivationContext(
         sir=sir,
-        fabric=result.fabric,
+        fabric=fabric,
         segments=segments,
         waterbodies=waterbodies,
         fabric_id_field=pws_config.domain.id_field,
         segment_id_field=pws_config.domain.segment_id_field,
         config=derivation_config,
     )
+
+    plugin = PywatershedDerivation()
     derived = plugin.derive(ctx)
 
-    # Load temporal data from per-file paths and merge with model-specific transforms
-    temporal = {name: xr.open_dataset(path) for name, path in result.temporal_files.items()}
+    # ── Load and merge temporal data ──
+    temporal = {}
+    for name in sir.available_temporal():
+        temporal[name] = sir.load_temporal(name)
     try:
         derived = merge_temporal_into_derived(
             derived,
@@ -922,7 +760,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         for ds in temporal.values():
             ds.close()
 
-    # Write using the model-specific formatter
+    # ── Format and write ──
     formatter = get_formatter("pywatershed")
     formatter_config = {
         "parameter_file": pws_config.output.parameter_file,

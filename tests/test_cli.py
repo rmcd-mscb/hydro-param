@@ -739,24 +739,63 @@ def test_run_resume_flag_sets_config(mock_load_config, mock_run_pipeline, tmp_pa
 # ---------------------------------------------------------------------------
 
 
+def _setup_pws_project(tmp_path: Path) -> tuple[Path, Path]:
+    """Create minimal fabric + SIR output for pywatershed CLI tests.
+
+    Returns
+    -------
+    tuple[Path, Path]
+        (fabric_path, sir_output_dir)
+    """
+    import geopandas as gpd
+    import numpy as np
+    import pandas as pd
+    from shapely.geometry import box
+
+    from hydro_param.manifest import PipelineManifest, SIRManifestEntry
+
+    # Fabric
+    fabric_path = tmp_path / "nhru.gpkg"
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2], "geometry": [box(0, 0, 1, 1), box(1, 1, 2, 2)]},
+        crs="EPSG:4326",
+    )
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    # SIR output directory with one static variable
+    sir_dir = tmp_path / "output" / "sir"
+    sir_dir.mkdir(parents=True)
+    idx = pd.Index([1, 2], name="nhm_id")
+    pd.DataFrame({"elevation_m_mean": [100.0, 200.0]}, index=idx).to_csv(
+        sir_dir / "elevation_m_mean.csv"
+    )
+
+    # Manifest
+    sir_entry = SIRManifestEntry(
+        static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
+    )
+    PipelineManifest(sir=sir_entry).save(tmp_path / "output")
+
+    return fabric_path, tmp_path / "output"
+
+
 def _write_pws_config(
     tmp_path: Path,
     *,
-    fabric_path: str = "data/fabrics/nhru.gpkg",
+    fabric_path: str | Path,
+    sir_path: str | Path = "output",
     segment_path: str | None = None,
     waterbody_path: str | None = None,
 ) -> Path:
-    """Write a minimal pywatershed run config YAML for testing."""
+    """Write a v3.0 pywatershed run config YAML for testing."""
     cfg: dict = {
         "target_model": "pywatershed",
-        "version": "2.0",
+        "version": "3.0",
         "domain": {
-            "source": "custom",
-            "extraction_method": "bbox",
-            "bbox": [-76.5, 38.5, -74.0, 42.6],
-            "fabric_path": fabric_path,
+            "fabric_path": str(fabric_path),
         },
         "time": {"start": "2020-10-01", "end": "2021-09-30"},
+        "sir_path": str(sir_path),
     }
     if segment_path is not None:
         cfg["domain"]["segment_path"] = segment_path
@@ -769,14 +808,26 @@ def _write_pws_config(
 
 def test_pws_run_segment_path_missing_exits(tmp_path: Path) -> None:
     """pws_run_cmd exits early when segment_path file does not exist."""
-    config_path = _write_pws_config(tmp_path, segment_path=str(tmp_path / "nonexistent.gpkg"))
+    fabric_path, sir_path = _setup_pws_project(tmp_path)
+    config_path = _write_pws_config(
+        tmp_path,
+        fabric_path=fabric_path,
+        sir_path=sir_path,
+        segment_path=str(tmp_path / "nonexistent.gpkg"),
+    )
     with pytest.raises(SystemExit):
         _run("pywatershed", "run", str(config_path))
 
 
 def test_pws_run_waterbody_path_missing_exits(tmp_path: Path) -> None:
     """pws_run_cmd exits early when waterbody_path file does not exist."""
-    config_path = _write_pws_config(tmp_path, waterbody_path=str(tmp_path / "nonexistent.gpkg"))
+    fabric_path, sir_path = _setup_pws_project(tmp_path)
+    config_path = _write_pws_config(
+        tmp_path,
+        fabric_path=fabric_path,
+        sir_path=sir_path,
+        waterbody_path=str(tmp_path / "nonexistent.gpkg"),
+    )
     with pytest.raises(SystemExit):
         _run("pywatershed", "run", str(config_path))
 
@@ -786,10 +837,17 @@ def test_pws_run_waterbody_missing_ftype_exits(tmp_path: Path) -> None:
     import geopandas as gpd
     from shapely.geometry import box
 
+    fabric_path, sir_path = _setup_pws_project(tmp_path)
+
     wb_path = tmp_path / "waterbodies.gpkg"
     gdf = gpd.GeoDataFrame({"name": ["lake1"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
     gdf.to_file(wb_path, driver="GPKG")
 
-    config_path = _write_pws_config(tmp_path, waterbody_path=str(wb_path))
+    config_path = _write_pws_config(
+        tmp_path,
+        fabric_path=fabric_path,
+        sir_path=sir_path,
+        waterbody_path=str(wb_path),
+    )
     with pytest.raises(SystemExit):
         _run("pywatershed", "run", str(config_path))
