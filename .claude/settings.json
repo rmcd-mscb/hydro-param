@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-lock-edits.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/block-lock-edits.sh"
           }
         ]
       }
@@ -26,15 +26,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ruff-format.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/ruff-format.sh"
           },
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mypy-check.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/mypy-check.sh"
           },
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pytest-related.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/pytest-related.sh"
           }
         ]
       }
