@@ -89,8 +89,8 @@ src/hydro_param/
 ```
 src/hydro_param/data/
   datasets/              — Dataset registry (8 per-category YAML files)
-  lookup_tables/         — PRMS parameter derivation tables (6 YAML files)
-  pywatershed/           — pywatershed parameter metadata
+  pywatershed/           — pywatershed parameter metadata + lookup tables
+    lookup_tables/       — PRMS parameter derivation tables (6 YAML files)
 ```
 
 **Config files** (user-facing reference, not loaded at runtime):

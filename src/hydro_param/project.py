@@ -291,7 +291,7 @@ domain:
   bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] EPSG:4326
   fabric_path: "data/fabrics/nhru.gpkg"        # REQUIRED: path to HRU fabric
   segment_path: "data/fabrics/nsegment.gpkg"   # path to segment/flowline fabric
-  waterbody_path: "data/fabrics/waterbodies.gpkg"  # NHDPlus waterbody polygons (optional)
+  # waterbody_path: "data/fabrics/waterbodies.gpkg"  # NHDPlus waterbody polygons (optional)
   id_field: "nhm_id"
   segment_id_field: "nhm_seg"
 
