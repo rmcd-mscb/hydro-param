@@ -839,3 +839,8 @@ def test_default_registry_resolves_to_existing_directory():
         "water_bodies.yml",
     ]
     assert yamls == expected
+
+
+def test_default_registry_is_absolute():
+    """DEFAULT_REGISTRY must be an absolute path to work regardless of CWD."""
+    assert DEFAULT_REGISTRY.is_absolute()

@@ -85,13 +85,18 @@ src/hydro_param/
     pywatershed.py      — pywatershed output formatter plugin
 ```
 
-**Config files:**
+**Bundled data** (loaded via `importlib.resources`):
+```
+src/hydro_param/data/
+  datasets/              — Dataset registry (8 per-category YAML files)
+  lookup_tables/         — PRMS parameter derivation tables (6 YAML files)
+  pywatershed/           — pywatershed parameter metadata
+```
+
+**Config files** (user-facing reference, not loaded at runtime):
 ```
 configs/
-  datasets/              — Dataset registry (topography, land_cover, soils, etc.)
   examples/              — Example pipeline configs (DRB 2-year)
-  lookup_tables/         — PRMS parameter derivation tables (4 YAML files)
-  pywatershed/           — pywatershed parameter metadata
   delaware_terrain.yml   — Delaware River Basin pipeline config
 ```
 

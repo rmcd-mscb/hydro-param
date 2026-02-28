@@ -495,7 +495,7 @@ def load_registry(path: str | Path) -> DatasetRegistry:
     --------
     >>> from hydro_param.pipeline import DEFAULT_REGISTRY
     >>> registry = load_registry(DEFAULT_REGISTRY)
-    >>> entry = registry.get("3dep")
+    >>> entry = registry.get("dem_3dep_10m")
     """
     path = Path(path)
     if not path.exists():
