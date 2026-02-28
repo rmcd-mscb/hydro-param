@@ -334,6 +334,7 @@ class TestBuildSIRSchema:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[VariableSpec(name="pr", units="mm", native_name="precipitation_amount")],
             category="climate",
         )
@@ -927,6 +928,7 @@ class TestNormalizeSIRTemporal:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[
                 VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature"),
                 VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
@@ -1008,6 +1010,7 @@ class TestNormalizeSIRTemporal:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[
                 VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature"),
             ],
@@ -1068,6 +1071,7 @@ class TestNormalizeSIRTemporal:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[
                 VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
             ],
@@ -1125,6 +1129,7 @@ class TestNormalizeSIRTemporal:
             collection="snodas-daily",
             temporal=True,
             t_coord="time",
+            time_step="daily",
             variables=[
                 VariableSpec(name="SWE", units="m", native_name="SWE"),
             ],
@@ -1181,6 +1186,7 @@ class TestNormalizeSIRTemporal:
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[
                 VariableSpec(
                     name="pr",

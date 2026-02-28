@@ -310,6 +310,9 @@ class DatasetEntry(BaseModel):
         ``"soils"``, ``"land_cover"``).
     temporal : bool
         ``True`` for time-indexed datasets (e.g., gridMET, SNODAS).
+    time_step : {"daily", "monthly"} or None
+        Temporal resolution of the dataset.  Required when
+        ``temporal`` is ``True``.  ``None`` for static datasets.
     year_range : list[int] or None
         Two-element ``[start, end]`` list of available calendar years.
 
@@ -340,6 +343,7 @@ class DatasetEntry(BaseModel):
     derived_variables: list[DerivedVariableSpec] = []
     category: str = ""
     temporal: bool = False
+    time_step: Literal["daily", "monthly"] | None = None
     year_range: list[int] | None = None
 
     @model_validator(mode="after")
@@ -358,6 +362,8 @@ class DatasetEntry(BaseModel):
                 raise ValueError("nhgf_stac strategy requires 'collection'")
         if self.temporal and not self.t_coord:
             raise ValueError("Temporal datasets require 't_coord'")
+        if self.temporal and self.time_step is None:
+            raise ValueError("Temporal datasets require 'time_step' (e.g., 'daily', 'monthly')")
         if self.temporal:
             missing = [v.name for v in self.variables if not v.native_name]
             if missing:

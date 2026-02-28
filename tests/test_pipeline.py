@@ -833,6 +833,7 @@ def test_process_batch_temporal_nhgf_stac_raises(tmp_path: Path):
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="SWE", band=1)
     ds_req = DatasetRequest(name="snodas", variables=["SWE"])
@@ -934,6 +935,7 @@ def test_temporal_requires_time_period(tmp_path: Path):
                 "collection": "snodas",
                 "temporal": True,
                 "t_coord": "time",
+                "time_step": "daily",
                 "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
             },
         }
@@ -976,6 +978,7 @@ def test_process_temporal_nhgf_stac_dispatch(tmp_path: Path):
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="SWE", band=1)
     ds_req = DatasetRequest(
@@ -1022,6 +1025,7 @@ def test_process_temporal_climr_cat_dispatch(tmp_path: Path):
         catalog_id="gridmet",
         temporal=True,
         t_coord="day",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="pr", band=1)
     ds_req = DatasetRequest(
@@ -1065,6 +1069,7 @@ def test_process_temporal_rejects_derived():
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     derived = DerivedVariableSpec(name="slope", source="elevation", method="horn")
     ds_req = DatasetRequest(
@@ -1100,6 +1105,7 @@ def test_process_temporal_unsupported_strategy():
         collection="test",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="test_var", band=1)
     ds_req = DatasetRequest(
@@ -1342,6 +1348,7 @@ def test_process_temporal_empty_statistics_raises():
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="SWE", band=1)
     ds_req = DatasetRequest(
@@ -1379,6 +1386,7 @@ def test_process_temporal_multi_statistics_warns(caplog: pytest.LogCaptureFixtur
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     var_spec = VariableSpec(name="SWE", band=1)
     ds_req = DatasetRequest(
@@ -2114,6 +2122,7 @@ def test_stage5_includes_temporal_normalization(tmp_path: Path) -> None:
         catalog_id="gridmet",
         temporal=True,
         t_coord="day",
+        time_step="daily",
         variables=[VariableSpec(name="tmmx", units="K", native_name="daily_maximum_temperature")],
         category="climate",
     )

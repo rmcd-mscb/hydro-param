@@ -12,6 +12,8 @@ datasets:
     t_coord: "time"
     category: snow
     temporal: true
+    time_step: daily
+    year_range: [2003, 2025]
     # Accessed via gdptools NHGFStacData from the USGS GDP STAC catalog.
     # Zarr store: s3://hytest/snodas.zarr/
     # STAC: https://api.water.usgs.gov/gdp/pygeoapi/stac/stac-collection/snodas
