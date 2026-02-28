@@ -13,6 +13,7 @@ from hydro_param.project import (
     find_project_root,
     generate_gitignore,
     generate_pipeline_template,
+    generate_pywatershed_template,
     get_data_categories,
     init_project,
 )
@@ -216,3 +217,13 @@ class TestGenerateGitignore:
         assert "output/" in content
         assert "models/" in content
         assert "data/topography/" in content
+
+
+# ---------------------------------------------------------------------------
+# generate_pywatershed_template
+# ---------------------------------------------------------------------------
+
+
+def test_pywatershed_template_contains_waterbody_path() -> None:
+    template = generate_pywatershed_template("test_project")
+    assert "waterbody_path" in template
