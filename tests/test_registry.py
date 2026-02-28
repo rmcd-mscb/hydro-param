@@ -6,7 +6,6 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from hydro_param.pipeline import DEFAULT_REGISTRY
 from hydro_param.dataset_registry import (
     DatasetEntry,
     DatasetRegistry,
@@ -15,6 +14,7 @@ from hydro_param.dataset_registry import (
     VariableSpec,
     load_registry,
 )
+from hydro_param.pipeline import DEFAULT_REGISTRY
 
 
 @pytest.fixture()

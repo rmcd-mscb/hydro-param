@@ -1483,7 +1483,7 @@ def run_pipeline(
         Path to the pipeline YAML config file.
     registry_path : str or Path or None
         Path to a dataset registry YAML file or directory of YAML files.
-        Defaults to ``configs/datasets/`` (the built-in registry).
+        Defaults to the built-in registry bundled with the package.
 
     Returns
     -------

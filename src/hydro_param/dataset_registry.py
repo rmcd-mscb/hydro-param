@@ -473,7 +473,7 @@ def load_registry(path: str | Path) -> DatasetRegistry:
     ----------
     path : str or pathlib.Path
         Path to a single registry YAML file, or a directory containing
-        per-category YAML files (e.g., ``configs/datasets/``).  Each
+        per-category YAML files (e.g., the bundled ``hydro_param.data.datasets``).  Each
         file must have a top-level ``datasets:`` key mapping dataset
         names to entries.
 
@@ -493,7 +493,8 @@ def load_registry(path: str | Path) -> DatasetRegistry:
 
     Examples
     --------
-    >>> registry = load_registry("configs/datasets/")
+    >>> from hydro_param.pipeline import DEFAULT_REGISTRY
+    >>> registry = load_registry(DEFAULT_REGISTRY)
     >>> entry = registry.get("3dep")
     """
     path = Path(path)
