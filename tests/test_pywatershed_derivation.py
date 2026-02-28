@@ -61,6 +61,25 @@ class _MockSIRAccessor:
     def __getitem__(self, name: str) -> xr.DataArray:
         return self.load_variable(name)
 
+    def load_dataset(self, name: str) -> xr.Dataset:
+        """Load all vars starting with name as a Dataset."""
+        matching = {str(k): v for k, v in self._ds.data_vars.items() if str(k).startswith(name)}
+        if not matching:
+            raise KeyError(f"SIR variable '{name}' not found.")
+        return xr.Dataset(matching)
+
+    def find_variable(self, base_name: str) -> str | None:
+        """Find variable by base name, allowing year suffixes."""
+        import re
+
+        if base_name in self._ds:
+            return base_name
+        pattern = re.compile(rf"^{re.escape(base_name)}_(\d{{4}})$")
+        matches = [str(v) for v in self._ds.data_vars if pattern.match(str(v))]
+        if matches:
+            return sorted(matches)[-1]
+        return None
+
 
 @pytest.fixture()
 def derivation() -> PywatershedDerivation:
