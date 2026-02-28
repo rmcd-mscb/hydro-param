@@ -199,8 +199,7 @@ def datasets_info(name: str, *, registry: Path | None = None) -> None:
     if entry.category:
         print(f"Category: {entry.category}")
     if entry.temporal:
-        if entry.time_step:
-            print(f"Time step: {entry.time_step}")
+        print(f"Time step: {entry.time_step}")
         if entry.year_range:
             print(f"Available years: {entry.year_range[0]}-{entry.year_range[1]}")
 

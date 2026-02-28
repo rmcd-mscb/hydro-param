@@ -315,6 +315,9 @@ def _validate_time_range(
     the dataset's ``year_range`` metadata.  Raise ``ValueError`` with an
     actionable message if the requested range exceeds the available data.
 
+    If the dataset entry has no ``year_range`` metadata, validation is
+    skipped and the function returns immediately.
+
     Parameters
     ----------
     ds_req : DatasetRequest
@@ -327,8 +330,19 @@ def _validate_time_range(
     ValueError
         If the requested time range falls outside the dataset's
         ``year_range``.
+
+    Notes
+    -----
+    Years are extracted from the first four characters of each ISO date
+    string in ``time_period`` (e.g., ``"2020-01-01"`` -> ``2020``).
+    This relies on ``DatasetRequest._validate_time_period`` having
+    already confirmed that dates are well-formed ISO strings.
     """
     if entry.year_range is None:
+        logger.debug(
+            "Dataset '%s' has no year_range metadata; skipping time range validation",
+            ds_req.name,
+        )
         return
 
     avail_start, avail_end = entry.year_range
@@ -352,7 +366,7 @@ def _validate_time_range(
                 f"Adjust time_period in your pipeline config."
             )
 
-    # Validate year (static multi-year datasets)
+    # Validate year (e.g., multi-year static datasets like NLCD)
     if ds_req.year is not None:
         years = [ds_req.year] if isinstance(ds_req.year, int) else ds_req.year
         for y in years:
@@ -394,7 +408,9 @@ def stage2_resolve_datasets(
     ------
     ValueError
         If a ``local_tiff`` dataset has no source path (dataset-level or
-        per-variable), or if a temporal dataset has no ``time_period``.
+        per-variable), if a temporal dataset has no ``time_period``, or if
+        the requested ``time_period`` or ``year`` falls outside the
+        dataset's ``year_range``.
     KeyError
         If a dataset name is not found in the registry (raised by
         ``registry.get()``).

@@ -315,6 +315,7 @@ class DatasetEntry(BaseModel):
         ``temporal`` is ``True``.  ``None`` for static datasets.
     year_range : list[int] or None
         Two-element ``[start, end]`` list of available calendar years.
+        Must satisfy ``start <= end``.
 
     Raises
     ------
