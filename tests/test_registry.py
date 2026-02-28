@@ -6,6 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from hydro_param.pipeline import DEFAULT_REGISTRY
 from hydro_param.dataset_registry import (
     DatasetEntry,
     DatasetRegistry,
@@ -521,11 +522,8 @@ def test_load_registry_file_still_works(registry_yaml: Path):
 
 
 def test_load_real_registry():
-    """Test loading the actual configs/datasets/ directory."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    """Test loading the bundled dataset registry directory."""
+    registry = load_registry(DEFAULT_REGISTRY)
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_30m" in registry.datasets
     assert "gnatsgo_rasters" in registry.datasets
@@ -537,10 +535,7 @@ def test_load_real_registry():
 
 def test_real_registry_nlcd_legacy_has_download():
     """Verify NLCD legacy entry in real registry has multi-file download block."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     nlcd = registry.get("nlcd_legacy")
     assert nlcd.strategy == "local_tiff"
     assert nlcd.source is None
@@ -556,10 +551,7 @@ def test_real_registry_nlcd_legacy_has_download():
 
 def test_real_registry_nlcd_annual_has_template():
     """Verify NLCD annual entry in real registry has template download."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     nlcd = registry.get("nlcd_annual")
     assert nlcd.strategy == "local_tiff"
     assert nlcd.download is not None
@@ -576,10 +568,7 @@ def test_real_registry_nlcd_annual_has_template():
 
 def test_real_registry_gridmet():
     """Verify gridMET entry in real registry uses climr_cat strategy."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     gridmet = registry.get("gridmet")
     assert gridmet.strategy == "climr_cat"
     assert gridmet.catalog_id == "gridmet"
@@ -593,10 +582,7 @@ def test_real_registry_gridmet():
 
 def test_real_registry_snodas():
     """Verify SNODAS entry in real registry uses nhgf_stac strategy."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     snodas = registry.get("snodas")
     assert snodas.strategy == "nhgf_stac"
     assert snodas.collection == "snodas"
@@ -609,10 +595,7 @@ def test_real_registry_snodas():
 
 def test_real_registry_gnatsgo():
     """Verify gNATSGO entry with per-variable asset keys."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     gnatsgo = registry.get("gnatsgo_rasters")
     assert gnatsgo.strategy == "stac_cog"
     assert gnatsgo.collection == "gnatsgo-rasters"
@@ -624,10 +607,7 @@ def test_real_registry_gnatsgo():
 
 def test_real_registry_polaris_30m():
     """Verify fixed POLARIS entry has correct metadata."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     polaris = registry.get("polaris_30m")
     assert polaris.strategy == "local_tiff"
     assert polaris.crs == "EPSG:4326"
@@ -753,10 +733,7 @@ def test_nhgf_stac_temporal_still_valid():
 
 def test_real_registry_nlcd_osn_entries():
     """Verify all 6 NLCD OSN entries in the real registry."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
 
     expected = {
         "nlcd_osn_lndcov": ("nlcd-LndCov", "LndCov", True),
@@ -832,10 +809,7 @@ def test_variable_spec_source_override_default_none():
 
 def test_real_registry_polaris_has_variable_sources():
     """Verify key POLARIS variables have per-variable source_override URLs."""
-    registry_path = Path("configs/datasets")
-    if not registry_path.exists():
-        pytest.skip("configs/datasets/ not found")
-    registry = load_registry(registry_path)
+    registry = load_registry(DEFAULT_REGISTRY)
     polaris = registry.get("polaris_30m")
 
     # These variables should have source_override URLs for remote VRT access
@@ -852,8 +826,6 @@ def test_real_registry_polaris_has_variable_sources():
 
 def test_default_registry_resolves_to_existing_directory():
     """DEFAULT_REGISTRY must resolve to the bundled registry directory."""
-    from hydro_param.pipeline import DEFAULT_REGISTRY
-
     assert DEFAULT_REGISTRY.is_dir(), f"DEFAULT_REGISTRY does not exist: {DEFAULT_REGISTRY}"
     yamls = sorted(p.name for p in DEFAULT_REGISTRY.glob("*.yml"))
     expected = [
