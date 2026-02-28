@@ -960,6 +960,202 @@ def test_temporal_requires_time_period(tmp_path: Path):
         stage2_resolve_datasets(config, registry)
 
 
+# ---------------------------------------------------------------------------
+# time_period / year vs year_range validation
+# ---------------------------------------------------------------------------
+
+
+def test_time_period_outside_year_range(tmp_path: Path):
+    """stage2 raises if time_period starts before dataset year_range."""
+    reg_raw = {
+        "datasets": {
+            "snodas": {
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "temporal": True,
+                "t_coord": "time",
+                "time_step": "daily",
+                "year_range": [2003, 2025],
+                "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "datasets": [
+            {
+                "name": "snodas",
+                "variables": ["SWE"],
+                "time_period": ["1980-01-01", "2025-12-31"],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="available from 2003"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_time_period_end_outside_year_range(tmp_path: Path):
+    """stage2 raises if time_period ends after dataset year_range."""
+    reg_raw = {
+        "datasets": {
+            "snodas": {
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "temporal": True,
+                "t_coord": "time",
+                "time_step": "daily",
+                "year_range": [2003, 2025],
+                "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "datasets": [
+            {
+                "name": "snodas",
+                "variables": ["SWE"],
+                "time_period": ["2020-01-01", "2030-12-31"],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="available.*2025"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_year_outside_year_range(tmp_path: Path):
+    """stage2 raises if year field is outside dataset year_range."""
+    reg_raw = {
+        "datasets": {
+            "nlcd": {
+                "strategy": "nhgf_stac",
+                "collection": "nlcd-LndCov",
+                "temporal": False,
+                "year_range": [1985, 2024],
+                "variables": [
+                    {"name": "LndCov", "band": 1, "categorical": True},
+                ],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "datasets": [
+            {
+                "name": "nlcd",
+                "variables": ["LndCov"],
+                "year": [1980, 2021],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    with pytest.raises(ValueError, match="1980.*outside.*1985"):
+        stage2_resolve_datasets(config, registry)
+
+
+def test_no_year_range_skips_validation(tmp_path: Path):
+    """stage2 skips time validation when entry has no year_range."""
+    reg_raw = {
+        "datasets": {
+            "snodas": {
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "temporal": True,
+                "t_coord": "time",
+                "time_step": "daily",
+                # No year_range — validation skipped
+                "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "datasets": [
+            {
+                "name": "snodas",
+                "variables": ["SWE"],
+                "time_period": ["1900-01-01", "2099-12-31"],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    # Should NOT raise — no year_range to check against
+    resolved = stage2_resolve_datasets(config, registry)
+    assert len(resolved) == 1
+
+
+def test_time_period_within_range_passes(tmp_path: Path):
+    """stage2 passes when time_period is within year_range."""
+    reg_raw = {
+        "datasets": {
+            "snodas": {
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "temporal": True,
+                "t_coord": "time",
+                "time_step": "daily",
+                "year_range": [2003, 2025],
+                "variables": [{"name": "SWE", "band": 1, "native_name": "SWE"}],
+            },
+        }
+    }
+    reg_path = tmp_path / "registry.yml"
+    reg_path.write_text(yaml.dump(reg_raw))
+
+    cfg_raw = {
+        "target_fabric": {"path": "test.gpkg", "id_field": "id"},
+        "datasets": [
+            {
+                "name": "snodas",
+                "variables": ["SWE"],
+                "time_period": ["2020-01-01", "2021-12-31"],
+            },
+        ],
+    }
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text(yaml.dump(cfg_raw))
+
+    config = load_config(cfg_path)
+    registry = load_registry(reg_path)
+
+    resolved = stage2_resolve_datasets(config, registry)
+    assert len(resolved) == 1
+
+
 def test_process_temporal_nhgf_stac_dispatch(tmp_path: Path):
     """_process_temporal dispatches to TemporalProcessor.process_nhgf_stac."""
     from unittest.mock import patch
