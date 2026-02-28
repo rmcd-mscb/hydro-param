@@ -732,3 +732,64 @@ def test_run_resume_flag_sets_config(mock_load_config, mock_run_pipeline, tmp_pa
     mock_run_pipeline.assert_called_once()
     actual_cfg = mock_run_pipeline.call_args[0][0]
     assert actual_cfg.processing.resume is True
+
+
+# ---------------------------------------------------------------------------
+# pywatershed run — Phase 2 input validation
+# ---------------------------------------------------------------------------
+
+
+def _write_pws_config(
+    tmp_path: Path,
+    *,
+    fabric_path: str = "data/fabrics/nhru.gpkg",
+    segment_path: str | None = None,
+    waterbody_path: str | None = None,
+) -> Path:
+    """Write a minimal pywatershed run config YAML for testing."""
+    cfg: dict = {
+        "target_model": "pywatershed",
+        "version": "2.0",
+        "domain": {
+            "source": "custom",
+            "extraction_method": "bbox",
+            "bbox": [-76.5, 38.5, -74.0, 42.6],
+            "fabric_path": fabric_path,
+        },
+        "time": {"start": "2020-10-01", "end": "2021-09-30"},
+    }
+    if segment_path is not None:
+        cfg["domain"]["segment_path"] = segment_path
+    if waterbody_path is not None:
+        cfg["domain"]["waterbody_path"] = waterbody_path
+    path = tmp_path / "pws_config.yml"
+    path.write_text(yaml.dump(cfg))
+    return path
+
+
+def test_pws_run_segment_path_missing_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits early when segment_path file does not exist."""
+    config_path = _write_pws_config(tmp_path, segment_path=str(tmp_path / "nonexistent.gpkg"))
+    with pytest.raises(SystemExit):
+        _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_waterbody_path_missing_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits early when waterbody_path file does not exist."""
+    config_path = _write_pws_config(tmp_path, waterbody_path=str(tmp_path / "nonexistent.gpkg"))
+    with pytest.raises(SystemExit):
+        _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_waterbody_missing_ftype_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits early when waterbody file lacks ftype column."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    wb_path = tmp_path / "waterbodies.gpkg"
+    gdf = gpd.GeoDataFrame({"name": ["lake1"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+    gdf.to_file(wb_path, driver="GPKG")
+
+    config_path = _write_pws_config(tmp_path, waterbody_path=str(wb_path))
+    with pytest.raises(SystemExit):
+        _run("pywatershed", "run", str(config_path))

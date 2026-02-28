@@ -816,6 +816,60 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     logger.info("  Climate: %s", pws_config.climate.source)
     logger.info("  Output: %s", pws_config.output.path)
 
+    # ── Validate Phase 2 geospatial inputs before running Phase 1 ──
+    # These files are not needed until Phase 2, but validating early avoids
+    # wasting potentially hours of pipeline compute on a doomed run.
+    segments = None
+    if pws_config.domain.segment_path is not None:
+        seg_path = pws_config.domain.segment_path
+        if not seg_path.exists():
+            logger.error(
+                "Segment file not found: '%s'. Check domain.segment_path in '%s'.",
+                seg_path,
+                config,
+            )
+            raise SystemExit(1)
+        try:
+            segments = gpd.read_file(seg_path)
+        except Exception as exc:
+            logger.error(
+                "Failed to read segment file '%s': %s. "
+                "Ensure it is a valid GeoPackage or GeoParquet.",
+                seg_path,
+                exc,
+            )
+            raise SystemExit(1) from exc
+
+    waterbodies = None
+    if pws_config.domain.waterbody_path is not None:
+        wb_path = pws_config.domain.waterbody_path
+        if not wb_path.exists():
+            logger.error(
+                "Waterbody file not found: '%s'. Check domain.waterbody_path in '%s'.",
+                wb_path,
+                config,
+            )
+            raise SystemExit(1)
+        try:
+            waterbodies = gpd.read_file(wb_path)
+        except Exception as exc:
+            logger.error(
+                "Failed to read waterbody file '%s': %s. "
+                "Ensure it is a valid GeoPackage or GeoParquet.",
+                wb_path,
+                exc,
+            )
+            raise SystemExit(1) from exc
+        if "ftype" not in waterbodies.columns:
+            logger.error(
+                "Waterbody file '%s' is missing required 'ftype' column. "
+                "Expected NHDPlus waterbody polygons with 'ftype' values "
+                "like 'LakePond' and 'Reservoir'. Found columns: %s",
+                wb_path,
+                sorted(waterbodies.columns.tolist()),
+            )
+            raise SystemExit(1)
+
     # ── Phase 1: Generic pipeline (raw SIR + temporal) ──
     try:
         pipeline_config = _translate_pws_to_pipeline(pws_config)
@@ -838,10 +892,6 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
     plugin = PywatershedDerivation()
     sir = result.load_sir()
 
-    segments = None
-    if pws_config.domain.segment_path is not None:
-        segments = gpd.read_file(pws_config.domain.segment_path)
-
     derivation_config: dict = {}
     if pws_config.parameter_overrides.values:
         derivation_config["parameter_overrides"] = {
@@ -852,6 +902,7 @@ def pws_run_cmd(config: Path, *, registry: Path | None = None) -> None:
         sir=sir,
         fabric=result.fabric,
         segments=segments,
+        waterbodies=waterbodies,
         fabric_id_field=pws_config.domain.id_field,
         segment_id_field=pws_config.domain.segment_id_field,
         config=derivation_config,

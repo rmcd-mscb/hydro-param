@@ -1462,6 +1462,7 @@ class TestCalibrationSeedsYAML:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
             / "calibration_seeds.yml"
         )
@@ -1496,7 +1497,7 @@ class TestForcingVariablesYAML:
         """forcing_variables.yml loads and has required structure."""
         from importlib.resources import files as pkg_files
 
-        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/lookup_tables")))
+        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
         data = derivation._load_lookup_table("forcing_variables", tables_dir)
         assert "mapping" in data
         datasets = data["mapping"]
@@ -1506,7 +1507,7 @@ class TestForcingVariablesYAML:
         """Each gridmet variable entry has sir_name, sir_unit, intermediate_unit."""
         from importlib.resources import files as pkg_files
 
-        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/lookup_tables")))
+        tables_dir = Path(str(pkg_files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
         data = derivation._load_lookup_table("forcing_variables", tables_dir)
         gridmet = data["mapping"]["gridmet"]
         required_keys = {"sir_name", "sir_unit", "intermediate_unit"}
@@ -1832,6 +1833,7 @@ class TestDeriveCalibrationSeeds:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
         )
         for f in bundled_dir.iterdir():
@@ -2016,6 +2018,7 @@ class TestDeriveCalibrationSeeds:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
         )
         for f in bundled_dir.iterdir():
