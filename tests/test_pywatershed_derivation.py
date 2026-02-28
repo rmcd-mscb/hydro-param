@@ -1462,6 +1462,7 @@ class TestCalibrationSeedsYAML:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
             / "calibration_seeds.yml"
         )
@@ -1832,6 +1833,7 @@ class TestDeriveCalibrationSeeds:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
         )
         for f in bundled_dir.iterdir():
@@ -2016,6 +2018,7 @@ class TestDeriveCalibrationSeeds:
             / "src"
             / "hydro_param"
             / "data"
+            / "pywatershed"
             / "lookup_tables"
         )
         for f in bundled_dir.iterdir():
