@@ -848,3 +848,22 @@ def test_real_registry_polaris_has_variable_sources():
             )
         elif var.name in {"theta_r", "ph", "om", "lambda", "hb", "n", "alpha"}:
             assert var.source_override is None, f"{var.name} should not have a source URL"
+
+
+def test_default_registry_resolves_to_existing_directory():
+    """DEFAULT_REGISTRY must resolve to the bundled registry directory."""
+    from hydro_param.pipeline import DEFAULT_REGISTRY
+
+    assert DEFAULT_REGISTRY.is_dir(), f"DEFAULT_REGISTRY does not exist: {DEFAULT_REGISTRY}"
+    yamls = sorted(p.name for p in DEFAULT_REGISTRY.glob("*.yml"))
+    expected = [
+        "climate.yml",
+        "geology.yml",
+        "hydrography.yml",
+        "land_cover.yml",
+        "snow.yml",
+        "soils.yml",
+        "topography.yml",
+        "water_bodies.yml",
+    ]
+    assert yamls == expected

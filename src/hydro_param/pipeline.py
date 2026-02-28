@@ -42,6 +42,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import cast
 
@@ -78,7 +79,7 @@ from hydro_param.sir import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REGISTRY = Path("configs/datasets")
+DEFAULT_REGISTRY = Path(str(_pkg_files("hydro_param").joinpath("data/datasets")))
 
 
 @dataclass
