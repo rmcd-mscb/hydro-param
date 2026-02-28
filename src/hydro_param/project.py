@@ -115,7 +115,12 @@ def get_data_categories(registry_path: Path | None = None) -> list[str]:
         if categories:
             return sorted(categories | set(DEFAULT_CATEGORIES))
     except Exception:
-        logger.debug("Could not load registry for category discovery; using defaults")
+        logger.warning(
+            "Could not load registry at '%s' for category discovery; "
+            "using built-in defaults. Check that the registry file exists "
+            "and is valid YAML.",
+            registry_path,
+        )
     return list(DEFAULT_CATEGORIES)
 
 

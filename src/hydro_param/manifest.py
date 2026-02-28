@@ -28,11 +28,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+if sys.version_info >= (3, 12):
+    from typing import TypedDict
+else:
+    from typing_extensions import TypedDict
+
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 from hydro_param.config import DatasetRequest, PipelineConfig, ProcessingConfig
 from hydro_param.dataset_registry import (
@@ -87,6 +93,24 @@ class ManifestEntry(BaseModel):
         return v
 
 
+class SIRSchemaEntry(TypedDict, total=False):
+    """Schema metadata for a single SIR variable.
+
+    Attributes
+    ----------
+    name : str
+        Canonical SIR variable name (e.g., ``"elevation_m_mean"``).
+    units : str
+        Physical units of the variable (e.g., ``"m"``, ``"fraction"``).
+    statistic : str
+        Zonal statistic used (e.g., ``"mean"``, ``"categorical"``).
+    """
+
+    name: str
+    units: str
+    statistic: str
+
+
 class SIRManifestEntry(BaseModel):
     """Track normalized SIR output from stage 5.
 
@@ -102,15 +126,26 @@ class SIRManifestEntry(BaseModel):
     temporal_files : dict[str, str]
         Mapping of temporal dataset keys to file paths relative to the
         output directory (e.g., ``{"gridmet_2020": "sir/gridmet_2020.nc"}``).
-    sir_schema : list[dict]
-        Serialized SIR variable schema entries from ``build_sir_schema()``.
+    sir_schema : list[SIRSchemaEntry]
+        SIR variable schema entries from ``build_sir_schema()``.
+        Each entry contains ``name``, ``units``, and ``statistic`` keys.
     completed_at : datetime
         UTC timestamp when SIR normalization completed.
+
+    See Also
+    --------
+    SIRSchemaEntry : TypedDict defining the schema entry structure.
+
+    Notes
+    -----
+    This entry is the contract between Phase 1 (pipeline) and Phase 2
+    (model plugins).  ``SIRAccessor`` reads these file paths to discover
+    available SIR variables without re-running the pipeline.
     """
 
     static_files: dict[str, str] = {}
     temporal_files: dict[str, str] = {}
-    sir_schema: list[dict] = []
+    sir_schema: list[SIRSchemaEntry] = []
     completed_at: datetime = datetime.min
 
     @field_validator("completed_at", mode="before")
@@ -133,8 +168,11 @@ class PipelineManifest(BaseModel):
     Attributes
     ----------
     version : int
-        Manifest schema version.  Must equal ``_SUPPORTED_VERSION``
-        (currently 1).  Incompatible versions cause a validation error.
+        Manifest schema version.  Must be one of ``_SUPPORTED_VERSIONS``
+        (currently {1, 2}).  Incompatible versions cause a validation error.
+    sir : SIRManifestEntry or None
+        SIR output tracking for Phase 2 consumers.  ``None`` for v1
+        manifests created before SIR normalization was implemented.
     fabric_fingerprint : str
         Fingerprint of the target fabric file (format:
         ``"{filename}|{mtime}|{size}"``).  Empty string for new
@@ -174,8 +212,12 @@ class PipelineManifest(BaseModel):
         manifest_path = output_dir / MANIFEST_FILENAME
         tmp_path = output_dir / f"{MANIFEST_FILENAME}.tmp"
         data = self.model_dump(mode="json")
-        tmp_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
-        tmp_path.replace(manifest_path)
+        try:
+            tmp_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+            tmp_path.replace(manifest_path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def is_fabric_current(self, expected_fingerprint: str) -> bool:
         """Check whether the stored fabric fingerprint matches the expected value.
@@ -275,7 +317,7 @@ def load_manifest(output_dir: Path) -> PipelineManifest | None:
         if not isinstance(raw, dict):
             raise ValueError(f"Expected YAML mapping, got {type(raw).__name__}")
         return PipelineManifest(**raw)
-    except (yaml.YAMLError, ValueError, Exception) as exc:
+    except (yaml.YAMLError, ValueError, ValidationError) as exc:
         logger.warning(
             "Corrupt manifest at %s — will reprocess all datasets. Error: %s",
             manifest_path,

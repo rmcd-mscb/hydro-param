@@ -173,11 +173,11 @@ def merge_temporal_into_derived(
 ) -> xr.Dataset:
     """Merge temporal forcing data into the derived parameter dataset.
 
-    .. deprecated::
-        Use ``PywatershedDerivation._derive_forcing()`` via
-        ``DerivationContext.temporal`` instead.  This standalone function
-        predates the plugin architecture and will be removed in a future
-        release.
+    .. note::
+        This standalone function predates the plugin architecture.  A future
+        release will wire temporal data through ``DerivationContext.temporal``
+        and ``PywatershedDerivation._derive_forcing()`` instead.  The CLI
+        currently still uses this function for temporal merge.
 
     Concatenate multi-year temporal chunks (keyed with ``_YYYY`` suffixes),
     rename variables to PRMS conventions, apply unit conversions, and align
@@ -204,23 +204,12 @@ def merge_temporal_into_derived(
     xr.Dataset
         Derived dataset with temporal variables merged in.
 
-    Warnings
-    --------
-    Emits a ``DeprecationWarning`` at call time.  Migrate to
-    ``DerivationContext.temporal`` with ``_derive_forcing()`` for new code.
+    Notes
+    -----
+    A future release will integrate this logic into
+    ``PywatershedDerivation._derive_forcing()`` via
+    ``DerivationContext.temporal``.
     """
-    import warnings
-
-    warnings.warn(
-        "merge_temporal_into_derived() is deprecated. "
-        "Use PywatershedDerivation._derive_forcing() via DerivationContext.temporal instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    logger.warning(
-        "merge_temporal_into_derived() is deprecated; "
-        "use DerivationContext.temporal with _derive_forcing() instead."
-    )
     renames = renames or {}
     conversions = conversions or {}
 
@@ -364,12 +353,10 @@ class PywatershedDerivation:
                 hru_ids = first_da.coords[id_field].values
             else:
                 hru_ids = None
-        elif hasattr(sir, "sizes") and id_field in sir.sizes:
-            nhru = sir.sizes[id_field]
-            hru_ids = np.arange(1, nhru + 1)
         else:
             nhru = 0
             hru_ids = None
+            logger.warning("Could not determine nhru count from fabric or SIR variables.")
 
         ds = xr.Dataset()
 
@@ -1881,7 +1868,13 @@ class PywatershedDerivation:
                 how="intersection",
             )
         except Exception:
-            logger.exception("gpd.overlay failed in step 6; using defaults")
+            logger.warning(
+                "gpd.overlay failed in step 6 (waterbody); using zero defaults "
+                "for depression storage parameters (dprst_frac, dprst_area_max). "
+                "Check that your waterbody file has valid geometries and a "
+                "compatible CRS.",
+                exc_info=True,
+            )
             return self._waterbody_defaults(ds, nhru)
 
         if intersections.empty:

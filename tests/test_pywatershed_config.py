@@ -104,6 +104,14 @@ class TestPwsTimeConfig:
         with pytest.raises(ValidationError):
             PwsTimeConfig(end="2020-09-30")  # type: ignore[call-arg]
 
+    def test_invalid_start_date(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="not-a-date", end="2020-09-30")
+
+    def test_invalid_end_date(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="1980-10-01", end="2020-13-45")
+
 
 class TestPwsOutputConfig:
     """Tests for output configuration, including cbh_dir migration."""
@@ -122,7 +130,8 @@ class TestPwsOutputConfig:
         assert cfg.forcing_dir == "cbh"
 
     def test_forcing_dir_takes_precedence_over_cbh_dir(self) -> None:
-        cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
+        with pytest.warns(DeprecationWarning, match="cbh_dir"):
+            cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
         assert cfg.forcing_dir == "forcing"
 
 
@@ -160,6 +169,12 @@ class TestPywatershedRunConfig:
 
     def test_invalid_target_model(self, minimal_config_dict: dict) -> None:
         minimal_config_dict["target_model"] = "swat"
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
+
+    def test_invalid_version(self, minimal_config_dict: dict) -> None:
+        """v3.0 config rejects unknown version strings."""
+        minimal_config_dict["version"] = "1.0"
         with pytest.raises(ValidationError):
             PywatershedRunConfig(**minimal_config_dict)
 

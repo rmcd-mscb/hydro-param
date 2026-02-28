@@ -55,7 +55,8 @@ class DerivationContext:
     sir : SIRAccessor
         Lazy accessor for normalized SIR output files.  Loads variables on
         demand via ``sir["var_name"]`` or ``sir.load_variable("var_name")``.
-        Supports ``"var_name" in sir`` for availability checks.
+        Supports ``"var_name" in sir`` for availability checks (both static
+        and temporal variables).
     temporal : dict[str, xr.Dataset] or None
         SIR-normalized temporal datasets keyed by name (e.g., ``"gridmet_2020"``).
         Each dataset contains time-indexed climate variables.  When ``None``,

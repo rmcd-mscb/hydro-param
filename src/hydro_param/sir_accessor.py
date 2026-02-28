@@ -6,7 +6,8 @@ from disk and the caller is responsible for releasing.
 
 Support a Dataset-compatible API (``__contains__``, ``__getitem__``,
 ``data_vars``) so derivation steps can check variable availability and
-load data with minimal code changes.
+load data with minimal code changes.  ``__contains__`` checks both static
+and temporal variables.
 
 When the manifest is missing or corrupt, fall back to discovering SIR
 files by globbing the ``sir/`` subdirectory with a warning.
@@ -25,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 import xarray as xr
 
-from hydro_param.manifest import load_manifest
+from hydro_param.manifest import SIRSchemaEntry, load_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +46,30 @@ class SIRAccessor:
     Raises
     ------
     FileNotFoundError
-        If a file referenced in the manifest does not exist on disk.
+        If a file referenced in the manifest does not exist on disk,
+        or if no SIR output files are found (neither manifest nor
+        ``sir/`` subdirectory).
 
     Notes
     -----
     Implement ``__contains__`` and ``__getitem__`` for compatibility
     with derivation steps that check ``"var_name" in sir`` and access
-    ``sir["var_name"]``.
+    ``sir["var_name"]``.  ``__contains__`` checks both static and
+    temporal variables.
+
+    Examples
+    --------
+    >>> sir = SIRAccessor(Path("output"))
+    >>> "elevation_m_mean" in sir
+    True
+    >>> elev = sir["elevation_m_mean"]
+    >>> sir.available_temporal()
+    ['gridmet_2020', 'gridmet_2021']
     """
 
     def __init__(self, output_dir: Path) -> None:
         self._output_dir = Path(output_dir)
-        self._sir_schema: list[dict] = []
+        self._sir_schema: list[SIRSchemaEntry] = []
 
         manifest = load_manifest(self._output_dir)
         if manifest is not None and manifest.sir is not None:
@@ -71,8 +84,15 @@ class SIRAccessor:
                 "to regenerate the manifest.",
                 self._output_dir,
             )
-            self._static = _glob_sir_static(self._output_dir / "sir")
-            self._temporal = _glob_sir_temporal(self._output_dir / "sir")
+            sir_dir = self._output_dir / "sir"
+            self._static = _glob_sir_static(sir_dir)
+            self._temporal = _glob_sir_temporal(sir_dir)
+            if not self._static and not self._temporal:
+                raise FileNotFoundError(
+                    f"No SIR output files found at {sir_dir}. "
+                    f"Run 'hydro-param run pipeline.yml' to produce SIR output "
+                    f"before running Phase 2."
+                )
 
         self._validate_files()
 
@@ -131,16 +151,17 @@ class SIRAccessor:
         return self.available_variables()
 
     @property
-    def sir_schema(self) -> list[dict]:
-        """Return SIR variable schema metadata.
+    def sir_schema(self) -> list[SIRSchemaEntry]:
+        """Return a copy of SIR variable schema metadata.
 
         Returns
         -------
-        list[dict]
+        list[SIRSchemaEntry]
             Schema entries from the manifest, or empty list if
-            discovered via glob fallback.
+            discovered via glob fallback.  Returns a copy to prevent
+            external mutation of internal state.
         """
-        return self._sir_schema
+        return list(self._sir_schema)
 
     def load_variable(self, name: str) -> xr.DataArray:
         """Load a single SIR variable from disk.
@@ -153,23 +174,44 @@ class SIRAccessor:
         Returns
         -------
         xr.DataArray
-            Variable data with the fabric id field as dimension.
+            Variable data with the CSV index column as dimension.
+            By convention, SIR CSV files use the fabric id field as
+            the index column (produced by stage 5).
 
         Raises
         ------
         KeyError
             If the variable name is not in the SIR.
+        OSError
+            If the CSV file is corrupt, truncated, or unreadable.
+
+        Notes
+        -----
+        For single-column CSVs where the column name differs from the
+        registry key (e.g., a renamed variable), the sole data variable
+        is returned regardless of its actual name.
         """
         if name not in self._static:
             raise KeyError(
                 f"SIR variable '{name}' not found. Available: {sorted(self._static.keys())}"
             )
         path = self._output_dir / self._static[name]
-        df = pd.read_csv(path, index_col=0)
+        try:
+            df = pd.read_csv(path, index_col=0)
+        except Exception as exc:
+            raise OSError(
+                f"Failed to read SIR file for variable '{name}' at {path}: {exc}. "
+                f"The file may be corrupt or truncated. "
+                f"Re-run 'hydro-param run pipeline.yml' to regenerate."
+            ) from exc
         ds = xr.Dataset.from_dataframe(df)
         if name in ds:
             return ds[name]
-        # Single-column CSV: return the first (only) variable
+        if not ds.data_vars:
+            raise ValueError(
+                f"SIR file for '{name}' at {path} contains no data columns. "
+                f"Re-run 'hydro-param run pipeline.yml' to regenerate."
+            )
         return next(iter(ds.data_vars.values()))
 
     def load_temporal(self, name: str) -> xr.Dataset:
@@ -189,6 +231,8 @@ class SIRAccessor:
         ------
         KeyError
             If the temporal key is not in the SIR.
+        OSError
+            If the NetCDF file is corrupt, truncated, or unreadable.
         """
         if name not in self._temporal:
             raise KeyError(
@@ -196,11 +240,23 @@ class SIRAccessor:
                 f"Available: {sorted(self._temporal.keys())}"
             )
         path = self._output_dir / self._temporal[name]
-        return xr.open_dataset(path)
+        try:
+            return xr.open_dataset(path)
+        except Exception as exc:
+            raise OSError(
+                f"Failed to read SIR temporal file for '{name}' at {path}: {exc}. "
+                f"The file may be corrupt. "
+                f"Re-run 'hydro-param run pipeline.yml' to regenerate."
+            ) from exc
 
     def __contains__(self, name: object) -> bool:
-        """Check if a variable name is available (Dataset-compatible API)."""
-        return isinstance(name, str) and name in self._static
+        """Check if a variable name is available (Dataset-compatible API).
+
+        Check both static and temporal variable maps.  Use
+        ``available_variables()`` or ``available_temporal()`` to query
+        each map separately.
+        """
+        return isinstance(name, str) and (name in self._static or name in self._temporal)
 
     def __getitem__(self, name: str) -> xr.DataArray:
         """Load a variable by name (Dataset-compatible API).

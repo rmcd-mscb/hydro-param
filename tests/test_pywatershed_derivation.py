@@ -44,11 +44,6 @@ class _MockSIRAccessor:
         return list(str(v) for v in self._ds.data_vars)
 
     @property
-    def sizes(self) -> dict[str, int]:
-        """Expose dimension sizes from the underlying dataset."""
-        return dict(self._ds.sizes)
-
-    @property
     def sir_schema(self) -> list[dict]:
         return []
 
@@ -2007,7 +2002,12 @@ class TestDeriveCalibrationSeeds:
     def test_missing_input_uses_default(self, derivation: PywatershedDerivation) -> None:
         """When input variable missing, default value is used."""
         # No slope data -> smidx_coef should use default 0.01
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", [0.0, 0.0])},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
 
@@ -2036,7 +2036,12 @@ class TestDeriveCalibrationSeeds:
 
     def test_existing_param_not_overwritten(self, derivation: PywatershedDerivation) -> None:
         """Seed skipped if param already in dataset; override wins."""
-        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", [0.0, 0.0])},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
         ctx = DerivationContext(
             sir=sir,
             fabric_id_field="nhm_id",
@@ -2141,20 +2146,6 @@ class TestDeriveCalibrationSeeds:
         # Should use default value 0.015
         np.testing.assert_allclose(ds["gwflow_coef"].values, [0.015, 0.015])
         assert any("unknown method" in r.message for r in caplog.records)
-
-
-class TestMergeTemporalDeprecation:
-    """Test that merge_temporal_into_derived logs a deprecation warning."""
-
-    def test_deprecation_warning_logged(self) -> None:
-        """Calling merge_temporal_into_derived logs a deprecation warning."""
-        import pytest
-
-        from hydro_param.derivations.pywatershed import merge_temporal_into_derived
-
-        ds = xr.Dataset({"x": ("nhru", [1.0])})
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            merge_temporal_into_derived(ds, {})
 
 
 class TestSatVp:

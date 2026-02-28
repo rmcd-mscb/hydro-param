@@ -17,8 +17,9 @@ Implement the 5-stage pipeline from design.md section 4:
    by model plugins.
 
 A lazy :meth:`PipelineResult.load_sir` method assembles a combined
-``xr.Dataset`` on demand for downstream consumers (e.g., the pywatershed
-derivation plugin).
+``xr.Dataset`` on demand for downstream consumers.  Phase 2 model plugins
+(e.g., pywatershed) consume SIR files from disk via ``SIRAccessor`` rather
+than ``PipelineResult.load_sir``.
 
 This module is **model-agnostic** by design -- all model-specific logic
 (unit conversions, variable renaming, derived math, output formatting)
@@ -1424,7 +1425,14 @@ def stage5_normalize_sir(
             for k, v in sir_files.items()
             if str(v).endswith(".nc")
         },
-        sir_schema=[s.model_dump() if hasattr(s, "model_dump") else s.__dict__ for s in schema],
+        sir_schema=[
+            _manifest_mod.SIRSchemaEntry(
+                name=s.canonical_name,
+                units=s.canonical_units,
+                statistic="categorical" if s.categorical else "continuous",
+            )
+            for s in schema
+        ],
         completed_at=datetime.now(timezone.utc),
     )
 

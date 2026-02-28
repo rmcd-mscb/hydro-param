@@ -850,3 +850,66 @@ def test_pws_run_waterbody_missing_ftype_exits(tmp_path: Path) -> None:
     )
     with pytest.raises(SystemExit):
         _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_sir_path_missing_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits when sir_path points to a directory with no SIR output."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    fabric_path = tmp_path / "nhru.gpkg"
+    gdf = gpd.GeoDataFrame(
+        {"nhm_id": [1, 2], "geometry": [box(0, 0, 1, 1), box(1, 1, 2, 2)]},
+        crs="EPSG:4326",
+    )
+    gdf.to_file(fabric_path, driver="GPKG")
+
+    # Point sir_path at empty directory (no manifest, no sir/ subdir)
+    empty_sir = tmp_path / "empty_output"
+    empty_sir.mkdir()
+
+    config_path = _write_pws_config(
+        tmp_path,
+        fabric_path=fabric_path,
+        sir_path=str(empty_sir),
+    )
+    with pytest.raises(SystemExit):
+        _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_fabric_not_found_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits when fabric_path does not exist."""
+    _, sir_path = _setup_pws_project(tmp_path)
+    config_path = _write_pws_config(
+        tmp_path,
+        fabric_path=str(tmp_path / "nonexistent_fabric.gpkg"),
+        sir_path=sir_path,
+    )
+    with pytest.raises(SystemExit):
+        _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_relative_sir_path(tmp_path: Path) -> None:
+    """pws_run_cmd resolves relative sir_path against config file's parent."""
+    fabric_path, _sir_path = _setup_pws_project(tmp_path)
+
+    # Write config in a *subdirectory* so relative sir_path must resolve
+    config_subdir = tmp_path / "configs"
+    config_subdir.mkdir()
+    config_path = config_subdir / "pws_config.yml"
+
+    cfg: dict = {
+        "target_model": "pywatershed",
+        "version": "3.0",
+        "domain": {"fabric_path": str(fabric_path)},
+        "time": {"start": "2020-10-01", "end": "2021-09-30"},
+        # Relative to config's parent: configs/../output = tmp_path/output
+        "sir_path": "../output",
+        "output": {"path": str(tmp_path / "pws_output")},
+    }
+    config_path.write_text(yaml.dump(cfg))
+
+    # Should NOT fail on SIR path resolution — the relative path resolves
+    # to tmp_path/output which has valid SIR output from _setup_pws_project.
+    # The command completes (with warnings for missing data, but no crash).
+    _run("pywatershed", "run", str(config_path))

@@ -742,8 +742,12 @@ def pws_run_cmd(config: Path) -> None:
         config=derivation_config,
     )
 
-    plugin = PywatershedDerivation()
-    derived = plugin.derive(ctx)
+    try:
+        plugin = PywatershedDerivation()
+        derived = plugin.derive(ctx)
+    except Exception as exc:
+        logger.exception("Parameter derivation failed.")
+        raise SystemExit(1) from exc
 
     # ── Load and merge temporal data ──
     temporal = {}
@@ -770,7 +774,11 @@ def pws_run_cmd(config: Path) -> None:
         "start": pws_config.time.start,
         "end": pws_config.time.end,
     }
-    formatter.write(derived, pws_config.output.path, formatter_config)
+    try:
+        formatter.write(derived, pws_config.output.path, formatter_config)
+    except Exception as exc:
+        logger.exception("Failed to write pywatershed output to '%s'.", pws_config.output.path)
+        raise SystemExit(1) from exc
 
     soltab_path = Path(pws_config.output.path) / pws_config.output.soltab_file
     if not soltab_path.exists():

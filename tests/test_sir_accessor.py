@@ -82,12 +82,19 @@ class TestSIRAccessor:
         assert "elevation_m_mean" in acc.available_variables()
         assert "gridmet_2020" in acc.available_temporal()
 
-    def test_contains_check(self, sir_dir_with_manifest: Path) -> None:
+    def test_contains_check_static(self, sir_dir_with_manifest: Path) -> None:
         from hydro_param.sir_accessor import SIRAccessor
 
         acc = SIRAccessor(sir_dir_with_manifest)
         assert "elevation_m_mean" in acc
         assert "no_such_var" not in acc
+
+    def test_contains_check_temporal(self, sir_dir_with_manifest: Path) -> None:
+        """__contains__ includes temporal datasets."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        acc = SIRAccessor(sir_dir_with_manifest)
+        assert "gridmet_2020" in acc
 
     def test_getitem(self, sir_dir_with_manifest: Path) -> None:
         """SIRAccessor[name] loads a variable (Dataset-compatible API)."""
@@ -117,3 +124,60 @@ class TestSIRAccessor:
 
         with pytest.raises(FileNotFoundError, match="ghost"):
             SIRAccessor(tmp_path)
+
+    def test_empty_sir_dir_raises(self, tmp_path: Path) -> None:
+        """Glob fallback with no sir/ dir raises FileNotFoundError."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        with pytest.raises(FileNotFoundError, match="No SIR output files found"):
+            SIRAccessor(tmp_path)
+
+    def test_empty_sir_subdir_raises(self, tmp_path: Path) -> None:
+        """Glob fallback with empty sir/ subdir raises FileNotFoundError."""
+        (tmp_path / "sir").mkdir()
+        from hydro_param.sir_accessor import SIRAccessor
+
+        with pytest.raises(FileNotFoundError, match="No SIR output files found"):
+            SIRAccessor(tmp_path)
+
+    def test_corrupt_csv_raises(self, sir_dir_with_manifest: Path) -> None:
+        """Corrupt CSV produces an actionable error (OSError or ValueError)."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        # Write binary garbage that pandas cannot parse
+        csv_path = sir_dir_with_manifest / "sir" / "elevation_m_mean.csv"
+        csv_path.write_bytes(b"\x00\x01\x02\x03\x04\x05")
+
+        acc = SIRAccessor(sir_dir_with_manifest)
+        with pytest.raises((OSError, ValueError), match="elevation_m_mean"):
+            acc.load_variable("elevation_m_mean")
+
+    def test_corrupt_netcdf_raises_oserror(self, sir_dir_with_manifest: Path) -> None:
+        """Corrupt NetCDF produces an actionable OSError."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        # Corrupt the NC file
+        nc_path = sir_dir_with_manifest / "sir" / "gridmet_2020.nc"
+        nc_path.write_bytes(b"not a netcdf file")
+
+        acc = SIRAccessor(sir_dir_with_manifest)
+        with pytest.raises(OSError, match="gridmet_2020"):
+            acc.load_temporal("gridmet_2020")
+
+    def test_missing_temporal_key_raises(self, sir_dir_with_manifest: Path) -> None:
+        """load_temporal raises KeyError for missing key."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        acc = SIRAccessor(sir_dir_with_manifest)
+        with pytest.raises(KeyError, match="nonexistent"):
+            acc.load_temporal("nonexistent")
+
+    def test_sir_schema_returns_copy(self, sir_dir_with_manifest: Path) -> None:
+        """sir_schema returns a copy; mutating it does not affect internal state."""
+        from hydro_param.sir_accessor import SIRAccessor
+
+        acc = SIRAccessor(sir_dir_with_manifest)
+        schema = acc.sir_schema
+        original_len = len(schema)
+        schema.append({"name": "injected"})
+        assert len(acc.sir_schema) == original_len

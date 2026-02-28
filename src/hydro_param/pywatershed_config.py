@@ -5,7 +5,7 @@ Provide Pydantic models that validate the YAML configuration for the
 config that consumes pre-existing SIR output from the generic Phase 1
 pipeline.  It does NOT configure the Phase 1 pipeline itself.
 
-The configuration covers five sections: domain file paths, simulation
+The configuration covers six sections: domain file paths, simulation
 time period, SIR output location, manual parameter overrides, calibration
 seed generation, and output file layout.
 
@@ -24,12 +24,13 @@ hydro_param.cli.pws_run_cmd : Two-phase workflow consumer.
 
 from __future__ import annotations
 
+import datetime as _dt
 import warnings
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PwsDomainConfig(BaseModel):
@@ -86,6 +87,16 @@ class PwsTimeConfig(BaseModel):
     start: str  # ISO date, e.g. "1980-10-01"
     end: str
     timestep: Literal["daily"] = "daily"
+
+    @field_validator("start", "end")
+    @classmethod
+    def _validate_iso_date(cls, v: str) -> str:
+        """Validate that start/end are valid ISO date strings."""
+        try:
+            _dt.date.fromisoformat(v)
+        except ValueError:
+            raise ValueError(f"Invalid date '{v}'. Expected ISO format (YYYY-MM-DD).") from None
+        return v
 
 
 class PwsParameterOverrides(BaseModel):
@@ -187,7 +198,13 @@ class PwsOutputConfig(BaseModel):
                 )
                 values["forcing_dir"] = values.pop("cbh_dir")
             else:
-                # Both specified — drop legacy key silently
+                warnings.warn(
+                    f"Both 'cbh_dir' and 'forcing_dir' specified; "
+                    f"using 'forcing_dir: {values['forcing_dir']}' and "
+                    f"ignoring 'cbh_dir: {values['cbh_dir']}'.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
                 values.pop("cbh_dir")
         return values
 
@@ -231,7 +248,7 @@ class PywatershedRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_model: Literal["pywatershed"] = "pywatershed"
-    version: str = "3.0"
+    version: Literal["3.0"] = "3.0"
     domain: PwsDomainConfig
     time: PwsTimeConfig
     sir_path: Path = Path("output")
