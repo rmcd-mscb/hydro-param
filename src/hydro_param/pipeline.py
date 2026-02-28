@@ -305,6 +305,79 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
     return fabric
 
 
+def _validate_time_range(
+    ds_req: DatasetRequest,
+    entry: DatasetEntry,
+) -> None:
+    """Validate that requested time period or year falls within the dataset's available range.
+
+    Check the ``time_period`` start/end years and ``year`` values against
+    the dataset's ``year_range`` metadata.  Raise ``ValueError`` with an
+    actionable message if the requested range exceeds the available data.
+
+    If the dataset entry has no ``year_range`` metadata, validation is
+    skipped and the function returns immediately.
+
+    Parameters
+    ----------
+    ds_req : DatasetRequest
+        Pipeline request containing ``time_period`` and/or ``year``.
+    entry : DatasetEntry
+        Registry entry containing ``year_range`` metadata.
+
+    Raises
+    ------
+    ValueError
+        If the requested time range falls outside the dataset's
+        ``year_range``.
+
+    Notes
+    -----
+    Years are extracted from the first four characters of each ISO date
+    string in ``time_period`` (e.g., ``"2020-01-01"`` -> ``2020``).
+    This relies on ``DatasetRequest._validate_time_period`` having
+    already confirmed that dates are well-formed ISO strings.
+    """
+    if entry.year_range is None:
+        logger.debug(
+            "Dataset '%s' has no year_range metadata; skipping time range validation",
+            ds_req.name,
+        )
+        return
+
+    avail_start, avail_end = entry.year_range
+
+    # Validate time_period (temporal datasets)
+    if ds_req.time_period is not None:
+        req_start_year = int(ds_req.time_period[0][:4])
+        req_end_year = int(ds_req.time_period[1][:4])
+        if req_start_year < avail_start:
+            raise ValueError(
+                f"Dataset '{ds_req.name}' time_period {ds_req.time_period} "
+                f"starts in {req_start_year}, but data is only "
+                f"available from {avail_start}-{avail_end}. "
+                f"Adjust time_period in your pipeline config."
+            )
+        if req_end_year > avail_end:
+            raise ValueError(
+                f"Dataset '{ds_req.name}' time_period {ds_req.time_period} "
+                f"ends in {req_end_year}, but data is only "
+                f"available from {avail_start}-{avail_end}. "
+                f"Adjust time_period in your pipeline config."
+            )
+
+    # Validate year (e.g., multi-year static datasets like NLCD)
+    if ds_req.year is not None:
+        years = [ds_req.year] if isinstance(ds_req.year, int) else ds_req.year
+        for y in years:
+            if y < avail_start or y > avail_end:
+                raise ValueError(
+                    f"Dataset '{ds_req.name}' year {y} is outside the "
+                    f"available range {avail_start}-{avail_end}. "
+                    f"Adjust year in your pipeline config."
+                )
+
+
 def stage2_resolve_datasets(
     config: PipelineConfig,
     registry: DatasetRegistry,
@@ -335,7 +408,9 @@ def stage2_resolve_datasets(
     ------
     ValueError
         If a ``local_tiff`` dataset has no source path (dataset-level or
-        per-variable), or if a temporal dataset has no ``time_period``.
+        per-variable), if a temporal dataset has no ``time_period``, or if
+        the requested ``time_period`` or ``year`` falls outside the
+        dataset's ``year_range``.
     KeyError
         If a dataset name is not found in the registry (raised by
         ``registry.get()``).
@@ -401,6 +476,9 @@ def stage2_resolve_datasets(
                 f"Dataset '{ds_req.name}' is temporal but no 'time_period' specified. "
                 f"Add time_period: ['YYYY-MM-DD', 'YYYY-MM-DD'] to your pipeline config."
             )
+
+        # Validate time range against dataset availability
+        _validate_time_range(ds_req, entry)
 
         var_specs = [registry.resolve_variable(ds_req.name, v) for v in ds_req.variables]
         resolved.append((entry, ds_req, var_specs))

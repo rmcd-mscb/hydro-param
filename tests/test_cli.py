@@ -108,6 +108,20 @@ def registry_yaml(tmp_path: Path) -> Path:
                 "category": "topography",
                 "variables": [],
             },
+            "temporal_ds": {
+                "description": "Temporal test dataset",
+                "strategy": "nhgf_stac",
+                "collection": "snodas",
+                "crs": "EPSG:4326",
+                "category": "snow",
+                "temporal": True,
+                "t_coord": "time",
+                "time_step": "daily",
+                "year_range": [2003, 2025],
+                "variables": [
+                    {"name": "SWE", "band": 1, "native_name": "SWE"},
+                ],
+            },
         }
     }
     path = tmp_path / "datasets.yml"
@@ -137,6 +151,15 @@ def test_datasets_list_shows_strategy(registry_yaml: Path, capsys: pytest.Captur
     assert "local_tiff" in out
 
 
+def test_datasets_list_shows_temporal_info(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
+    """datasets list shows time_step and year_range for temporal datasets."""
+    _run("datasets", "list", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    assert "daily" in out
+    assert "2003" in out
+    assert "2025" in out
+
+
 # ---------------------------------------------------------------------------
 # datasets info
 # ---------------------------------------------------------------------------
@@ -150,6 +173,16 @@ def test_datasets_info_known(registry_yaml: Path, capsys: pytest.CaptureFixture[
     assert "EPSG:4326" in out
     assert "elevation" in out
     assert "slope" in out
+
+
+def test_datasets_info_shows_temporal_metadata(
+    registry_yaml: Path, capsys: pytest.CaptureFixture[str]
+):
+    """datasets info shows time_step and year_range for temporal datasets."""
+    _run("datasets", "info", "temporal_ds", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    assert "Time step: daily" in out
+    assert "2003" in out and "2025" in out
 
 
 def test_datasets_info_with_download(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):

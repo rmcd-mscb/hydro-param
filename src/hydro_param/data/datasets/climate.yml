@@ -12,6 +12,8 @@ datasets:
     t_coord: "day"
     category: climate
     temporal: true
+    time_step: daily
+    year_range: [1979, 2025]
     # Note: climr_cat pipeline implementation is Phase 2.
     # ClimRCatData auto-configures from ClimateR-Catalog parquet file.
     # OPeNDAP base: https://thredds.northwestknowledge.net/thredds/dodsC/

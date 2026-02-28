@@ -150,7 +150,11 @@ def datasets_list(*, registry: Path | None = None) -> None:
         for name, entry in sorted(entries):
             desc = entry.description or ""
             status = _access_status(entry)
-            print(f"  {name:<20s} {desc:<50s} [{entry.strategy}, {status}]")
+            temporal_tag = ""
+            if entry.temporal and entry.time_step:
+                yr = f", {entry.year_range[0]}-{entry.year_range[1]}" if entry.year_range else ""
+                temporal_tag = f", {entry.time_step}{yr}"
+            print(f"  {name:<20s} {desc:<50s} [{entry.strategy}{temporal_tag}, {status}]")
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +198,10 @@ def datasets_info(name: str, *, registry: Path | None = None) -> None:
     print(f"CRS: {entry.crs}")
     if entry.category:
         print(f"Category: {entry.category}")
+    if entry.temporal:
+        print(f"Time step: {entry.time_step}")
+        if entry.year_range:
+            print(f"Available years: {entry.year_range[0]}-{entry.year_range[1]}")
 
     if entry.variables:
         print("\nVariables:")

@@ -234,6 +234,7 @@ def test_temporal_with_t_coord_valid():
         source="s3://bucket/data.zarr",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     assert entry.t_coord == "time"
     assert entry.temporal is True
@@ -632,6 +633,7 @@ def test_climr_cat_valid():
         catalog_id="gridmet",
         temporal=True,
         t_coord="day",
+        time_step="daily",
     )
     assert entry.strategy == "climr_cat"
     assert entry.catalog_id == "gridmet"
@@ -644,6 +646,7 @@ def test_climr_cat_requires_catalog_id():
             strategy="climr_cat",
             temporal=True,
             t_coord="day",
+            time_step="daily",
         )
 
 
@@ -665,6 +668,7 @@ def test_temporal_requires_native_name_on_variables():
             catalog_id="gridmet",
             temporal=True,
             t_coord="day",
+            time_step="daily",
             variables=[
                 VariableSpec(name="pr", units="mm"),  # missing native_name
             ],
@@ -678,6 +682,7 @@ def test_temporal_native_name_ok_when_set():
         catalog_id="gridmet",
         temporal=True,
         t_coord="day",
+        time_step="daily",
         variables=[
             VariableSpec(name="pr", units="mm", native_name="precipitation_amount"),
         ],
@@ -692,6 +697,7 @@ def test_nhgf_stac_valid():
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     assert entry.strategy == "nhgf_stac"
     assert entry.collection == "snodas"
@@ -704,6 +710,7 @@ def test_nhgf_stac_requires_collection():
             strategy="nhgf_stac",
             temporal=True,
             t_coord="time",
+            time_step="daily",
         )
 
 
@@ -726,6 +733,7 @@ def test_nhgf_stac_temporal_still_valid():
         collection="snodas",
         temporal=True,
         t_coord="time",
+        time_step="daily",
     )
     assert entry.temporal is True
     assert entry.t_coord == "time"
@@ -844,3 +852,67 @@ def test_default_registry_resolves_to_existing_directory():
 def test_default_registry_is_absolute():
     """DEFAULT_REGISTRY must be an absolute path to work regardless of CWD."""
     assert DEFAULT_REGISTRY.is_absolute()
+
+
+# ---------------------------------------------------------------------------
+# time_step field
+# ---------------------------------------------------------------------------
+
+
+def test_time_step_required_for_temporal():
+    """Temporal datasets must specify time_step."""
+    with pytest.raises(ValueError, match="time_step"):
+        DatasetEntry(
+            strategy="nhgf_stac",
+            collection="snodas",
+            temporal=True,
+            t_coord="time",
+            time_step=None,
+            variables=[VariableSpec(name="SWE", band=1, native_name="SWE")],
+        )
+
+
+def test_time_step_accepted_for_temporal():
+    """Temporal datasets with time_step set pass validation."""
+    entry = DatasetEntry(
+        strategy="nhgf_stac",
+        collection="snodas",
+        temporal=True,
+        t_coord="time",
+        time_step="daily",
+        variables=[VariableSpec(name="SWE", band=1, native_name="SWE")],
+    )
+    assert entry.time_step == "daily"
+
+
+def test_time_step_none_for_static():
+    """Static datasets can omit time_step (None is valid)."""
+    entry = DatasetEntry(
+        strategy="stac_cog",
+        catalog_url="https://example.com",
+        collection="test",
+        temporal=False,
+    )
+    assert entry.time_step is None
+
+
+def test_time_step_rejects_invalid():
+    """time_step only accepts 'daily' or 'monthly'."""
+    with pytest.raises(ValueError):
+        DatasetEntry(
+            strategy="nhgf_stac",
+            collection="snodas",
+            temporal=True,
+            t_coord="time",
+            time_step="hourly",
+            variables=[VariableSpec(name="SWE", band=1, native_name="SWE")],
+        )
+
+
+def test_bundled_temporal_datasets_have_year_range_and_time_step():
+    """All temporal datasets in the bundled registry have year_range and time_step."""
+    registry = load_registry(DEFAULT_REGISTRY)
+    for name, entry in registry.datasets.items():
+        if entry.temporal:
+            assert entry.year_range is not None, f"Temporal dataset '{name}' missing year_range"
+            assert entry.time_step is not None, f"Temporal dataset '{name}' missing time_step"
