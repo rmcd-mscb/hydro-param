@@ -300,7 +300,7 @@ def load_config(path: str | Path) -> PipelineConfig:
     -------
     PipelineConfig
         Validated pipeline configuration with all paths resolved to
-        absolute, ready for
+        absolute paths, ready for
         :func:`~hydro_param.pipeline.run_pipeline_from_config`.
 
     Raises
@@ -331,7 +331,7 @@ def _resolve_paths(config: PipelineConfig) -> PipelineConfig:
     Convert ``target_fabric.path``, ``output.path``, and per-dataset
     ``source`` fields from relative to absolute using
     ``Path.resolve()`` (which anchors to the current working directory).
-    Absolute paths are left unchanged.
+    Absolute paths remain absolute.
 
     Parameters
     ----------
@@ -341,7 +341,12 @@ def _resolve_paths(config: PipelineConfig) -> PipelineConfig:
     Returns
     -------
     PipelineConfig
-        Configuration with all path fields resolved to absolute paths.
+        The same *config* object with path fields resolved in place.
+
+    Notes
+    -----
+    This function mutates *config* in place and returns the same object
+    for call-chaining convenience.  No copy is made.
     """
     config.target_fabric.path = config.target_fabric.path.resolve()
     config.output.path = config.output.path.resolve()
