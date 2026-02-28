@@ -32,7 +32,7 @@ MARKER_FILE = ".hydro-param"
 """str : Hidden file name placed at the project root by ``hydro-param init``."""
 
 # Fallback categories when registry is unavailable.
-# These match the per-category YAML files in configs/datasets/.
+# These match the per-category YAML files in hydro_param.data.datasets.
 DEFAULT_CATEGORIES: list[str] = [
     "climate",
     "geology",
@@ -45,7 +45,7 @@ DEFAULT_CATEGORIES: list[str] = [
 ]
 """list[str] : Built-in dataset categories used when the registry is unavailable.
 
-These names correspond to the per-category YAML files under ``configs/datasets/``
+These names correspond to the per-category YAML files in ``hydro_param.data.datasets``
 and become subdirectory names under ``data/`` in an initialized project.
 """
 

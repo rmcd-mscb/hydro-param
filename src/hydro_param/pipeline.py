@@ -42,6 +42,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import cast
 
@@ -78,7 +79,7 @@ from hydro_param.sir import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REGISTRY = Path("configs/datasets")
+DEFAULT_REGISTRY = Path(str(_pkg_files("hydro_param").joinpath("data/datasets")))
 
 
 @dataclass
@@ -1482,7 +1483,7 @@ def run_pipeline(
         Path to the pipeline YAML config file.
     registry_path : str or Path or None
         Path to a dataset registry YAML file or directory of YAML files.
-        Defaults to ``configs/datasets/`` (the built-in registry).
+        Defaults to the built-in registry bundled with the package.
 
     Returns
     -------
