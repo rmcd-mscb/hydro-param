@@ -334,7 +334,7 @@ def test_processing_config_network_timeout_rejects_negative() -> None:
 
 
 def test_load_config_resolves_relative_paths(tmp_path: Path):
-    """load_config resolves relative paths to absolute."""
+    """load_config resolves relative paths to absolute against CWD."""
     raw = {
         "target_fabric": {"path": "data/catchments.gpkg", "id_field": "id"},
         "datasets": [
@@ -346,6 +346,25 @@ def test_load_config_resolves_relative_paths(tmp_path: Path):
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
+    assert config.target_fabric.path.is_absolute()
+    assert config.target_fabric.path == Path.cwd() / "data" / "catchments.gpkg"
+    assert config.output.path.is_absolute()
+    assert config.output.path == Path.cwd() / "output"
+
+
+def test_load_config_resolves_dotdot_paths(tmp_path: Path):
+    """Paths with '..' components are fully resolved."""
+    raw = {
+        "target_fabric": {"path": "../sibling/catchments.gpkg", "id_field": "id"},
+        "datasets": [],
+        "output": {"path": "sub/../output"},
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert ".." not in str(config.target_fabric.path)
+    assert ".." not in str(config.output.path)
     assert config.target_fabric.path.is_absolute()
     assert config.output.path.is_absolute()
 
