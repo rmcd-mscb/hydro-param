@@ -53,6 +53,7 @@ import xarray as xr
 import yaml
 
 from hydro_param.plugins import DerivationContext
+from hydro_param.sir_accessor import SIRAccessor
 from hydro_param.solar import compute_soltab
 from hydro_param.units import convert
 
@@ -172,11 +173,14 @@ def merge_temporal_into_derived(
 ) -> xr.Dataset:
     """Merge temporal forcing data into the derived parameter dataset.
 
-    .. deprecated::
-        Use ``PywatershedDerivation._derive_forcing()`` via
-        ``DerivationContext.temporal`` instead.  This standalone function
-        predates the plugin architecture and will be removed in a future
-        release.
+    .. note::
+        ``_derive_forcing()`` and ``_compute_monthly_normals()`` already exist
+        in ``PywatershedDerivation`` and work when ``DerivationContext.temporal``
+        is populated.  However, the CLI (``pws_run_cmd``) does not yet pass
+        temporal data through the context -- it uses this standalone function
+        instead.  As a result, steps 10 (PET) and 11 (transpiration) fall back
+        to scalar defaults when run via the CLI.  A future PR should pass
+        temporal data through the context to enable climate-derived parameters.
 
     Concatenate multi-year temporal chunks (keyed with ``_YYYY`` suffixes),
     rename variables to PRMS conventions, apply unit conversions, and align
@@ -203,23 +207,7 @@ def merge_temporal_into_derived(
     xr.Dataset
         Derived dataset with temporal variables merged in.
 
-    Warnings
-    --------
-    Emits a ``DeprecationWarning`` at call time.  Migrate to
-    ``DerivationContext.temporal`` with ``_derive_forcing()`` for new code.
     """
-    import warnings
-
-    warnings.warn(
-        "merge_temporal_into_derived() is deprecated. "
-        "Use PywatershedDerivation._derive_forcing() via DerivationContext.temporal instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    logger.warning(
-        "merge_temporal_into_derived() is deprecated; "
-        "use DerivationContext.temporal with _derive_forcing() instead."
-    )
     renames = renames or {}
     conversions = conversions or {}
 
@@ -324,7 +312,9 @@ class PywatershedDerivation:
             Typed input bundle containing the SIR dataset, target fabric
             GeoDataFrame, segment GeoDataFrame, waterbody GeoDataFrame,
             temporal forcing datasets, lookup table directory, and
-            pipeline configuration.
+            pipeline configuration.  When invoked via the CLI
+            ``pws_run_cmd``, ``temporal`` is ``None`` and forcing data
+            is merged separately after ``derive()`` returns.
 
         Returns
         -------
@@ -346,12 +336,35 @@ class PywatershedDerivation:
         """
         sir = context.sir
         id_field = context.fabric_id_field
-        nhru = sir.sizes.get(id_field, 0)
+        fabric = context.fabric
+
+        # Derive nhru count and IDs from fabric (authoritative source).
+        # Fall back to SIR first variable length when no fabric is provided
+        # (e.g., library API use without a fabric file).
+        if fabric is not None and id_field in fabric.columns:
+            nhru = len(fabric)
+            hru_ids = fabric[id_field].values
+        elif sir.data_vars:
+            first_var = sir.data_vars[0]
+            first_da = sir[first_var]
+            nhru = len(first_da)
+            # Try to recover HRU IDs from the SIR variable's coordinates.
+            if id_field in first_da.dims and id_field in first_da.coords:
+                hru_ids = first_da.coords[id_field].values
+            else:
+                hru_ids = None
+        else:
+            raise ValueError(
+                f"Cannot determine HRU count: fabric is None or missing "
+                f"'{id_field}' column, and SIR contains no static variables. "
+                f"Provide a fabric GeoDataFrame with an '{id_field}' column."
+            )
+
         ds = xr.Dataset()
 
         # Carry HRU coordinates so derived params retain stable indexing
-        if id_field in sir.coords:
-            ds = ds.assign_coords(nhru=sir[id_field].values)
+        if hru_ids is not None:
+            ds = ds.assign_coords(nhru=hru_ids)
 
         # Step 1: Geometry (hru_area, hru_lat)
         ds = self._derive_geometry(context, ds)
@@ -451,12 +464,7 @@ class PywatershedDerivation:
         id_field = ctx.fabric_id_field
 
         if fabric is not None and id_field in fabric.columns:
-            # Align fabric rows to SIR HRU ordering
-            hru_ids = sir[id_field].values if id_field in sir.coords else None
-            if hru_ids is not None:
-                fab = fabric.set_index(id_field).loc[hru_ids].reset_index()
-            else:
-                fab = fabric
+            fab = fabric
 
             # Area via equal-area projection (EPSG:5070 = CONUS Albers)
             fab_5070 = fab.to_crs(epsg=5070)
@@ -1446,7 +1454,7 @@ class PywatershedDerivation:
 
     @staticmethod
     def _compute_majority_from_fractions(
-        sir: xr.Dataset,
+        sir: SIRAccessor,
         prefixes: tuple[str, ...] = ("lndcov_frac_",),
     ) -> np.ndarray | None:
         """Compute majority NLCD class from categorical fraction columns.
@@ -1461,7 +1469,7 @@ class PywatershedDerivation:
 
         Parameters
         ----------
-        sir : xr.Dataset
+        sir : SIRAccessor
             SIR dataset potentially containing fraction columns.
         prefixes : tuple[str, ...]
             Variable name prefixes to search for (default:
@@ -1481,7 +1489,7 @@ class PywatershedDerivation:
         are required to compute a meaningful majority.
         """
         for prefix in prefixes:
-            fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+            fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
             if len(fraction_vars) < 2:
                 continue
 
@@ -1623,7 +1631,7 @@ class PywatershedDerivation:
 
         return ds
 
-    def _compute_soil_type(self, sir: xr.Dataset, ctx: DerivationContext) -> np.ndarray | None:
+    def _compute_soil_type(self, sir: SIRAccessor, ctx: DerivationContext) -> np.ndarray | None:
         """Compute PRMS soil_type from SIR soil texture data.
 
         Try fraction columns first (argmax across texture classes), then
@@ -1632,7 +1640,7 @@ class PywatershedDerivation:
 
         Parameters
         ----------
-        sir : xr.Dataset
+        sir : SIRAccessor
             SIR dataset with soil texture variables.
         ctx : DerivationContext
             Derivation context providing the lookup tables directory.
@@ -1646,7 +1654,7 @@ class PywatershedDerivation:
         """
         # Check data availability before loading lookup table
         prefix = "soil_texture_frac_"
-        fraction_vars = sorted(str(v) for v in sir.data_vars if str(v).startswith(prefix))
+        fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
         has_single = any(c in sir for c in ("soil_texture", "soil_texture_majority"))
 
         if len(fraction_vars) < 2 and not has_single:
@@ -1861,8 +1869,16 @@ class PywatershedDerivation:
                 wb[["geometry"]],
                 how="intersection",
             )
+        except MemoryError:
+            raise
         except Exception:
-            logger.exception("gpd.overlay failed in step 6; using defaults")
+            logger.warning(
+                "gpd.overlay failed in step 6 (waterbody); using zero defaults "
+                "for depression storage parameters (dprst_frac, dprst_area_max). "
+                "Check that your waterbody file has valid geometries and a "
+                "compatible CRS.",
+                exc_info=True,
+            )
             return self._waterbody_defaults(ds, nhru)
 
         if intersections.empty:
@@ -1873,8 +1889,8 @@ class PywatershedDerivation:
         intersections["_clip_area_m2"] = intersections.geometry.area
         area_by_hru = intersections.groupby(id_field)["_clip_area_m2"].sum()
 
-        # Vectorized alignment to SIR coordinate order
-        hru_ids = ctx.sir[id_field].values
+        # Vectorized alignment to fabric HRU order
+        hru_ids = fabric[id_field].values
         clipped_acres = area_by_hru.reindex(hru_ids, fill_value=0.0).values / _M2_PER_ACRE
 
         # Compute fraction from hru_area (already in acres from step 1)

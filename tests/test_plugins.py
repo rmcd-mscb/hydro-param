@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
-import xarray as xr
 
 from hydro_param.plugins import (
     DerivationContext,
@@ -16,40 +16,83 @@ from hydro_param.plugins import (
     get_derivation,
     get_formatter,
 )
+from hydro_param.sir_accessor import SIRAccessor
+
+
+def _make_sir_accessor(
+    tmp_path: Path,
+    variables: dict[str, list[float]] | None = None,
+    index_name: str = "nhm_id",
+    index_values: list[int] | None = None,
+) -> SIRAccessor:
+    """Create a SIRAccessor from simple variable data for testing."""
+    from hydro_param.manifest import PipelineManifest, SIRManifestEntry
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir(exist_ok=True)
+
+    if variables is None:
+        variables = {"val": [1.0, 2.0, 3.0]}
+    if index_values is None:
+        first = next(iter(variables.values()))
+        index_values = list(range(1, len(first) + 1))
+
+    idx = pd.Index(index_values, name=index_name)
+    static_files = {}
+    for name, values in variables.items():
+        df = pd.DataFrame({name: values}, index=idx)
+        df.to_csv(sir_dir / f"{name}.csv")
+        static_files[name] = f"sir/{name}.csv"
+
+    manifest = PipelineManifest(sir=SIRManifestEntry(static_files=static_files))
+    manifest.save(tmp_path)
+    return SIRAccessor(tmp_path)
 
 
 class TestDerivationContext:
     """Tests for DerivationContext construction and validation."""
 
-    def test_valid_context(self) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1, 2, 3]})
+    def test_valid_context(self, tmp_path: Path) -> None:
+        sir = _make_sir_accessor(tmp_path)
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         assert ctx.fabric_id_field == "nhm_id"
         assert ctx.fabric is None
         assert ctx.segments is None
 
-    def test_missing_dim_raises(self) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1, 2, 3]})
-        with pytest.raises(KeyError, match="wrong_field"):
-            DerivationContext(sir=sir, fabric_id_field="wrong_field")
+    def test_sir_accessor_contains(self, tmp_path: Path) -> None:
+        sir = _make_sir_accessor(tmp_path, variables={"elevation_m_mean": [100.0, 200.0]})
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        assert "elevation_m_mean" in ctx.sir
+        assert "nonexistent" not in ctx.sir
 
     def test_resolved_lookup_tables_dir_override(self, tmp_path: Path) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1]})
+        sir = _make_sir_accessor(tmp_path)
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", lookup_tables_dir=tmp_path)
         assert ctx.resolved_lookup_tables_dir == tmp_path
 
-    def test_resolved_lookup_tables_dir_default(self) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1]})
+    def test_resolved_lookup_tables_dir_default(self, tmp_path: Path) -> None:
+        sir = _make_sir_accessor(tmp_path)
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         result = ctx.resolved_lookup_tables_dir
         assert result.exists()
         assert (result / "nlcd_to_prms_cov_type.yml").exists()
 
-    def test_frozen_immutable(self) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1]})
+    def test_frozen_immutable(self, tmp_path: Path) -> None:
+        sir = _make_sir_accessor(tmp_path)
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         with pytest.raises(AttributeError):
             ctx.fabric_id_field = "other"  # type: ignore[misc]
+
+    def test_sir_id_field_mismatch_raises(self, tmp_path: Path) -> None:
+        """SIR variable indexed by wrong id_field raises KeyError at init."""
+        sir = _make_sir_accessor(
+            tmp_path,
+            variables={"elev": [1.0, 2.0]},
+            index_name="nhm_id",
+        )
+        with pytest.raises(KeyError, match="Expected dimension 'featureid'"):
+            DerivationContext(sir=sir, fabric_id_field="featureid")
 
 
 class TestProtocolSatisfaction:
@@ -108,11 +151,11 @@ class TestGetFormatter:
 class TestFabricIdFieldValidation:
     """Tests for fabric_id_field validation against fabric columns."""
 
-    def test_fabric_id_field_not_in_fabric_raises(self) -> None:
+    def test_fabric_id_field_not_in_fabric_raises(self, tmp_path: Path) -> None:
         import geopandas as gpd
         from shapely.geometry import Polygon
 
-        sir = xr.Dataset(coords={"nhm_id": [1, 2]})
+        sir = _make_sir_accessor(tmp_path)
         fabric = gpd.GeoDataFrame(
             {"wrong_col": [1, 2]},
             geometry=[
@@ -129,7 +172,7 @@ class TestLookupTablesDirValidation:
     """Tests for lookup_tables_dir existence validation."""
 
     def test_lookup_tables_dir_nonexistent_raises(self, tmp_path: Path) -> None:
-        sir = xr.Dataset(coords={"nhm_id": [1]})
+        sir = _make_sir_accessor(tmp_path)
         bad_dir = tmp_path / "nonexistent"
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", lookup_tables_dir=bad_dir)
         with pytest.raises(FileNotFoundError, match="does not exist"):

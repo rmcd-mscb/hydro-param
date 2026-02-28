@@ -32,6 +32,8 @@ from typing import Protocol, runtime_checkable
 import geopandas as gpd
 import xarray as xr
 
+from hydro_param.sir_accessor import SIRAccessor
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,20 +42,21 @@ class DerivationContext:
     """Bundle all inputs a derivation plugin needs into a single immutable object.
 
     ``DerivationContext`` is the sole interface between the generic pipeline and
-    model-specific derivation logic.  It packages normalized SIR output, target
+    model-specific derivation logic.  It packages a lazy SIR accessor, target
     fabric geometry, segment topology, and plugin configuration so that
     derivation plugins never reach back into the pipeline internals.
 
-    Validates on construction that ``fabric_id_field`` exists as a dimension in
-    the SIR and as a column in the fabric GeoDataFrame (if provided).  This
-    fail-fast validation prevents silent dimension mismatches downstream.
+    Validates on construction that ``fabric_id_field`` exists as a column in
+    the fabric GeoDataFrame (if provided).  This fail-fast validation prevents
+    silent dimension mismatches downstream.
 
     Attributes
     ----------
-    sir : xr.Dataset
-        Normalized Standardized Internal Representation (SIR) dataset produced
-        by stage 5 of the pipeline.  Variables use canonical names and SI-like
-        units (metres, degrees Celsius, etc.).
+    sir : SIRAccessor
+        Lazy accessor for normalized SIR output files.  Loads variables on
+        demand via ``sir["var_name"]`` or ``sir.load_variable("var_name")``.
+        Supports ``"var_name" in sir`` for availability checks (both static
+        and temporal variables).
     temporal : dict[str, xr.Dataset] or None
         SIR-normalized temporal datasets keyed by name (e.g., ``"gridmet_2020"``).
         Each dataset contains time-indexed climate variables.  When ``None``,
@@ -83,8 +86,8 @@ class DerivationContext:
     Raises
     ------
     KeyError
-        If ``fabric_id_field`` is not a dimension in ``sir``, or not a column
-        in ``fabric`` (when ``fabric`` is provided).
+        If ``fabric_id_field`` is not a column in ``fabric`` (when ``fabric``
+        is provided).
 
     See Also
     --------
@@ -96,7 +99,7 @@ class DerivationContext:
     prevents derivation plugins from accidentally mutating shared state.
     """
 
-    sir: xr.Dataset
+    sir: SIRAccessor
     temporal: dict[str, xr.Dataset] | None = None
     fabric: gpd.GeoDataFrame | None = None
     segments: gpd.GeoDataFrame | None = None
@@ -107,16 +110,22 @@ class DerivationContext:
     lookup_tables_dir: Path | None = None
 
     def __post_init__(self) -> None:
-        if self.fabric_id_field not in self.sir.dims:
-            raise KeyError(
-                f"Expected dimension '{self.fabric_id_field}' not found in SIR. "
-                f"Available dims: {list(self.sir.dims)}"
-            )
         if self.fabric is not None and self.fabric_id_field not in self.fabric.columns:
             raise KeyError(
                 f"fabric_id_field '{self.fabric_id_field}' not found in fabric columns. "
                 f"Available columns: {sorted(self.fabric.columns.tolist())}"
             )
+        # Validate SIR id_field lazily by probing the first variable
+        if self.sir.data_vars:
+            first_var = self.sir.data_vars[0]
+            first_da = self.sir[first_var]
+            if self.fabric_id_field not in first_da.dims:
+                raise KeyError(
+                    f"Expected dimension '{self.fabric_id_field}' not found in "
+                    f"SIR variable '{first_var}'. Available dims: "
+                    f"{list(first_da.dims)}. Ensure the pipeline was run with "
+                    f"the same id_field."
+                )
 
     @property
     def resolved_lookup_tables_dir(self) -> Path:

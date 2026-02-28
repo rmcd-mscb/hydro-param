@@ -114,8 +114,13 @@ def get_data_categories(registry_path: Path | None = None) -> list[str]:
         categories = {entry.category for entry in reg.datasets.values() if entry.category}
         if categories:
             return sorted(categories | set(DEFAULT_CATEGORIES))
-    except Exception:
-        logger.debug("Could not load registry for category discovery; using defaults")
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(
+            "Could not load registry at '%s' for category discovery; "
+            "using built-in defaults. Error: %s",
+            registry_path,
+            exc,
+        )
     return list(DEFAULT_CATEGORIES)
 
 
@@ -240,12 +245,11 @@ processing:
 
 
 def generate_pywatershed_template(project_name: str) -> str:
-    """Generate a well-commented pywatershed run config template.
+    """Generate a well-commented pywatershed run config template (v3.0).
 
-    Produce a starter ``pywatershed_run.yml`` covering domain extraction,
-    simulation period, climate forcing, dataset sources, processing,
-    parameter overrides, calibration, and output format sections.  The
-    template targets the Delaware River Basin as a default example.
+    Produce a starter ``pywatershed_run.yml`` for Phase 2 parameterization.
+    This config consumes existing SIR output produced by ``hydro-param run``
+    and derives pywatershed-specific parameters.
 
     Parameters
     ----------
@@ -269,8 +273,10 @@ def generate_pywatershed_template(project_name: str) -> str:
     return f"""\
 # pywatershed run configuration for {project_name}
 #
-# This file specifies everything needed for hydro-param to generate
-# a complete pywatershed model setup.  Edit the sections below, then run:
+# Phase 2: derive pywatershed parameters from existing SIR output.
+# Run Phase 1 first to produce SIR output:
+#   hydro-param run configs/pipeline.yml
+# Then run this config:
 #   hydro-param pywatershed run configs/pywatershed_run.yml
 #
 # Reference:
@@ -278,17 +284,18 @@ def generate_pywatershed_template(project_name: str) -> str:
 #   docs/reference/pywatershed_dataset_param_map.yml
 
 target_model: pywatershed
-version: "2.0"
+version: "3.0"
+
+# --- SIR Output ---
+# Path to the pipeline output directory containing SIR files and .manifest.yml.
+# Relative paths are resolved from this config file's directory.
+sir_path: "output"
 
 # --- Domain ---
-# Spatial extent for the model.
-# Provide pre-existing HRU and segment fabric files (GeoPackage or GeoParquet).
+# Pre-existing geospatial fabric files (GeoPackage or GeoParquet).
 # Obtain fabrics with pynhd, pygeohydro, or similar upstream tools —
 # hydro-param does NOT fetch or subset fabrics.
 domain:
-  source: custom
-  extraction_method: bbox
-  bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] EPSG:4326
   fabric_path: "data/fabrics/nhru.gpkg"        # REQUIRED: path to HRU fabric
   segment_path: "data/fabrics/nsegment.gpkg"   # path to segment/flowline fabric
   # waterbody_path: "data/fabrics/waterbodies.gpkg"  # NHDPlus waterbody polygons (optional)
@@ -301,29 +308,6 @@ time:
   end: "2020-09-30"
   timestep: daily
 
-# --- Climate Forcing ---
-# Source for area-weighted forcing time series.
-# Output is one-variable-per-NetCDF-file (prcp.nc, tmax.nc, tmin.nc).
-climate:
-  source: gridmet                       # only gridmet is currently supported
-  method: area_weighted_mean
-  variables: [prcp, tmax, tmin]
-
-# --- Dataset Sources ---
-# Which datasets to use for each category.
-# Names reference the dataset registry (hydro-param datasets list).
-datasets:
-  topography: dem_3dep_10m
-  landcover: nlcd_legacy
-  soils: polaris_30m
-  # hydrography: null                  # NHDPlus (optional, for routing)
-
-# --- Processing ---
-processing:
-  zonal_method: exactextract            # exactextract or serial
-  batch_size: 500
-  n_workers: 1
-
 # --- Parameter Overrides ---
 # Manually override any derived parameter value.
 parameter_overrides:
@@ -331,7 +315,6 @@ parameter_overrides:
   # values:
   #   tmax_allsnow: 32.0
   #   den_max: 0.55
-  # from_file: null                     # path to a NetCDF with override values
 
 # --- Calibration ---
 calibration:
@@ -506,12 +489,10 @@ def init_project(
     print(f"  {'.gitignore':<28s} Git ignore rules")
     print()
     print("Next steps:")
-    print("  1. Obtain HRU/segment fabrics (pynhd, pygeohydro, or USGS GF)")
-    print("     and place them in data/fabrics/")
-    print("  2. Edit configs/pipeline.yml or configs/pywatershed_run.yml")
-    print("  3. Download datasets:  hydro-param datasets download <name>")
+    print("  1. Place your fabric files in data/fabrics/")
+    print("  2. Edit configs/pipeline.yml (dataset sources, domain)")
+    print("  3. Edit configs/pywatershed_run.yml (time period, output options)")
     print("  4. Run the pipeline:")
     print("       hydro-param run configs/pipeline.yml")
-    print("     Or the pywatershed workflow:")
+    print("  5. Run pywatershed parameterization:")
     print("       hydro-param pywatershed run configs/pywatershed_run.yml")
-    print("       hydro-param pywatershed validate models/pywatershed/")

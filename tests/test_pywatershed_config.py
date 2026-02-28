@@ -1,4 +1,4 @@
-"""Tests for pywatershed run configuration."""
+"""Tests for pywatershed run configuration (v3.0)."""
 
 from __future__ import annotations
 
@@ -18,17 +18,20 @@ from hydro_param.pywatershed_config import (
 
 
 @pytest.fixture()
-def minimal_config_dict() -> dict:
-    """Minimal valid config dictionary."""
+def minimal_config_dict(tmp_path: Path) -> dict:
+    """Minimal valid v3.0 config dictionary."""
+    fabric = tmp_path / "nhru.gpkg"
+    fabric.touch()
     return {
         "target_model": "pywatershed",
+        "version": "3.0",
         "domain": {
-            "extraction_method": "bbox",
-            "bbox": [-76.5, 38.5, -74.0, 42.6],
+            "fabric_path": str(fabric),
+            "id_field": "nhm_id",
         },
         "time": {
-            "start": "1980-10-01",
-            "end": "2020-09-30",
+            "start": "2020-01-01",
+            "end": "2020-12-31",
         },
     }
 
@@ -42,64 +45,50 @@ def minimal_config_yaml(tmp_path: Path, minimal_config_dict: dict) -> Path:
 
 
 class TestPwsDomainConfig:
-    """Tests for domain configuration validation."""
+    """Tests for simplified domain configuration."""
 
-    def test_bbox_valid(self) -> None:
-        cfg = PwsDomainConfig(extraction_method="bbox", bbox=[-76.5, 38.5, -74.0, 42.6])
-        assert cfg.bbox == [-76.5, 38.5, -74.0, 42.6]
+    def test_fabric_path_required(self) -> None:
+        with pytest.raises(ValidationError, match="fabric_path"):
+            PwsDomainConfig()  # type: ignore[call-arg]
 
-    def test_bbox_requires_bbox_field(self) -> None:
-        with pytest.raises(ValidationError, match="bbox extraction requires"):
-            PwsDomainConfig(extraction_method="bbox")
+    def test_fabric_path_valid(self, tmp_path: Path) -> None:
+        fabric = tmp_path / "nhru.gpkg"
+        fabric.touch()
+        cfg = PwsDomainConfig(fabric_path=fabric)
+        assert cfg.fabric_path == fabric
+        assert cfg.id_field == "nhm_id"
+        assert cfg.segment_id_field == "nhm_seg"
 
-    def test_huc_requires_huc_id(self) -> None:
-        with pytest.raises(ValidationError, match="huc extraction requires"):
-            PwsDomainConfig(extraction_method="huc")
-
-    def test_huc_valid(self) -> None:
-        cfg = PwsDomainConfig(extraction_method="huc", huc_id="01013500")
-        assert cfg.huc_id == "01013500"
-
-    def test_pour_point_requires_coords(self) -> None:
-        with pytest.raises(ValidationError, match="pour_point extraction requires"):
-            PwsDomainConfig(extraction_method="pour_point")
-
-    def test_pour_point_valid(self) -> None:
-        cfg = PwsDomainConfig(extraction_method="pour_point", pour_point=[-73.95, 42.45])
-        assert cfg.pour_point == [-73.95, 42.45]
-
-    def test_bbox_wrong_length(self) -> None:
-        with pytest.raises(ValidationError, match="4 coordinates"):
-            PwsDomainConfig(extraction_method="bbox", bbox=[-76.5, 38.5])
-
-    def test_pour_point_wrong_length(self) -> None:
-        with pytest.raises(ValidationError, match="2 coordinates"):
-            PwsDomainConfig(extraction_method="pour_point", pour_point=[-73.95, 42.45, 100.0])
-
-    def test_custom_requires_fabric_path(self) -> None:
-        with pytest.raises(ValidationError, match="custom domain source requires"):
-            PwsDomainConfig(source="custom", extraction_method="bbox", bbox=[0, 0, 1, 1])
-
-    def test_custom_valid(self) -> None:
+    def test_optional_paths(self, tmp_path: Path) -> None:
+        fabric = tmp_path / "nhru.gpkg"
+        fabric.touch()
+        segments = tmp_path / "nseg.gpkg"
+        waterbodies = tmp_path / "wb.gpkg"
         cfg = PwsDomainConfig(
-            source="custom",
-            extraction_method="bbox",
-            bbox=[0, 0, 1, 1],
-            fabric_path=Path("/some/fabric.gpkg"),
+            fabric_path=fabric,
+            segment_path=segments,
+            waterbody_path=waterbodies,
+            id_field="hru_id",
+            segment_id_field="seg_id",
         )
-        assert cfg.fabric_path == Path("/some/fabric.gpkg")
+        assert cfg.segment_path == segments
+        assert cfg.waterbody_path == waterbodies
+        assert cfg.id_field == "hru_id"
+        assert cfg.segment_id_field == "seg_id"
 
-    def test_waterbody_path_default_none(self) -> None:
-        cfg = PwsDomainConfig(extraction_method="bbox", bbox=[-76.5, 38.5, -74.0, 42.6])
+    def test_waterbody_path_default_none(self, tmp_path: Path) -> None:
+        fabric = tmp_path / "nhru.gpkg"
+        fabric.touch()
+        cfg = PwsDomainConfig(fabric_path=fabric)
         assert cfg.waterbody_path is None
 
-    def test_waterbody_path_accepted(self) -> None:
-        cfg = PwsDomainConfig(
-            extraction_method="bbox",
-            bbox=[-76.5, 38.5, -74.0, 42.6],
-            waterbody_path=Path("/some/waterbodies.gpkg"),
-        )
-        assert cfg.waterbody_path == Path("/some/waterbodies.gpkg")
+    def test_no_extraction_method(self, tmp_path: Path) -> None:
+        """v3.0 domain has no extraction_method field."""
+        fabric = tmp_path / "nhru.gpkg"
+        fabric.touch()
+        cfg = PwsDomainConfig(fabric_path=fabric)
+        assert not hasattr(cfg, "extraction_method") or "extraction_method" not in cfg.model_fields
+        assert not hasattr(cfg, "bbox") or "bbox" not in cfg.model_fields
 
 
 class TestPwsTimeConfig:
@@ -114,6 +103,29 @@ class TestPwsTimeConfig:
     def test_missing_start(self) -> None:
         with pytest.raises(ValidationError):
             PwsTimeConfig(end="2020-09-30")  # type: ignore[call-arg]
+
+    def test_invalid_start_date(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="not-a-date", end="2020-09-30")
+
+    def test_invalid_end_date(self) -> None:
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="1980-10-01", end="2020-13-45")
+
+    def test_start_after_end_raises(self) -> None:
+        """Reversed date range is rejected."""
+        with pytest.raises(ValidationError, match="must be on or before"):
+            PwsTimeConfig(start="2021-01-01", end="2020-01-01")
+
+    def test_same_start_end_allowed(self) -> None:
+        """Same start and end date (single day) is valid."""
+        cfg = PwsTimeConfig(start="2020-06-15", end="2020-06-15")
+        assert cfg.start == "2020-06-15"
+
+    def test_empty_date_raises(self) -> None:
+        """Empty string date is rejected."""
+        with pytest.raises(ValidationError, match="Invalid date"):
+            PwsTimeConfig(start="", end="2020-12-31")
 
 
 class TestPwsOutputConfig:
@@ -133,45 +145,64 @@ class TestPwsOutputConfig:
         assert cfg.forcing_dir == "cbh"
 
     def test_forcing_dir_takes_precedence_over_cbh_dir(self) -> None:
-        cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
+        with pytest.warns(DeprecationWarning, match="cbh_dir"):
+            cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
         assert cfg.forcing_dir == "forcing"
 
 
 class TestPywatershedRunConfig:
-    """Tests for the top-level config."""
+    """Tests for the top-level v3.0 config."""
 
     def test_minimal(self, minimal_config_dict: dict) -> None:
         cfg = PywatershedRunConfig(**minimal_config_dict)
         assert cfg.target_model == "pywatershed"
-        assert cfg.version == "2.0"
-        assert cfg.domain.bbox == [-76.5, 38.5, -74.0, 42.6]
-        assert cfg.time.start == "1980-10-01"
+        assert cfg.version == "3.0"
+        assert cfg.sir_path == Path("output")
+
+    def test_sir_path_override(self, minimal_config_dict: dict) -> None:
+        minimal_config_dict["sir_path"] = "/custom/sir/output"
+        cfg = PywatershedRunConfig(**minimal_config_dict)
+        assert cfg.sir_path == Path("/custom/sir/output")
+
+    def test_rejects_old_datasets_field(self, minimal_config_dict: dict) -> None:
+        """v3.0 should not accept datasets field (extra=forbid)."""
+        minimal_config_dict["datasets"] = {"topography": "dem_3dep_10m"}
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
+
+    def test_rejects_old_climate_field(self, minimal_config_dict: dict) -> None:
+        """v3.0 should not accept climate field (extra=forbid)."""
+        minimal_config_dict["climate"] = {"source": "gridmet"}
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
+
+    def test_rejects_old_processing_field(self, minimal_config_dict: dict) -> None:
+        """v3.0 should not accept processing field (extra=forbid)."""
+        minimal_config_dict["processing"] = {"batch_size": 500}
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
+
+    def test_invalid_target_model(self, minimal_config_dict: dict) -> None:
+        minimal_config_dict["target_model"] = "swat"
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
+
+    def test_invalid_version(self, minimal_config_dict: dict) -> None:
+        """v3.0 config rejects unknown version strings."""
+        minimal_config_dict["version"] = "1.0"
+        with pytest.raises(ValidationError):
+            PywatershedRunConfig(**minimal_config_dict)
 
     def test_defaults(self, minimal_config_dict: dict) -> None:
         cfg = PywatershedRunConfig(**minimal_config_dict)
-        assert cfg.climate.source == "gridmet"
-        assert cfg.datasets.topography == "dem_3dep_10m"
-        assert cfg.processing.zonal_method == "exactextract"
         assert cfg.calibration.generate_seeds is True
         assert cfg.output.format == "netcdf"
+        assert cfg.parameter_overrides.values == {}
 
     def test_full_config(self, minimal_config_dict: dict) -> None:
         minimal_config_dict.update(
             {
-                "climate": {
-                    "source": "gridmet",
-                    "variables": ["prcp", "tmax", "tmin", "srad"],
-                },
-                "datasets": {
-                    "topography": "dem_3dep_10m",
-                    "landcover": "nlcd_annual",
-                    "soils": "polaris_30m",
-                },
-                "processing": {
-                    "zonal_method": "exactextract",
-                    "batch_size": 1000,
-                    "n_workers": 4,
-                },
+                "sir_path": "/pipeline/output",
                 "parameter_overrides": {
                     "values": {"tmax_allsnow": 32.0, "den_max": 0.55},
                 },
@@ -186,14 +217,8 @@ class TestPywatershedRunConfig:
             }
         )
         cfg = PywatershedRunConfig(**minimal_config_dict)
-        assert cfg.climate.source == "gridmet"
-        assert cfg.processing.n_workers == 4
+        assert cfg.sir_path == Path("/pipeline/output")
         assert cfg.parameter_overrides.values["tmax_allsnow"] == 32.0
-
-    def test_invalid_target_model(self, minimal_config_dict: dict) -> None:
-        minimal_config_dict["target_model"] = "swat"
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
 
 
 class TestLoadPywatershedConfig:
@@ -202,7 +227,6 @@ class TestLoadPywatershedConfig:
     def test_load_valid(self, minimal_config_yaml: Path) -> None:
         cfg = load_pywatershed_config(minimal_config_yaml)
         assert cfg.target_model == "pywatershed"
-        assert cfg.domain.bbox is not None
 
     def test_load_nonexistent_raises(self) -> None:
         with pytest.raises(FileNotFoundError):

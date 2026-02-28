@@ -17,8 +17,9 @@ Implement the 5-stage pipeline from design.md section 4:
    by model plugins.
 
 A lazy :meth:`PipelineResult.load_sir` method assembles a combined
-``xr.Dataset`` on demand for downstream consumers (e.g., the pywatershed
-derivation plugin).
+``xr.Dataset`` on demand for downstream consumers.  Phase 2 model plugins
+(e.g., pywatershed) consume SIR files from disk via ``SIRAccessor`` rather
+than ``PipelineResult.load_sir``.
 
 This module is **model-agnostic** by design -- all model-specific logic
 (unit conversions, variable renaming, derived math, output formatting)
@@ -30,6 +31,7 @@ design.md : Full architecture document (section 4: pipeline stages,
     section 11: MVP implementation).
 hydro_param.config : Pydantic config schema consumed by every stage.
 hydro_param.sir : SIR normalization and validation utilities.
+hydro_param.sir_accessor : Lazy SIR loader used by Phase 2 plugins.
 """
 
 from __future__ import annotations
@@ -1332,7 +1334,12 @@ def stage5_normalize_sir(
     stage4: Stage4Results,
     resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
     config: PipelineConfig,
-) -> tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]:
+) -> tuple[
+    dict[str, Path],
+    list[SIRVariableSchema],
+    list[SIRValidationWarning],
+    _manifest_mod.SIRManifestEntry,
+]:
     """Stage 5: Normalize raw stage 4 output to canonical SIR format.
 
     Build a SIR schema from the resolved datasets, then normalize each
@@ -1356,10 +1363,11 @@ def stage5_normalize_sir(
 
     Returns
     -------
-    tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning]]
+    tuple[dict[str, Path], list[SIRVariableSchema], list[SIRValidationWarning], SIRManifestEntry]
         - Normalized SIR file paths (``sir/`` subdirectory)
         - Schema entries describing each SIR variable
         - Validation warnings (empty if all checks pass)
+        - SIR manifest entry for persisting to the pipeline manifest
 
     Raises
     ------
@@ -1405,7 +1413,31 @@ def stage5_normalize_sir(
     else:
         logger.info("  SIR validation: passed")
 
-    return sir_files, schema, warnings
+    # Build SIR manifest entry for Phase 2 discovery
+    output_path = config.output.path
+    sir_manifest = _manifest_mod.SIRManifestEntry(
+        static_files={
+            k: str(v.relative_to(output_path))
+            for k, v in sir_files.items()
+            if str(v).endswith(".csv")
+        },
+        temporal_files={
+            k: str(v.relative_to(output_path))
+            for k, v in sir_files.items()
+            if str(v).endswith(".nc")
+        },
+        sir_schema=[
+            _manifest_mod.SIRSchemaEntry(
+                name=s.canonical_name,
+                units=s.canonical_units,
+                statistic="categorical" if s.categorical else "continuous",
+            )
+            for s in schema
+        ],
+        completed_at=datetime.now(timezone.utc),
+    )
+
+    return sir_files, schema, warnings, sir_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -1510,7 +1542,15 @@ def run_pipeline_from_config(
 
         # Stage 5: Normalize SIR
         t5 = time.perf_counter()
-        sir_files, sir_schema, sir_warnings = stage5_normalize_sir(results, resolved, config)
+        sir_files, sir_schema, sir_warnings, sir_manifest_entry = stage5_normalize_sir(
+            results, resolved, config
+        )
+        # Load manifest written by stage4 and append SIR section
+        manifest = _manifest_mod.load_manifest(config.output.path)
+        if manifest is None:
+            manifest = _manifest_mod.PipelineManifest()
+        manifest.sir = sir_manifest_entry
+        _save_manifest_to_disk(manifest, config.output.path)
         logger.info("Stage 5 complete (%.1fs)", time.perf_counter() - t5)
 
         elapsed = time.perf_counter() - t0
