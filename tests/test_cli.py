@@ -913,3 +913,87 @@ def test_pws_run_relative_sir_path(tmp_path: Path) -> None:
     # to tmp_path/output which has valid SIR output from _setup_pws_project.
     # The command completes (with warnings for missing data, but no crash).
     _run("pywatershed", "run", str(config_path))
+
+
+def test_pws_run_passes_temporal_to_derivation_context(tmp_path: Path) -> None:
+    """pws_run_cmd passes temporal SIR data to DerivationContext."""
+    import numpy as np
+    import xarray as xr
+
+    from hydro_param.manifest import PipelineManifest, SIRManifestEntry
+
+    fabric_path, _sir_path = _setup_pws_project(tmp_path)
+
+    # Add a temporal NetCDF file to SIR output
+    sir_dir = tmp_path / "output" / "sir"
+    temporal_ds = xr.Dataset(
+        {"pr": (("nhm_id", "time"), np.array([[1.0, 2.0], [3.0, 4.0]]))},
+        coords={
+            "nhm_id": [1, 2],
+            "time": np.array(["2020-01-01", "2020-01-02"], dtype="datetime64[D]"),
+        },
+    )
+    temporal_ds.to_netcdf(sir_dir / "gridmet_2020.nc")
+
+    # Update manifest to include temporal file
+    sir_entry = SIRManifestEntry(
+        static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
+        temporal_files={"gridmet_2020": "sir/gridmet_2020.nc"},
+    )
+    PipelineManifest(sir=sir_entry).save(tmp_path / "output")
+
+    config_path = _write_pws_config(tmp_path, fabric_path=fabric_path)
+
+    from hydro_param.plugins import DerivationContext
+
+    original_init = DerivationContext.__init__
+
+    with patch.object(
+        DerivationContext, "__init__", side_effect=original_init, autospec=True
+    ) as mock_init:
+        _run("pywatershed", "run", str(config_path))
+
+    mock_init.assert_called_once()
+    temporal_arg = mock_init.call_args.kwargs.get("temporal")
+    assert temporal_arg is not None
+    assert "gridmet_2020" in temporal_arg
+
+
+def test_pws_run_empty_temporal_passes_empty_dict(tmp_path: Path) -> None:
+    """pws_run_cmd passes empty dict when SIR has no temporal data."""
+    fabric_path, _sir_path = _setup_pws_project(tmp_path)
+    config_path = _write_pws_config(tmp_path, fabric_path=fabric_path)
+
+    from hydro_param.plugins import DerivationContext
+
+    original_init = DerivationContext.__init__
+
+    with patch.object(
+        DerivationContext, "__init__", side_effect=original_init, autospec=True
+    ) as mock_init:
+        _run("pywatershed", "run", str(config_path))
+
+    mock_init.assert_called_once()
+    temporal_arg = mock_init.call_args.kwargs.get("temporal")
+    assert temporal_arg == {}
+
+
+def test_pws_run_temporal_load_failure_exits(tmp_path: Path) -> None:
+    """pws_run_cmd exits with SystemExit(1) when temporal loading fails."""
+    from hydro_param.manifest import PipelineManifest, SIRManifestEntry
+
+    fabric_path, _sir_path = _setup_pws_project(tmp_path)
+
+    # Create manifest referencing a temporal file that does not exist
+    sir_entry = SIRManifestEntry(
+        static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
+        temporal_files={"gridmet_2020": "sir/gridmet_2020.nc"},
+    )
+    PipelineManifest(sir=sir_entry).save(tmp_path / "output")
+
+    config_path = _write_pws_config(tmp_path, fabric_path=fabric_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run("pywatershed", "run", str(config_path))
+
+    assert exc_info.value.code == 1

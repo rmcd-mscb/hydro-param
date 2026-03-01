@@ -164,91 +164,6 @@ def _sat_vp(temp_f: np.ndarray) -> np.ndarray:
     return 6.1078 * np.exp(17.269 * temp_c / (temp_c + 237.3))
 
 
-def merge_temporal_into_derived(
-    derived: xr.Dataset,
-    temporal: dict[str, xr.Dataset],
-    renames: dict[str, str] | None = None,
-    conversions: dict[str, tuple[str, str]] | None = None,
-    id_field: str = "nhru",
-) -> xr.Dataset:
-    """Merge temporal forcing data into the derived parameter dataset.
-
-    .. note::
-        ``_derive_forcing()`` and ``_compute_monthly_normals()`` already exist
-        in ``PywatershedDerivation`` and work when ``DerivationContext.temporal``
-        is populated.  However, the CLI (``pws_run_cmd``) does not yet pass
-        temporal data through the context -- it uses this standalone function
-        instead.  As a result, steps 10 (PET) and 11 (transpiration) fall back
-        to scalar defaults when run via the CLI.  A future PR should pass
-        temporal data through the context to enable climate-derived parameters.
-
-    Concatenate multi-year temporal chunks (keyed with ``_YYYY`` suffixes),
-    rename variables to PRMS conventions, apply unit conversions, and align
-    the feature dimension to the derived dataset's ``id_field``.
-
-    Parameters
-    ----------
-    derived : xr.Dataset
-        Derived parameter dataset (output of ``PywatershedDerivation.derive()``).
-    temporal : dict[str, xr.Dataset]
-        Temporal datasets keyed by dataset name from ``PipelineResult.temporal``.
-        Multi-year datasets may have keys like ``"gridmet_2020"``,
-        ``"gridmet_2021"`` which are concatenated along the time dimension.
-    renames : dict[str, str] or None
-        Variable name mapping ``{source_name: target_name}``.
-    conversions : dict[str, tuple[str, str]] or None
-        Unit conversions ``{variable_name: (from_unit, to_unit)}``.
-        Applied **after** renames (use target names as keys).
-    id_field : str
-        Feature dimension name used in the derived dataset (default ``"nhru"``).
-
-    Returns
-    -------
-    xr.Dataset
-        Derived dataset with temporal variables merged in.
-
-    """
-    renames = renames or {}
-    conversions = conversions or {}
-
-    # Collect per-year chunks by base dataset name, then concatenate.
-    # Keys like "gridmet_2020", "gridmet_2021" share the base name "gridmet";
-    # we concatenate along time before merging into derived.
-    chunks_by_source: dict[str, list[xr.Dataset]] = {}
-    for ds_name, ds in temporal.items():
-        base_name = re.sub(r"_\d{4}$", "", ds_name)
-        chunks_by_source.setdefault(base_name, []).append(ds)
-
-    for _source, chunks in chunks_by_source.items():
-        if len(chunks) > 1:
-            chunks.sort(key=lambda c: c["time"].values[0])
-            ds = xr.concat(chunks, dim="time")
-        else:
-            ds = chunks[0]
-
-        # Rename temporal variables (e.g., pr->prcp, tmmx->tmax)
-        actual_renames = {old: new for old, new in renames.items() if old in ds}
-        if actual_renames:
-            ds = ds.rename(actual_renames)
-
-        # Apply unit conversions (e.g., K->C for temperature)
-        for var_name, (from_unit, to_unit) in conversions.items():
-            if var_name in ds:
-                da = ds[var_name]
-                converted = convert(da.values.astype(np.float64), from_unit, to_unit)
-                ds[var_name] = da.copy(data=converted)
-
-        # Align temporal feature dimension to derived dataset's id_field
-        for var in ds.data_vars:
-            da = ds[str(var)]
-            feat_dims = [d for d in da.dims if d != "time"]
-            if feat_dims and id_field in derived.dims and feat_dims[0] != id_field:
-                da = da.rename({feat_dims[0]: id_field})
-            derived[str(var)] = da
-
-    return derived
-
-
 class PywatershedDerivation:
     """Derive pywatershed/PRMS parameters from SIR physical properties.
 
@@ -312,9 +227,9 @@ class PywatershedDerivation:
             Typed input bundle containing the SIR dataset, target fabric
             GeoDataFrame, segment GeoDataFrame, waterbody GeoDataFrame,
             temporal forcing datasets, lookup table directory, and
-            pipeline configuration.  When invoked via the CLI
-            ``pws_run_cmd``, ``temporal`` is ``None`` and forcing data
-            is merged separately after ``derive()`` returns.
+            pipeline configuration.  ``temporal`` may be ``None`` if no
+            temporal SIR data is available, in which case step 7 (forcing)
+            is skipped and PET/transpiration steps use scalar defaults.
 
         Returns
         -------
@@ -2482,7 +2397,6 @@ class PywatershedDerivation:
         See Also
         --------
         _detect_forcing_dataset : Source dataset matching logic.
-        merge_temporal_into_derived : Deprecated standalone equivalent.
         """
         if ctx.temporal is None or len(ctx.temporal) == 0:
             logger.info("No temporal data provided; skipping forcing generation.")
