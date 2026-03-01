@@ -2351,6 +2351,25 @@ class PywatershedDerivation:
     # Step 7: Forcing generation (temporal merge)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _concat_temporal_chunks(chunks: list[xr.Dataset]) -> xr.Dataset:
+        """Sort and concatenate multi-year temporal chunks along time.
+
+        Parameters
+        ----------
+        chunks : list[xr.Dataset]
+            One or more single-year temporal datasets to concatenate.
+
+        Returns
+        -------
+        xr.Dataset
+            Concatenated dataset sorted by time.
+        """
+        if len(chunks) > 1:
+            chunks.sort(key=lambda c: c["time"].values[0])
+            return xr.concat(chunks, dim="time")
+        return chunks[0]
+
     def _build_sir_to_forcing_lookup(
         self,
         tables_dir: Path,
@@ -2385,7 +2404,26 @@ class PywatershedDerivation:
         lookup: dict[str, dict[str, str]] = {}
         for source_name, variables in datasets_config.items():
             for prms_name, var_cfg in variables.items():
+                for required_key in ("sir_name", "sir_unit", "intermediate_unit"):
+                    if required_key not in var_cfg:
+                        raise ValueError(
+                            f"forcing_variables.yml: source '{source_name}', "
+                            f"variable '{prms_name}' is missing required key "
+                            f"'{required_key}'. Available keys: "
+                            f"{list(var_cfg.keys())}"
+                        )
                 sir_name = var_cfg["sir_name"]
+                if sir_name in lookup:
+                    logger.warning(
+                        "Duplicate SIR name '%s' in forcing_variables.yml: "
+                        "source '%s' (prms_name='%s') overwrites source '%s' "
+                        "(prms_name='%s').",
+                        sir_name,
+                        source_name,
+                        prms_name,
+                        lookup[sir_name]["source"],
+                        lookup[sir_name]["prms_name"],
+                    )
                 lookup[sir_name] = {
                     "prms_name": prms_name,
                     "sir_unit": var_cfg["sir_unit"],
@@ -2404,7 +2442,7 @@ class PywatershedDerivation:
         Look up each per-variable temporal dataset in the reverse mapping
         from ``forcing_variables.yml``, rename to PRMS conventions
         (e.g., ``tmmx_C_mean`` -> ``tmax``), apply unit conversions
-        (e.g., W/m² -> langleys, mm -> inches), and merge time-series
+        (e.g., W/m² -> Langleys/day, mm -> inches), and merge time-series
         arrays into the parameter dataset.
 
         Multi-year temporal chunks (keyed with ``_YYYY`` suffixes like
@@ -2469,12 +2507,7 @@ class PywatershedDerivation:
             sir_unit = var_cfg["sir_unit"]
             intermediate_unit = var_cfg["intermediate_unit"]
 
-            # Concat multi-year chunks
-            if len(chunks) > 1:
-                chunks.sort(key=lambda c: c["time"].values[0])
-                merged = xr.concat(chunks, dim="time")
-            else:
-                merged = chunks[0]
+            merged = self._concat_temporal_chunks(chunks)
 
             if var_base not in merged:
                 logger.warning(
@@ -2515,6 +2548,15 @@ class PywatershedDerivation:
 
         if forced_count > 0:
             logger.info("Step 7: merged %d forcing variables.", forced_count)
+        else:
+            logger.warning(
+                "Step 7: temporal data contained %d variable(s) but none "
+                "matched forcing config. Expected SIR names: %s. "
+                "Received: %s.",
+                len(chunks_by_var),
+                sorted(sir_lookup.keys()),
+                sorted(chunks_by_var.keys()),
+            )
 
         return ds
 
@@ -2550,9 +2592,9 @@ class PywatershedDerivation:
         -----
         Temperature conversion: °C -> °F via ``T_f = T_c * 9/5 + 32``.
 
-        Requires full 12-month coverage in the temporal data to produce
-        reliable normals.  Sources with fewer than 12 months are skipped
-        with a warning.
+        Requires full 12-month coverage in both tmax and tmin temporal
+        data to produce reliable normals.  Returns ``None`` with a
+        warning if either variable covers fewer than 12 months.
 
         For single-HRU datasets, the output is reshaped from ``(12,)``
         to ``(12, 1)`` to maintain consistent 2-D array shape.
@@ -2564,13 +2606,9 @@ class PywatershedDerivation:
         sir_lookup = self._build_sir_to_forcing_lookup(tables_dir)
 
         # Find tmax and tmin SIR names from config
-        tmax_sir: str | None = None
-        tmin_sir: str | None = None
-        for sir_name, cfg in sir_lookup.items():
-            if cfg["prms_name"] == "tmax":
-                tmax_sir = sir_name
-            elif cfg["prms_name"] == "tmin":
-                tmin_sir = sir_name
+        prms_to_sir = {cfg["prms_name"]: sn for sn, cfg in sir_lookup.items()}
+        tmax_sir = prms_to_sir.get("tmax")
+        tmin_sir = prms_to_sir.get("tmin")
 
         if tmax_sir is None or tmin_sir is None:
             logger.warning(
@@ -2593,18 +2631,8 @@ class PywatershedDerivation:
             logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
             return None
 
-        # Concat multi-year chunks
-        if len(tmax_chunks) > 1:
-            tmax_chunks.sort(key=lambda c: c["time"].values[0])
-            tmax_merged = xr.concat(tmax_chunks, dim="time")
-        else:
-            tmax_merged = tmax_chunks[0]
-
-        if len(tmin_chunks) > 1:
-            tmin_chunks.sort(key=lambda c: c["time"].values[0])
-            tmin_merged = xr.concat(tmin_chunks, dim="time")
-        else:
-            tmin_merged = tmin_chunks[0]
+        tmax_merged = self._concat_temporal_chunks(tmax_chunks)
+        tmin_merged = self._concat_temporal_chunks(tmin_chunks)
 
         if tmax_sir not in tmax_merged or tmin_sir not in tmin_merged:
             logger.warning(
@@ -2614,17 +2642,20 @@ class PywatershedDerivation:
             )
             return None
 
-        # Group by month, compute mean, convert C -> F
+        # Group by month and compute mean
         tmax_monthly = tmax_merged[tmax_sir].groupby("time.month").mean(dim="time")
         tmin_monthly = tmin_merged[tmin_sir].groupby("time.month").mean(dim="time")
 
-        # Validate full 12-month coverage
-        n_months = tmax_monthly.sizes.get("month", 0)
-        if n_months != 12:
+        # Validate full 12-month coverage for both variables
+        n_tmax_months = tmax_monthly.sizes.get("month", 0)
+        n_tmin_months = tmin_monthly.sizes.get("month", 0)
+        if n_tmax_months != 12 or n_tmin_months != 12:
             logger.warning(
-                "Temporal tmax data covers only %d of 12 months; "
-                "cannot compute reliable monthly normals. Skipping.",
-                n_months,
+                "Temporal data covers only %d (tmax) / %d (tmin) of "
+                "12 months; cannot compute reliable monthly normals. "
+                "Skipping.",
+                n_tmax_months,
+                n_tmin_months,
             )
             return None
 

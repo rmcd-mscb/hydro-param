@@ -1628,15 +1628,16 @@ class TestForcingVariablesYAML:
 class TestBuildSirToForcingLookup:
     """Tests for _build_sir_to_forcing_lookup reverse mapping."""
 
-    def test_returns_all_five_gridmet_variables(
-        self,
-        derivation: PywatershedDerivation,
-    ) -> None:
-        """Reverse lookup contains all 5 gridmet SIR variable names."""
+    @pytest.fixture()
+    def lookup(self, derivation: PywatershedDerivation) -> dict[str, dict[str, str]]:
+        """Build the reverse lookup from the bundled forcing_variables.yml."""
         from importlib.resources import files
 
         tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
-        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
+        return derivation._build_sir_to_forcing_lookup(tables_dir)
+
+    def test_returns_all_five_gridmet_variables(self, lookup: dict[str, dict[str, str]]) -> None:
+        """Reverse lookup contains all 5 gridmet SIR variable names."""
         expected_sir_names = {
             "pr_mm_mean",
             "tmmx_C_mean",
@@ -1646,30 +1647,16 @@ class TestBuildSirToForcingLookup:
         }
         assert set(lookup.keys()) == expected_sir_names
 
-    def test_prms_names_correct(
-        self,
-        derivation: PywatershedDerivation,
-    ) -> None:
+    def test_prms_names_correct(self, lookup: dict[str, dict[str, str]]) -> None:
         """Each SIR name maps to the correct PRMS name."""
-        from importlib.resources import files
-
-        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
-        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
         assert lookup["pr_mm_mean"]["prms_name"] == "prcp"
         assert lookup["tmmx_C_mean"]["prms_name"] == "tmax"
         assert lookup["tmmn_C_mean"]["prms_name"] == "tmin"
         assert lookup["srad_W_m2_mean"]["prms_name"] == "swrad"
         assert lookup["pet_mm_mean"]["prms_name"] == "potet"
 
-    def test_source_field_present(
-        self,
-        derivation: PywatershedDerivation,
-    ) -> None:
+    def test_source_field_present(self, lookup: dict[str, dict[str, str]]) -> None:
         """Each entry includes the source dataset name."""
-        from importlib.resources import files
-
-        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
-        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
         for entry in lookup.values():
             assert entry["source"] == "gridmet"
 
@@ -1810,7 +1797,7 @@ class TestDeriveForcing:
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Completely unknown source with no matching variables is skipped."""
+        """Temporal variable with no matching forcing config entry is skipped."""
         temporal = {
             "unknown_source_2020": xr.Dataset(
                 {"some_unknown_var": (("time", "nhm_id"), np.ones((2, 3)))},
