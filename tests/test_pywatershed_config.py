@@ -139,7 +139,7 @@ class TestPwsTimeConfig:
 
 
 class TestPwsOutputConfig:
-    """Tests for output configuration, including cbh_dir migration."""
+    """Tests for output configuration."""
 
     def test_defaults(self) -> None:
         cfg = PwsOutputConfig()
@@ -148,16 +148,6 @@ class TestPwsOutputConfig:
     def test_forcing_dir(self) -> None:
         cfg = PwsOutputConfig(forcing_dir="my_forcing")
         assert cfg.forcing_dir == "my_forcing"
-
-    def test_legacy_cbh_dir_migrated(self) -> None:
-        with pytest.warns(DeprecationWarning, match="cbh_dir"):
-            cfg = PwsOutputConfig(**{"cbh_dir": "cbh"})
-        assert cfg.forcing_dir == "cbh"
-
-    def test_forcing_dir_takes_precedence_over_cbh_dir(self) -> None:
-        with pytest.warns(DeprecationWarning, match="cbh_dir"):
-            cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
-        assert cfg.forcing_dir == "forcing"
 
 
 class TestPywatershedRunConfig:
