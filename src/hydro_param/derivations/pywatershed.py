@@ -1442,10 +1442,11 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
 
-        if "fctimp_pct_mean" in sir:
+        fctimp_key = sir.find_variable("fctimp_pct_mean")
+        if fctimp_key is not None:
             # Percent (0-100) -> fraction (0-1)
             ds["hru_percent_imperv"] = xr.DataArray(
-                np.clip(sir["fctimp_pct_mean"].values / 100.0, 0.0, 1.0),
+                np.clip(sir[fctimp_key].values / 100.0, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "HRU impervious fraction"},
             )
@@ -1463,9 +1464,16 @@ class PywatershedDerivation:
         (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU,
         return the class code with the highest fraction via ``np.argmax``.
 
-        This method supports the normalized categorical output from
-        gdptools ``ZonalGen`` where each NLCD class is a separate
-        fraction variable summing to 1.0 per HRU.
+        This method supports two SIR layouts:
+
+        1. **Column-level keys** — each fraction is a separate SIR variable
+           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  This is the
+           normalized categorical output from gdptools ``ZonalGen``.
+        2. **File-level keys** — ``data_vars`` contains a year-suffixed
+           entry like ``lndcov_frac_2021``.  The individual fraction
+           columns (``lndcov_frac_2021_11``, ``lndcov_frac_2021_41``,
+           etc.) are inside the backing file and accessed via
+           ``sir.load_dataset()``.
 
         Parameters
         ----------
@@ -1487,20 +1495,28 @@ class PywatershedDerivation:
         Suffixes that cannot be parsed as integers are silently skipped
         with a debug log message.  At least 2 valid fraction columns
         are required to compute a meaningful majority.
+
+        When a suffix parses as an integer but exceeds 95 (the maximum
+        NLCD class code), it is treated as a year-suffixed file-level
+        key.  The method calls ``sir.load_dataset()`` to retrieve the
+        inner columns and searches them for ``{file_key}_{class_code}``
+        patterns.
         """
         for prefix in prefixes:
             fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
-            if len(fraction_vars) < 2:
+            if not fraction_vars:
                 continue
 
-            # Extract class codes from suffixes
+            # Extract class codes from suffixes.  Fraction values are
+            # collected eagerly so that file-level datasets can be released
+            # immediately and multiple year-suffixed files don't overwrite
+            # each other.
             class_codes: list[int] = []
-            valid_vars: list[str] = []
+            fractions_list: list[np.ndarray] = []
             for v in fraction_vars:
                 suffix = v[len(prefix) :]
                 try:
-                    class_codes.append(int(suffix))
-                    valid_vars.append(v)
+                    code = int(suffix)
                 except ValueError:
                     logger.debug(
                         "Skipping variable '%s': suffix '%s' is not an integer class code",
@@ -1509,18 +1525,58 @@ class PywatershedDerivation:
                     )
                     continue
 
+                if code > 95:
+                    # Suffix looks like a year (e.g. 2021), not an NLCD class.
+                    # Load the backing file and extract inner fraction columns.
+                    try:
+                        inner_ds = sir.load_dataset(v)
+                    except KeyError:
+                        logger.warning(
+                            "SIR inconsistency: variable '%s' found in data_vars but "
+                            "load_dataset() raised KeyError. Skipping file-level expansion.",
+                            v,
+                        )
+                        continue
+
+                    inner_prefix = f"{v}_"
+                    for inner_name in sorted(str(v_) for v_ in inner_ds.data_vars):
+                        if not inner_name.startswith(inner_prefix):
+                            continue
+                        inner_suffix = inner_name[len(inner_prefix) :]
+                        try:
+                            inner_code = int(inner_suffix)
+                        except ValueError:
+                            logger.debug(
+                                "Skipping inner variable '%s': suffix '%s' is not an int",
+                                inner_name,
+                                inner_suffix,
+                            )
+                            continue
+                        class_codes.append(inner_code)
+                        fractions_list.append(inner_ds[inner_name].values)
+                else:
+                    class_codes.append(code)
+                    fractions_list.append(sir[v].values)
+
             if len(class_codes) < 2:
+                if fraction_vars:
+                    logger.debug(
+                        "Found %d variable(s) matching prefix '%s' but only %d "
+                        "valid class codes extracted; need at least 2.",
+                        len(fraction_vars),
+                        prefix,
+                        len(class_codes),
+                    )
                 continue
 
-            # Stack fractions into (nhru, n_classes) array
-            fractions = np.column_stack([sir[v].values for v in valid_vars])
+            fractions = np.column_stack(fractions_list)
             codes = np.array(class_codes)
             majority_idx = np.argmax(fractions, axis=1)
             majority_class = codes[majority_idx]
 
             logger.info(
                 "Computed majority class from %d categorical fraction columns (prefix=%r)",
-                len(valid_vars),
+                len(class_codes),
                 prefix,
             )
             return majority_class
@@ -1538,7 +1594,8 @@ class PywatershedDerivation:
 
         Classify soil texture into PRMS ``soil_type`` and derive
         ``soil_moist_max`` (maximum soil moisture capacity) from
-        available water capacity (AWC).
+        available water capacity (``awc_mm_mean``) or, as a fallback,
+        available water storage (``aws0_100_cm_mean``).
 
         Supports two input modes for soil texture:
 
@@ -1568,8 +1625,13 @@ class PywatershedDerivation:
 
         Notes
         -----
-        Unit conversions: AWC from mm -> inches (``convert(mm, in)``).
-        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches.
+        Unit conversions for ``soil_moist_max``:
+
+        - ``awc_mm_mean``: mm -> inches via ``convert(mm, in)``.
+        - ``aws0_100_cm_mean`` (fallback): cm -> mm (* 10) -> inches via
+          ``convert(mm, in)``.
+
+        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches in both cases.
 
         ``soil_rechr_max_frac`` is set to a constant default of 0.4
         (no soil layer depth data is currently available from the SIR
@@ -1606,9 +1668,22 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
+        elif "aws0_100_cm_mean" in sir:
+            # Available water storage in cm — convert to mm first, then to inches.
+            aws_cm = sir["aws0_100_cm_mean"].values.astype(np.float64)
+            awc_mm = aws_cm * 10.0  # cm -> mm
+            soil_moist_max = convert(awc_mm, "mm", "in")
+            soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
+            ds["soil_moist_max"] = xr.DataArray(
+                soil_moist_max,
+                dims="nhru",
+                attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
+            )
+            logger.info("Used aws0_100_cm_mean (cm -> mm -> in) for soil_moist_max")
         else:
             logger.warning(
-                "Skipping soil_moist_max derivation (step 5): 'awc_mm_mean' not found in SIR."
+                "Skipping soil_moist_max derivation (step 5): neither 'awc_mm_mean' "
+                "nor 'aws0_100_cm_mean' found in SIR."
             )
 
         # --- soil_rechr_max_frac ---

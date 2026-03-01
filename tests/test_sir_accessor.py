@@ -181,3 +181,138 @@ class TestSIRAccessor:
         original_len = len(schema)
         schema.append({"name": "injected"})
         assert len(acc.sir_schema) == original_len
+
+
+def test_load_dataset_returns_all_columns(tmp_path: Path) -> None:
+    """load_dataset returns full xr.Dataset with all CSV columns."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame(
+        {"lndcov_frac_2021_11": [0.8, 0.1], "lndcov_frac_2021_41": [0.2, 0.9]},
+        index=pd.Index([1, 2], name="nhm_id"),
+    )
+    df.to_csv(sir_dir / "lndcov_frac_2021.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            lndcov_frac_2021: sir/lndcov_frac_2021.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    ds = sir.load_dataset("lndcov_frac_2021")
+    assert isinstance(ds, xr.Dataset)
+    assert "lndcov_frac_2021_11" in ds.data_vars
+    assert "lndcov_frac_2021_41" in ds.data_vars
+    assert len(ds.data_vars) == 2
+
+
+def test_find_variable_exact_match(tmp_path: Path) -> None:
+    """find_variable returns exact match when available."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [1.0]}, index=pd.Index([1], name="nhm_id"))
+    df.to_csv(sir_dir / "elevation_m_mean.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            elevation_m_mean: sir/elevation_m_mean.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    assert sir.find_variable("elevation_m_mean") == "elevation_m_mean"
+
+
+def test_find_variable_year_suffix(tmp_path: Path) -> None:
+    """find_variable matches year-suffixed variant."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [5.0]}, index=pd.Index([1], name="nhm_id"))
+    df.to_csv(sir_dir / "fctimp_pct_mean_2021.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            fctimp_pct_mean_2021: sir/fctimp_pct_mean_2021.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    assert sir.find_variable("fctimp_pct_mean") == "fctimp_pct_mean_2021"
+
+
+def test_find_variable_picks_most_recent_year(tmp_path: Path) -> None:
+    """find_variable returns the most recent year when multiple matches exist."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [5.0]}, index=pd.Index([1], name="nhm_id"))
+    for year in [2019, 2021, 2020]:
+        df.to_csv(sir_dir / f"fctimp_pct_mean_{year}.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            fctimp_pct_mean_2019: sir/fctimp_pct_mean_2019.csv
+            fctimp_pct_mean_2020: sir/fctimp_pct_mean_2020.csv
+            fctimp_pct_mean_2021: sir/fctimp_pct_mean_2021.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    assert sir.find_variable("fctimp_pct_mean") == "fctimp_pct_mean_2021"
+
+
+def test_find_variable_not_found(tmp_path: Path) -> None:
+    """find_variable returns None when no match exists."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [1.0]}, index=pd.Index([1], name="nhm_id"))
+    df.to_csv(sir_dir / "elevation_m_mean.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            elevation_m_mean: sir/elevation_m_mean.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    assert sir.find_variable("bogus_var") is None

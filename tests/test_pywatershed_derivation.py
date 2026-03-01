@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -60,6 +61,24 @@ class _MockSIRAccessor:
 
     def __getitem__(self, name: str) -> xr.DataArray:
         return self.load_variable(name)
+
+    def load_dataset(self, name: str) -> xr.Dataset:
+        """Load all vars starting with name as a Dataset."""
+        matching = {str(k): v for k, v in self._ds.data_vars.items() if str(k).startswith(name)}
+        if not matching:
+            raise KeyError(f"SIR variable '{name}' not found.")
+        return xr.Dataset(matching)
+
+    def find_variable(self, base_name: str) -> str | None:
+        """Find variable by base name, allowing year suffixes."""
+
+        if base_name in self._ds:
+            return base_name
+        pattern = re.compile(rf"^{re.escape(base_name)}_(\d{{4}})$")
+        matches = [str(v) for v in self._ds.data_vars if pattern.match(str(v))]
+        if matches:
+            return sorted(matches)[-1]
+        return None
 
 
 @pytest.fixture()
@@ -353,6 +372,23 @@ class TestDeriveLandcover:
         # Coniferous (4) -> 0.8, Grasses (1) -> 0.3
         np.testing.assert_allclose(ds["covden_sum"].values, [0.8, 0.3])
 
+    def test_derive_landcover_year_suffixed_imperv(self, derivation: PywatershedDerivation) -> None:
+        """hru_percent_imperv derived from year-suffixed fctimp_pct_mean_2021."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_11": ("nhm_id", np.array([0.8, 0.2])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.2, 0.8])),
+                    "fctimp_pct_mean_2021": ("nhm_id", np.array([10.0, 50.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation._derive_landcover(ctx, xr.Dataset())
+        assert "hru_percent_imperv" in ds
+        np.testing.assert_allclose(ds["hru_percent_imperv"].values, [0.1, 0.5])
+
 
 class TestDeriveSoils:
     """Tests for step 5: soils zonal stats derivation."""
@@ -508,6 +544,28 @@ class TestDeriveSoils:
         assert "soil_type" not in ds
         # soil_rechr_max_frac gates on soil_type
         assert "soil_rechr_max_frac" not in ds
+
+    def test_derive_soils_aws_cm_fallback(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max derived from aws0_100_cm_mean with cm->mm conversion."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0, 15.0, 8.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        # 5 cm = 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
+        # 15 cm = 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
+        # 8 cm = 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
+        expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
 
 class TestApplyLookupTables:
@@ -1301,6 +1359,94 @@ class TestCategoricalFractionMajority:
         ds = derivation.derive(ctx)
         assert "cov_type" in ds
         assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
+
+    def test_majority_from_fractions_file_level_key(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Majority class from a file-level SIR key with inner fraction columns.
+
+        Simulates real SIR where data_vars=['lndcov_frac_2021'] and
+        load_dataset('lndcov_frac_2021') returns the inner columns.
+        """
+        inner_ds = xr.Dataset(
+            {
+                "lndcov_frac_2021_11": ("nhm_id", np.array([0.1, 0.0])),
+                "lndcov_frac_2021_41": ("nhm_id", np.array([0.8, 0.1])),
+                "lndcov_frac_2021_42": ("nhm_id", np.array([0.1, 0.9])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        outer_ds = xr.Dataset(
+            {"lndcov_frac_2021": ("nhm_id", np.array([0.0, 0.0]))},
+            coords={"nhm_id": [1, 2]},
+        )
+
+        class _FileKeyMock(_MockSIRAccessor):
+            def __init__(self) -> None:
+                super().__init__(outer_ds)
+                self._inner = inner_ds
+
+            def load_dataset(self, name: str) -> xr.Dataset:
+                if name == "lndcov_frac_2021":
+                    return self._inner
+                raise KeyError(name)
+
+        sir = _FileKeyMock()
+        result = derivation._compute_majority_from_fractions(sir)
+        assert result is not None
+        np.testing.assert_array_equal(result, [41, 42])
+
+    def test_majority_from_fractions_multi_year_file_keys(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Multiple year-suffixed file keys don't overwrite each other.
+
+        Regression test for the inner_ds overwrite bug: when both
+        lndcov_frac_2020 and lndcov_frac_2021 exist, fractions from
+        both years must be collected correctly.
+        """
+        inner_2020 = xr.Dataset(
+            {
+                "lndcov_frac_2020_11": ("nhm_id", np.array([0.9, 0.1])),
+                "lndcov_frac_2020_41": ("nhm_id", np.array([0.1, 0.9])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        inner_2021 = xr.Dataset(
+            {
+                "lndcov_frac_2021_11": ("nhm_id", np.array([0.8, 0.2])),
+                "lndcov_frac_2021_41": ("nhm_id", np.array([0.2, 0.8])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        outer_ds = xr.Dataset(
+            {
+                "lndcov_frac_2020": ("nhm_id", np.array([0.0, 0.0])),
+                "lndcov_frac_2021": ("nhm_id", np.array([0.0, 0.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+
+        class _MultiYearMock(_MockSIRAccessor):
+            def __init__(self) -> None:
+                super().__init__(outer_ds)
+                self._inners = {
+                    "lndcov_frac_2020": inner_2020,
+                    "lndcov_frac_2021": inner_2021,
+                }
+
+            def load_dataset(self, name: str) -> xr.Dataset:
+                if name in self._inners:
+                    return self._inners[name]
+                raise KeyError(name)
+
+        sir = _MultiYearMock()
+        result = derivation._compute_majority_from_fractions(sir)
+        assert result is not None
+        # 4 fraction columns total (2020_11, 2020_41, 2021_11, 2021_41).
+        # HRU 1: max fraction is 2020_11=0.9 -> class 11.
+        # HRU 2: max fraction is 2020_41=0.9 -> class 41.
+        np.testing.assert_array_equal(result, [11, 41])
 
 
 # ------------------------------------------------------------------

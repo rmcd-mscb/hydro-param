@@ -21,6 +21,7 @@ hydro_param.plugins.DerivationContext : Consumer of SIRAccessor.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -277,6 +278,79 @@ class SIRAccessor:
         use ``load_temporal()`` instead.
         """
         return self.load_variable(name)
+
+    def load_dataset(self, name: str) -> xr.Dataset:
+        """Load a static SIR file as a full Dataset (all columns).
+
+        Unlike ``load_variable()`` which returns a single DataArray,
+        this method returns the complete ``xr.Dataset`` with all columns
+        from a multi-column CSV.  Useful for categorical fraction files
+        (e.g., ``lndcov_frac_2021``) where each column represents a
+        class fraction.
+
+        Parameters
+        ----------
+        name : str
+            SIR variable name (must match a static file key).
+
+        Returns
+        -------
+        xr.Dataset
+            Full dataset with all columns from the CSV.
+
+        Raises
+        ------
+        KeyError
+            If the variable name is not in the SIR.
+        OSError
+            If the CSV file is corrupt, truncated, or unreadable.
+        """
+        if name not in self._static:
+            raise KeyError(
+                f"SIR variable '{name}' not found. Available: {sorted(self._static.keys())}"
+            )
+        path = self._output_dir / self._static[name]
+        try:
+            df = pd.read_csv(path, index_col=0)
+        except Exception as exc:
+            raise OSError(
+                f"Failed to read SIR file for '{name}' at {path}: {exc}. "
+                f"The file may be corrupt or truncated. "
+                f"Re-run 'hydro-param run pipeline.yml' to regenerate."
+            ) from exc
+        return xr.Dataset.from_dataframe(df)
+
+    def find_variable(self, base_name: str) -> str | None:
+        """Find a static variable by base name, allowing year suffixes.
+
+        Return ``base_name`` if it exists as-is.  Otherwise, search for
+        variables matching ``{base_name}_{year}`` where year is a 4-digit
+        number.  Returns the most recent year if multiple matches exist.
+
+        Parameters
+        ----------
+        base_name : str
+            Variable base name (e.g., ``"fctimp_pct_mean"``).
+
+        Returns
+        -------
+        str or None
+            The actual SIR variable name, or ``None`` if not found.
+        """
+        if base_name in self._static:
+            return base_name
+        pattern = re.compile(rf"^{re.escape(base_name)}_(\d{{4}})$")
+        matches = [v for v in self._static if pattern.match(v)]
+        if matches:
+            resolved = sorted(matches)[-1]
+            logger.debug(
+                "Resolved '%s' to year-suffixed variant '%s' (%d candidate(s))",
+                base_name,
+                resolved,
+                len(matches),
+            )
+            return resolved
+        return None
 
 
 def _glob_sir_static(sir_dir: Path) -> dict[str, str]:
