@@ -2518,62 +2518,6 @@ class PywatershedDerivation:
 
         return ds
 
-    @staticmethod
-    def _detect_forcing_dataset(
-        source_name: str,
-        temporal: xr.Dataset,
-        datasets_config: dict,
-    ) -> dict | None:
-        """Match a temporal dataset to its forcing config section.
-
-        Try exact name match on ``source_name`` first, then fall back to
-        a fuzzy match by counting how many SIR variable names from each
-        config section appear in the temporal dataset.  The section with
-        the most variable name hits is selected.
-
-        Parameters
-        ----------
-        source_name : str
-            Base name of the temporal source (e.g., ``"gridmet"``).
-        temporal : xr.Dataset
-            Temporal dataset to match against config sections.
-        datasets_config : dict
-            Forcing dataset configurations from ``forcing_variables.yml``,
-            keyed by dataset name.
-
-        Returns
-        -------
-        dict or None
-            The matched forcing config section (mapping PRMS names to
-            variable specs), or ``None`` if no match is found.
-        """
-        # Exact match on source name
-        if source_name in datasets_config:
-            return datasets_config[source_name]
-
-        # Fuzzy match: pick config with most SIR variable name hits
-        best_match: str | None = None
-        best_count = 0
-        temporal_vars = set(temporal.data_vars)
-        for cfg_name, cfg_vars in datasets_config.items():
-            sir_names = {v["sir_name"] for v in cfg_vars.values()}
-            count = len(sir_names & temporal_vars)
-            if count > best_count:
-                best_count = count
-                best_match = cfg_name
-
-        if best_match is not None and best_count > 0:
-            logger.info(
-                "Matched temporal source '%s' to forcing config '%s' (%d/%d variables matched).",
-                source_name,
-                best_match,
-                best_count,
-                len(datasets_config[best_match]),
-            )
-            return datasets_config[best_match]
-
-        return None
-
     # ------------------------------------------------------------------
     # Climate normals helpers (steps 10, 11)
     # ------------------------------------------------------------------
