@@ -1463,9 +1463,16 @@ class PywatershedDerivation:
         (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU,
         return the class code with the highest fraction via ``np.argmax``.
 
-        This method supports the normalized categorical output from
-        gdptools ``ZonalGen`` where each NLCD class is a separate
-        fraction variable summing to 1.0 per HRU.
+        This method supports two SIR layouts:
+
+        1. **Column-level keys** — each fraction is a separate SIR variable
+           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  This is the
+           normalized categorical output from gdptools ``ZonalGen``.
+        2. **File-level keys** — ``data_vars`` contains a year-suffixed
+           entry like ``lndcov_frac_2021``.  The individual fraction
+           columns (``lndcov_frac_2021_11``, ``lndcov_frac_2021_41``,
+           etc.) are inside the backing file and accessed via
+           ``sir.load_dataset()``.
 
         Parameters
         ----------
@@ -1487,20 +1494,26 @@ class PywatershedDerivation:
         Suffixes that cannot be parsed as integers are silently skipped
         with a debug log message.  At least 2 valid fraction columns
         are required to compute a meaningful majority.
+
+        When a suffix parses as an integer but exceeds 95 (the maximum
+        NLCD class code), it is treated as a year-suffixed file-level
+        key.  The method calls ``sir.load_dataset()`` to retrieve the
+        inner columns and searches them for ``{file_key}_{class_code}``
+        patterns.
         """
         for prefix in prefixes:
             fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
-            if len(fraction_vars) < 2:
+            if not fraction_vars:
                 continue
 
             # Extract class codes from suffixes
             class_codes: list[int] = []
             valid_vars: list[str] = []
+            inner_ds: xr.Dataset | None = None
             for v in fraction_vars:
                 suffix = v[len(prefix) :]
                 try:
-                    class_codes.append(int(suffix))
-                    valid_vars.append(v)
+                    code = int(suffix)
                 except ValueError:
                     logger.debug(
                         "Skipping variable '%s': suffix '%s' is not an integer class code",
@@ -1509,11 +1522,59 @@ class PywatershedDerivation:
                     )
                     continue
 
+                if code > 95:
+                    # Suffix looks like a year (e.g. 2021), not an NLCD class.
+                    # Try loading the inner columns from the backing file.
+                    if not hasattr(sir, "load_dataset"):
+                        logger.debug(
+                            "Skipping file-level key '%s': sir has no load_dataset()",
+                            v,
+                        )
+                        continue
+                    try:
+                        inner_ds = sir.load_dataset(v)
+                    except KeyError:
+                        logger.debug(
+                            "load_dataset('%s') raised KeyError; skipping",
+                            v,
+                        )
+                        continue
+
+                    inner_prefix = f"{v}_"
+                    for inner_v in sorted(inner_ds.data_vars):
+                        inner_name = str(inner_v)
+                        if not inner_name.startswith(inner_prefix):
+                            continue
+                        inner_suffix = inner_name[len(inner_prefix) :]
+                        try:
+                            inner_code = int(inner_suffix)
+                        except ValueError:
+                            logger.debug(
+                                "Skipping inner variable '%s': suffix '%s' is not an int",
+                                inner_name,
+                                inner_suffix,
+                            )
+                            continue
+                        class_codes.append(inner_code)
+                        valid_vars.append(inner_name)
+                else:
+                    class_codes.append(code)
+                    valid_vars.append(v)
+
             if len(class_codes) < 2:
                 continue
 
-            # Stack fractions into (nhru, n_classes) array
-            fractions = np.column_stack([sir[v].values for v in valid_vars])
+            # Stack fractions into (nhru, n_classes) array.
+            # Values come from the inner dataset when file-level keys were
+            # expanded, otherwise directly from the SIR.
+            fractions_list: list[np.ndarray] = []
+            for v in valid_vars:
+                if inner_ds is not None and v in inner_ds:
+                    fractions_list.append(inner_ds[v].values)
+                else:
+                    fractions_list.append(sir[v].values)
+
+            fractions = np.column_stack(fractions_list)
             codes = np.array(class_codes)
             majority_idx = np.argmax(fractions, axis=1)
             majority_class = codes[majority_idx]

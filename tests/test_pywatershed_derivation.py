@@ -1321,6 +1321,42 @@ class TestCategoricalFractionMajority:
         assert "cov_type" in ds
         assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
 
+    def test_majority_from_fractions_file_level_key(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Majority class from a file-level SIR key with inner fraction columns.
+
+        Simulates real SIR where data_vars=['lndcov_frac_2021'] and
+        load_dataset('lndcov_frac_2021') returns the inner columns.
+        """
+        inner_ds = xr.Dataset(
+            {
+                "lndcov_frac_2021_11": ("nhm_id", np.array([0.1, 0.0])),
+                "lndcov_frac_2021_41": ("nhm_id", np.array([0.8, 0.1])),
+                "lndcov_frac_2021_42": ("nhm_id", np.array([0.1, 0.9])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        outer_ds = xr.Dataset(
+            {"lndcov_frac_2021": ("nhm_id", np.array([0.0, 0.0]))},
+            coords={"nhm_id": [1, 2]},
+        )
+
+        class _FileKeyMock(_MockSIRAccessor):
+            def __init__(self) -> None:
+                super().__init__(outer_ds)
+                self._inner = inner_ds
+
+            def load_dataset(self, name: str) -> xr.Dataset:
+                if name == "lndcov_frac_2021":
+                    return self._inner
+                raise KeyError(name)
+
+        sir = _FileKeyMock()
+        result = derivation._compute_majority_from_fractions(sir)
+        assert result is not None
+        np.testing.assert_array_equal(result, [41, 42])
+
 
 # ------------------------------------------------------------------
 # merge_temporal_into_derived
