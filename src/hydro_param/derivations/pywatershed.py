@@ -1442,10 +1442,11 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
 
-        if "fctimp_pct_mean" in sir:
+        fctimp_key = sir.find_variable("fctimp_pct_mean")
+        if fctimp_key is not None:
             # Percent (0-100) -> fraction (0-1)
             ds["hru_percent_imperv"] = xr.DataArray(
-                np.clip(sir["fctimp_pct_mean"].values / 100.0, 0.0, 1.0),
+                np.clip(sir[fctimp_key].values / 100.0, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "HRU impervious fraction"},
             )

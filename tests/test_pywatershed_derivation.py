@@ -372,6 +372,23 @@ class TestDeriveLandcover:
         # Coniferous (4) -> 0.8, Grasses (1) -> 0.3
         np.testing.assert_allclose(ds["covden_sum"].values, [0.8, 0.3])
 
+    def test_derive_landcover_year_suffixed_imperv(self, derivation: PywatershedDerivation) -> None:
+        """hru_percent_imperv derived from year-suffixed fctimp_pct_mean_2021."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_11": ("nhm_id", np.array([0.8, 0.2])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.2, 0.8])),
+                    "fctimp_pct_mean_2021": ("nhm_id", np.array([10.0, 50.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation._derive_landcover(ctx, xr.Dataset())
+        assert "hru_percent_imperv" in ds
+        np.testing.assert_allclose(ds["hru_percent_imperv"].values, [0.1, 0.5])
+
 
 class TestDeriveSoils:
     """Tests for step 5: soils zonal stats derivation."""
