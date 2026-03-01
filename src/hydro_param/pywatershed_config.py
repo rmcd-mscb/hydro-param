@@ -428,12 +428,9 @@ class PwsOutputConfig(BaseModel):
         Filename for simulation control (default ``"control.yml"``).
     soltab_file : str
         Filename for solar radiation tables (default ``"soltab.nc"``).
-
-    Notes
-    -----
-    The legacy config key ``cbh_dir`` is accepted with a deprecation
-    warning and mapped to ``forcing_dir``.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     path: Path = Path("./output")
     format: Literal["netcdf", "prms_text"] = "netcdf"
@@ -441,29 +438,6 @@ class PwsOutputConfig(BaseModel):
     forcing_dir: str = "forcing"
     control_file: str = "control.yml"
     soltab_file: str = "soltab.nc"
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_cbh_dir(cls, values: dict) -> dict:
-        """Map legacy ``cbh_dir`` to ``forcing_dir`` with a deprecation warning."""
-        if isinstance(values, dict) and "cbh_dir" in values:
-            if "forcing_dir" not in values:
-                warnings.warn(
-                    "Config key 'cbh_dir' is deprecated, use 'forcing_dir' instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                values["forcing_dir"] = values.pop("cbh_dir")
-            else:
-                warnings.warn(
-                    f"Both 'cbh_dir' and 'forcing_dir' specified; "
-                    f"using 'forcing_dir: {values['forcing_dir']}' and "
-                    f"ignoring 'cbh_dir: {values['cbh_dir']}'.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                values.pop("cbh_dir")
-        return values
 
 
 class PywatershedRunConfig(BaseModel):

@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = ".manifest.yml"
 
-_SUPPORTED_VERSIONS = {1, 2}
+_SUPPORTED_VERSIONS = {2}
 _CURRENT_VERSION = 2
 
 
@@ -76,7 +76,7 @@ class ManifestEntry(BaseModel):
         relative to the output directory.
     completed_at : datetime
         UTC timestamp when processing completed.  Defaults to
-        ``datetime.min`` for incomplete or legacy entries.
+        ``datetime.min`` for incomplete entries.
     """
 
     fingerprint: str
@@ -87,9 +87,11 @@ class ManifestEntry(BaseModel):
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
-        """Parse ISO date strings and accept empty strings for legacy manifests."""
+        """Parse ISO date strings; treat empty strings as incomplete entries."""
         if isinstance(v, str):
-            return datetime.fromisoformat(v) if v else datetime.min.replace(tzinfo=timezone.utc)
+            if not v:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.fromisoformat(v)
         return v
 
 
@@ -106,7 +108,7 @@ class SIRSchemaEntry(TypedDict):
         Zonal statistic used (e.g., ``"mean"``, ``"categorical"``).
     source_dataset : str
         Name of the pipeline dataset that produced this variable
-        (e.g., ``"dem_3dep_10m"``).  Empty string for legacy entries.
+        (e.g., ``"dem_3dep_10m"``).
     """
 
     name: str
@@ -156,9 +158,11 @@ class SIRManifestEntry(BaseModel):
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
-        """Parse ISO date strings and accept empty strings for legacy entries."""
+        """Parse ISO date strings; treat empty strings as incomplete entries."""
         if isinstance(v, str):
-            return datetime.fromisoformat(v) if v else datetime.min.replace(tzinfo=timezone.utc)
+            if not v:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.fromisoformat(v)
         return v
 
 
@@ -174,7 +178,7 @@ class PipelineManifest(BaseModel):
     ----------
     version : int
         Manifest schema version.  Must be one of ``_SUPPORTED_VERSIONS``
-        (currently {1, 2}).  Incompatible versions cause a validation error.
+        (currently {2}).  Incompatible versions cause a validation error.
     fabric_fingerprint : str
         Fingerprint of the target fabric file (format:
         ``"{filename}|{mtime}|{size}"``).  Empty string for new
@@ -182,10 +186,8 @@ class PipelineManifest(BaseModel):
     entries : dict[str, ManifestEntry]
         Per-dataset manifest entries, keyed by dataset name.
     sir : SIRManifestEntry or None
-        SIR output tracking for Phase 2 consumers.  ``None`` for v1
-        manifests created before SIR normalization was implemented,
-        and also valid for v2 manifests that have not yet run SIR
-        normalization.
+        SIR output tracking for Phase 2 consumers.  ``None`` for v2
+        manifests that have not yet run SIR normalization.
     """
 
     version: int = _CURRENT_VERSION

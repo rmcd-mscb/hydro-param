@@ -92,14 +92,6 @@ class TestPwsDomainConfig:
         cfg = PwsDomainConfig(fabric_path=fabric)
         assert cfg.waterbody_path is None
 
-    def test_no_extraction_method(self, tmp_path: Path) -> None:
-        """v3.0 domain has no extraction_method field."""
-        fabric = tmp_path / "nhru.gpkg"
-        fabric.touch()
-        cfg = PwsDomainConfig(fabric_path=fabric)
-        assert not hasattr(cfg, "extraction_method") or "extraction_method" not in cfg.model_fields
-        assert not hasattr(cfg, "bbox") or "bbox" not in cfg.model_fields
-
 
 class TestPwsTimeConfig:
     """Tests for time configuration."""
@@ -139,7 +131,7 @@ class TestPwsTimeConfig:
 
 
 class TestPwsOutputConfig:
-    """Tests for output configuration, including cbh_dir migration."""
+    """Tests for output configuration."""
 
     def test_defaults(self) -> None:
         cfg = PwsOutputConfig()
@@ -148,16 +140,6 @@ class TestPwsOutputConfig:
     def test_forcing_dir(self) -> None:
         cfg = PwsOutputConfig(forcing_dir="my_forcing")
         assert cfg.forcing_dir == "my_forcing"
-
-    def test_legacy_cbh_dir_migrated(self) -> None:
-        with pytest.warns(DeprecationWarning, match="cbh_dir"):
-            cfg = PwsOutputConfig(**{"cbh_dir": "cbh"})
-        assert cfg.forcing_dir == "cbh"
-
-    def test_forcing_dir_takes_precedence_over_cbh_dir(self) -> None:
-        with pytest.warns(DeprecationWarning, match="cbh_dir"):
-            cfg = PwsOutputConfig(**{"forcing_dir": "forcing", "cbh_dir": "cbh"})
-        assert cfg.forcing_dir == "forcing"
 
 
 class TestPywatershedRunConfig:
@@ -173,24 +155,6 @@ class TestPywatershedRunConfig:
         minimal_config_dict["sir_path"] = "/custom/sir/output"
         cfg = PywatershedRunConfig(**minimal_config_dict)
         assert cfg.sir_path == Path("/custom/sir/output")
-
-    def test_rejects_old_datasets_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept datasets field (extra=forbid)."""
-        minimal_config_dict["datasets"] = {"topography": "dem_3dep_10m"}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
-
-    def test_rejects_old_climate_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept climate field (extra=forbid)."""
-        minimal_config_dict["climate"] = {"source": "gridmet"}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
-
-    def test_rejects_old_processing_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept processing field (extra=forbid)."""
-        minimal_config_dict["processing"] = {"batch_size": 500}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
 
     def test_invalid_target_model(self, minimal_config_dict: dict) -> None:
         minimal_config_dict["target_model"] = "swat"
@@ -359,10 +323,10 @@ class TestCategoryModels:
         assert isinstance(sd.waterbodies, WaterbodyDatasets)
 
 
-class TestPywatershedRunConfigV4:
-    """Tests for v4.0 config with static_datasets, forcing, climate_normals."""
+class TestPywatershedRunConfigSections:
+    """Tests for config sections: static_datasets, forcing, climate_normals."""
 
-    def test_v4_accepts_new_sections(self, tmp_path: Path) -> None:
+    def test_accepts_dataset_sections(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         cfg = PywatershedRunConfig(
@@ -384,7 +348,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.version == "4.0"
         assert cfg.static_datasets.topography.hru_elev is not None
 
-    def test_v4_defaults_all_sections_empty(self, tmp_path: Path) -> None:
+    def test_defaults_all_sections_empty(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         cfg = PywatershedRunConfig(
@@ -396,7 +360,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.forcing.prcp is None
         assert cfg.climate_normals.jh_coef is None
 
-    def test_v4_full_config_from_yaml(self, tmp_path: Path) -> None:
+    def test_full_config_from_yaml(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         config_dict = {
@@ -472,7 +436,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.forcing.prcp.source == "gridmet"
         assert cfg.climate_normals.transp_beg.source == "gridmet"
 
-    def test_v4_rejects_unknown_top_level_field(self, tmp_path: Path) -> None:
+    def test_rejects_unknown_top_level_field(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         with pytest.raises(ValidationError, match="extra"):

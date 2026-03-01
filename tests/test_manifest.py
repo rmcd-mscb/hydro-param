@@ -208,7 +208,7 @@ def test_manifest_load_corrupt(tmp_path: Path):
 def test_manifest_load_invalid_schema(tmp_path: Path):
     """Returns None for valid YAML with wrong schema."""
     manifest_path = tmp_path / ".manifest.yml"
-    manifest_path.write_text("version: 1\nentries: wrong_type\n")
+    manifest_path.write_text("version: 2\nentries: wrong_type\n")
     assert load_manifest(tmp_path) is None
 
 
@@ -383,14 +383,23 @@ class TestSIRManifestEntry:
         assert loaded.sir is not None
         assert loaded.sir.static_files == {"elevation_m_mean": "sir/elevation_m_mean.csv"}
 
-    def test_manifest_version_1_has_no_sir(self, tmp_path):
-        """Version 1 manifests loaded as version 2 should have sir=None."""
-        manifest = PipelineManifest(sir=None)
-        manifest.save(tmp_path)
+    def test_manifest_version_1_rejected(self, tmp_path):
+        """Version 1 manifests are no longer supported."""
+        manifest_path = tmp_path / ".manifest.yml"
+        manifest_path.write_text("version: 1\nfabric_fingerprint: abc\nentries: {}\n")
+        loaded = load_manifest(tmp_path)
+        assert loaded is None  # load_manifest returns None on validation error
 
+    def test_manifest_empty_completed_at_still_loads(self, tmp_path):
+        """A manifest with empty completed_at string loads with datetime.min."""
+        manifest_path = tmp_path / ".manifest.yml"
+        manifest_path.write_text(
+            "version: 2\nfabric_fingerprint: abc\n"
+            "entries:\n  dem:\n    fingerprint: sha256:abc\n"
+            '    completed_at: ""\n'
+        )
         loaded = load_manifest(tmp_path)
         assert loaded is not None
-        assert loaded.sir is None
 
     def test_manifest_atomic_write(self, tmp_path):
         """Manifest save should be atomic (no partial writes)."""

@@ -924,7 +924,7 @@ class TestDeriveTopology:
         assert "nsegment" in ds.coords
         np.testing.assert_array_equal(ds.coords["nsegment"].values, [201, 202, 203])
 
-    def test_backward_compatible_without_topology(
+    def test_derive_without_topology(
         self,
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,

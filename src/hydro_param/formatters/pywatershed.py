@@ -160,7 +160,7 @@ class PywatershedFormatter:
             written.append(param_path)
 
         # 2. Forcing NetCDF files (only if climate data present)
-        forcing_dir = config.get("forcing_dir") or config.get("cbh_dir") or "forcing"
+        forcing_dir = config.get("forcing_dir") or "forcing"
         forcing_paths = self.write_forcing_netcdf(parameters, output_path / forcing_dir)
         written.extend(forcing_paths)
 

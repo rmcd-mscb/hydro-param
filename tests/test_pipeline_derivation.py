@@ -40,7 +40,7 @@ class TestPipelineResult:
 
         result = PipelineResult(
             output_dir=tmp_path,
-            static_files={"elevation": path},
+            sir_files={"elevation": path},
         )
         sir = result.load_sir()
         assert "elevation" in sir.data_vars

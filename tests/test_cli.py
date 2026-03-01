@@ -786,7 +786,7 @@ def _write_pws_config(
     segment_path: str | None = None,
     waterbody_path: str | None = None,
 ) -> Path:
-    """Write a v3.0 pywatershed run config YAML for testing."""
+    """Write a v4.0 pywatershed run config YAML for testing."""
     cfg: dict = {
         "target_model": "pywatershed",
         "version": "4.0",
