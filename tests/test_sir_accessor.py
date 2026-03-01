@@ -265,6 +265,34 @@ def test_find_variable_year_suffix(tmp_path: Path) -> None:
     assert sir.find_variable("fctimp_pct_mean") == "fctimp_pct_mean_2021"
 
 
+def test_find_variable_picks_most_recent_year(tmp_path: Path) -> None:
+    """find_variable returns the most recent year when multiple matches exist."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [5.0]}, index=pd.Index([1], name="nhm_id"))
+    for year in [2019, 2021, 2020]:
+        df.to_csv(sir_dir / f"fctimp_pct_mean_{year}.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            fctimp_pct_mean_2019: sir/fctimp_pct_mean_2019.csv
+            fctimp_pct_mean_2020: sir/fctimp_pct_mean_2020.csv
+            fctimp_pct_mean_2021: sir/fctimp_pct_mean_2021.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    assert sir.find_variable("fctimp_pct_mean") == "fctimp_pct_mean_2021"
+
+
 def test_find_variable_not_found(tmp_path: Path) -> None:
     """find_variable returns None when no match exists."""
     import textwrap

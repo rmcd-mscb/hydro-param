@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -70,7 +71,6 @@ class _MockSIRAccessor:
 
     def find_variable(self, base_name: str) -> str | None:
         """Find variable by base name, allowing year suffixes."""
-        import re
 
         if base_name in self._ds:
             return base_name
@@ -1395,6 +1395,58 @@ class TestCategoricalFractionMajority:
         result = derivation._compute_majority_from_fractions(sir)
         assert result is not None
         np.testing.assert_array_equal(result, [41, 42])
+
+    def test_majority_from_fractions_multi_year_file_keys(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Multiple year-suffixed file keys don't overwrite each other.
+
+        Regression test for the inner_ds overwrite bug: when both
+        lndcov_frac_2020 and lndcov_frac_2021 exist, fractions from
+        both years must be collected correctly.
+        """
+        inner_2020 = xr.Dataset(
+            {
+                "lndcov_frac_2020_11": ("nhm_id", np.array([0.9, 0.1])),
+                "lndcov_frac_2020_41": ("nhm_id", np.array([0.1, 0.9])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        inner_2021 = xr.Dataset(
+            {
+                "lndcov_frac_2021_11": ("nhm_id", np.array([0.8, 0.2])),
+                "lndcov_frac_2021_41": ("nhm_id", np.array([0.2, 0.8])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+        outer_ds = xr.Dataset(
+            {
+                "lndcov_frac_2020": ("nhm_id", np.array([0.0, 0.0])),
+                "lndcov_frac_2021": ("nhm_id", np.array([0.0, 0.0])),
+            },
+            coords={"nhm_id": [1, 2]},
+        )
+
+        class _MultiYearMock(_MockSIRAccessor):
+            def __init__(self) -> None:
+                super().__init__(outer_ds)
+                self._inners = {
+                    "lndcov_frac_2020": inner_2020,
+                    "lndcov_frac_2021": inner_2021,
+                }
+
+            def load_dataset(self, name: str) -> xr.Dataset:
+                if name in self._inners:
+                    return self._inners[name]
+                raise KeyError(name)
+
+        sir = _MultiYearMock()
+        result = derivation._compute_majority_from_fractions(sir)
+        assert result is not None
+        # 4 fraction columns total (2020_11, 2020_41, 2021_11, 2021_41).
+        # HRU 1: max fraction is 2020_11=0.9 -> class 11.
+        # HRU 2: max fraction is 2020_41=0.9 -> class 41.
+        np.testing.assert_array_equal(result, [11, 41])
 
 
 # ------------------------------------------------------------------

@@ -1507,10 +1507,12 @@ class PywatershedDerivation:
             if not fraction_vars:
                 continue
 
-            # Extract class codes from suffixes
+            # Extract class codes from suffixes.  Fraction values are
+            # collected eagerly so that file-level datasets can be released
+            # immediately and multiple year-suffixed files don't overwrite
+            # each other.
             class_codes: list[int] = []
-            valid_vars: list[str] = []
-            inner_ds: xr.Dataset | None = None
+            fractions_list: list[np.ndarray] = []
             for v in fraction_vars:
                 suffix = v[len(prefix) :]
                 try:
@@ -1525,18 +1527,13 @@ class PywatershedDerivation:
 
                 if code > 95:
                     # Suffix looks like a year (e.g. 2021), not an NLCD class.
-                    # Try loading the inner columns from the backing file.
-                    if not hasattr(sir, "load_dataset"):
-                        logger.debug(
-                            "Skipping file-level key '%s': sir has no load_dataset()",
-                            v,
-                        )
-                        continue
+                    # Load the backing file and extract inner fraction columns.
                     try:
                         inner_ds = sir.load_dataset(v)
                     except KeyError:
-                        logger.debug(
-                            "load_dataset('%s') raised KeyError; skipping",
+                        logger.warning(
+                            "SIR inconsistency: variable '%s' found in data_vars but "
+                            "load_dataset() raised KeyError. Skipping file-level expansion.",
                             v,
                         )
                         continue
@@ -1556,23 +1553,21 @@ class PywatershedDerivation:
                             )
                             continue
                         class_codes.append(inner_code)
-                        valid_vars.append(inner_name)
+                        fractions_list.append(inner_ds[inner_name].values)
                 else:
                     class_codes.append(code)
-                    valid_vars.append(v)
+                    fractions_list.append(sir[v].values)
 
             if len(class_codes) < 2:
+                if fraction_vars:
+                    logger.debug(
+                        "Found %d variable(s) matching prefix '%s' but only %d "
+                        "valid class codes extracted; need at least 2.",
+                        len(fraction_vars),
+                        prefix,
+                        len(class_codes),
+                    )
                 continue
-
-            # Stack fractions into (nhru, n_classes) array.
-            # Values come from the inner dataset when file-level keys were
-            # expanded, otherwise directly from the SIR.
-            fractions_list: list[np.ndarray] = []
-            for v in valid_vars:
-                if inner_ds is not None and v in inner_ds:
-                    fractions_list.append(inner_ds[v].values)
-                else:
-                    fractions_list.append(sir[v].values)
 
             fractions = np.column_stack(fractions_list)
             codes = np.array(class_codes)
@@ -1581,7 +1576,7 @@ class PywatershedDerivation:
 
             logger.info(
                 "Computed majority class from %d categorical fraction columns (prefix=%r)",
-                len(valid_vars),
+                len(class_codes),
                 prefix,
             )
             return majority_class
@@ -1599,7 +1594,8 @@ class PywatershedDerivation:
 
         Classify soil texture into PRMS ``soil_type`` and derive
         ``soil_moist_max`` (maximum soil moisture capacity) from
-        available water capacity (AWC).
+        available water capacity (``awc_mm_mean``) or, as a fallback,
+        available water storage (``aws0_100_cm_mean``).
 
         Supports two input modes for soil texture:
 
@@ -1629,8 +1625,13 @@ class PywatershedDerivation:
 
         Notes
         -----
-        Unit conversions: AWC from mm -> inches (``convert(mm, in)``).
-        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches.
+        Unit conversions for ``soil_moist_max``:
+
+        - ``awc_mm_mean``: mm -> inches via ``convert(mm, in)``.
+        - ``aws0_100_cm_mean`` (fallback): cm -> mm (* 10) -> inches via
+          ``convert(mm, in)``.
+
+        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches in both cases.
 
         ``soil_rechr_max_frac`` is set to a constant default of 0.4
         (no soil layer depth data is currently available from the SIR

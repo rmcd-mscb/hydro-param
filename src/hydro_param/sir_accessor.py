@@ -21,6 +21,7 @@ hydro_param.plugins.DerivationContext : Consumer of SIRAccessor.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -312,7 +313,11 @@ class SIRAccessor:
         try:
             df = pd.read_csv(path, index_col=0)
         except Exception as exc:
-            raise OSError(f"Failed to read SIR file for '{name}' at {path}: {exc}.") from exc
+            raise OSError(
+                f"Failed to read SIR file for '{name}' at {path}: {exc}. "
+                f"The file may be corrupt or truncated. "
+                f"Re-run 'hydro-param run pipeline.yml' to regenerate."
+            ) from exc
         return xr.Dataset.from_dataframe(df)
 
     def find_variable(self, base_name: str) -> str | None:
@@ -332,14 +337,19 @@ class SIRAccessor:
         str or None
             The actual SIR variable name, or ``None`` if not found.
         """
-        import re
-
         if base_name in self._static:
             return base_name
         pattern = re.compile(rf"^{re.escape(base_name)}_(\d{{4}})$")
         matches = [v for v in self._static if pattern.match(v)]
         if matches:
-            return sorted(matches)[-1]
+            resolved = sorted(matches)[-1]
+            logger.debug(
+                "Resolved '%s' to year-suffixed variant '%s' (%d candidate(s))",
+                base_name,
+                resolved,
+                len(matches),
+            )
+            return resolved
         return None
 
 
