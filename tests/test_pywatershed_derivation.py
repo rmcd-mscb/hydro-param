@@ -1689,7 +1689,7 @@ class TestDeriveForcing:
     ) -> None:
         """swrad is converted from W/m2 to Langleys/day."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "srad_W_m2_mean_2020": xr.Dataset(
                 {"srad_W_m2_mean": (("time", "nhm_id"), np.array([[100.0, 200.0, 300.0]]))},
                 coords={"time": [0], "nhm_id": [1, 2, 3]},
             ),
@@ -1708,7 +1708,7 @@ class TestDeriveForcing:
     ) -> None:
         """potet is converted from mm to inches."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pet_mm_mean_2020": xr.Dataset(
                 {"pet_mm_mean": (("time", "nhm_id"), np.array([[25.4, 50.8, 0.0]]))},
                 coords={"time": [0], "nhm_id": [1, 2, 3]},
             ),
@@ -1726,7 +1726,7 @@ class TestDeriveForcing:
     ) -> None:
         """Temporal feature dim is renamed to match derived dataset nhru."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pr_mm_mean_2020": xr.Dataset(
                 {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
@@ -1742,9 +1742,9 @@ class TestDeriveForcing:
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Missing SIR variables are skipped with a warning."""
+        """Only provided forcing variables appear; absent ones are not created."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pr_mm_mean_2020": xr.Dataset(
                 {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
@@ -1773,19 +1773,23 @@ class TestDeriveForcing:
         result = derivation._derive_forcing(ctx, ds)
         assert len(result.data_vars) == 0
 
-    def test_fuzzy_match_by_variable_names(
+    def test_per_variable_temporal_matched(
         self,
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Source name doesn't match config key but SIR variables do → fuzzy match."""
+        """Per-variable temporal keys are matched via reverse lookup."""
         temporal = {
-            "climate_data_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
-                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 5.0),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0)},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 5.0)},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
         }
@@ -1793,7 +1797,6 @@ class TestDeriveForcing:
         ds = xr.Dataset()
         ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
         result = derivation._derive_forcing(ctx, ds)
-        # Should fuzzy-match to gridmet config and rename variables
         assert "prcp" in result
         assert "tmax" in result
         assert "tmin" in result
@@ -1831,11 +1834,12 @@ class TestDeriveForcing:
             yaml.dump(custom_yaml, f)
 
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
-                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0)},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
         }

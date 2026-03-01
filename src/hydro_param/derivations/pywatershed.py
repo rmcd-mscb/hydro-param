@@ -2401,15 +2401,15 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Merge SIR-normalized temporal forcing into derived dataset (step 7).
 
-        Load variable mappings from ``forcing_variables.yml``, auto-detect
-        the source dataset by matching SIR variable names, rename to PRMS
-        conventions (e.g., ``tmmx`` -> ``tmax``), apply unit conversions
-        (e.g., K -> °F, mm -> inches), and merge time-series arrays into
-        the parameter dataset.
+        Look up each per-variable temporal dataset in the reverse mapping
+        from ``forcing_variables.yml``, rename to PRMS conventions
+        (e.g., ``tmmx_C_mean`` -> ``tmax``), apply unit conversions
+        (e.g., W/m² -> langleys, mm -> inches), and merge time-series
+        arrays into the parameter dataset.
 
         Multi-year temporal chunks (keyed with ``_YYYY`` suffixes like
-        ``"gridmet_2020"``, ``"gridmet_2021"``) are concatenated along the
-        time dimension before processing.
+        ``"pr_mm_mean_2020"``, ``"pr_mm_mean_2021"``) are concatenated
+        along the time dimension before processing.
 
         Parameters
         ----------
@@ -2439,93 +2439,82 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _detect_forcing_dataset : Source dataset matching logic.
+        _build_sir_to_forcing_lookup : Reverse mapping from SIR names.
         """
         if ctx.temporal is None or len(ctx.temporal) == 0:
             logger.info("No temporal data provided; skipping forcing generation.")
             return ds
 
         tables_dir = ctx.resolved_lookup_tables_dir
-        config = self._load_lookup_table("forcing_variables", tables_dir)
-        datasets_config = config["mapping"]
+        sir_lookup = self._build_sir_to_forcing_lookup(tables_dir)
 
-        # Concat multi-year chunks by base name (strip _YYYY suffix)
-        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        # Group per-variable multi-year chunks: strip _YYYY suffix
+        chunks_by_var: dict[str, list[xr.Dataset]] = {}
         for ds_name, tds in ctx.temporal.items():
             base_name = re.sub(r"_\d{4}$", "", ds_name)
-            chunks_by_source.setdefault(base_name, []).append(tds)
+            chunks_by_var.setdefault(base_name, []).append(tds)
 
-        for source_name, chunks in chunks_by_source.items():
-            if len(chunks) > 1:
-                chunks.sort(key=lambda c: c["time"].values[0])
-                merged_temporal = xr.concat(chunks, dim="time")
-            else:
-                merged_temporal = chunks[0]
-
-            # Detect dataset config by matching source name or SIR variable names
-            dataset_cfg = self._detect_forcing_dataset(
-                source_name, merged_temporal, datasets_config
-            )
-            if dataset_cfg is None:
-                logger.warning(
-                    "Could not match temporal source '%s' to any forcing dataset config; skipping.",
-                    source_name,
+        forced_count = 0
+        for var_base, chunks in chunks_by_var.items():
+            # Look up config for this SIR variable
+            var_cfg = sir_lookup.get(var_base)
+            if var_cfg is None:
+                logger.debug(
+                    "Temporal variable '%s' is not a forcing variable; skipping.",
+                    var_base,
                 )
                 continue
 
-            # Process each mapped variable
-            for prms_name, var_cfg in dataset_cfg.items():
-                sir_name = var_cfg["sir_name"]
-                sir_unit = var_cfg["sir_unit"]
-                intermediate_unit = var_cfg["intermediate_unit"]
+            prms_name = var_cfg["prms_name"]
+            sir_unit = var_cfg["sir_unit"]
+            intermediate_unit = var_cfg["intermediate_unit"]
 
-                if sir_name not in merged_temporal:
-                    logger.warning(
-                        "Forcing variable '%s' (SIR name '%s') not found in "
-                        "temporal data; skipping.",
+            # Concat multi-year chunks
+            if len(chunks) > 1:
+                chunks.sort(key=lambda c: c["time"].values[0])
+                merged = xr.concat(chunks, dim="time")
+            else:
+                merged = chunks[0]
+
+            if var_base not in merged:
+                logger.warning(
+                    "Forcing variable '%s' (SIR name '%s') not found in "
+                    "temporal data after concat; skipping.",
+                    prms_name,
+                    var_base,
+                )
+                continue
+
+            da = merged[var_base]
+
+            # Unit conversion (SIR unit → intermediate unit)
+            if sir_unit != intermediate_unit:
+                try:
+                    converted = convert(da.values.astype(np.float64), sir_unit, intermediate_unit)
+                except KeyError:
+                    logger.error(
+                        "No unit conversion registered for '%s' → '%s' "
+                        "(forcing variable '%s'). Register the conversion "
+                        "in units.py or fix forcing_variables.yml.",
+                        sir_unit,
+                        intermediate_unit,
                         prms_name,
-                        sir_name,
                     )
                     continue
+                da = da.copy(data=converted)
+                da.attrs["units"] = intermediate_unit
 
-                da = merged_temporal[sir_name]
+            # Align feature dimension to derived dataset
+            target_dim = "nhru"
+            feat_dims = [d for d in da.dims if d != "time"]
+            if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
+                da = da.rename({feat_dims[0]: target_dim})
 
-                # Unit conversion (SIR unit → intermediate unit)
-                if sir_unit != intermediate_unit:
-                    try:
-                        converted = convert(
-                            da.values.astype(np.float64), sir_unit, intermediate_unit
-                        )
-                    except KeyError:
-                        logger.error(
-                            "No unit conversion registered for '%s' → '%s' "
-                            "(forcing variable '%s' from source '%s'). "
-                            "Register the conversion in units.py or fix "
-                            "forcing_variables.yml.",
-                            sir_unit,
-                            intermediate_unit,
-                            prms_name,
-                            source_name,
-                        )
-                        continue
-                    da = da.copy(data=converted)
-                    da.attrs["units"] = intermediate_unit
+            ds[prms_name] = da
+            forced_count += 1
 
-                # Align feature dimension to derived dataset
-                target_dim = "nhru"
-                feat_dims = [d for d in da.dims if d != "time"]
-                if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
-                    da = da.rename({feat_dims[0]: target_dim})
-
-                ds[prms_name] = da
-
-            n_vars = sum(1 for p in dataset_cfg if p in ds)
-            logger.info(
-                "Step 7: merged %d forcing variables from '%s' (%d timesteps).",
-                n_vars,
-                source_name,
-                merged_temporal.sizes.get("time", 0),
-            )
+        if forced_count > 0:
+            logger.info("Step 7: merged %d forcing variables.", forced_count)
 
         return ds
 
