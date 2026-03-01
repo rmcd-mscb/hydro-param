@@ -2351,6 +2351,49 @@ class PywatershedDerivation:
     # Step 7: Forcing generation (temporal merge)
     # ------------------------------------------------------------------
 
+    def _build_sir_to_forcing_lookup(
+        self,
+        tables_dir: Path,
+    ) -> dict[str, dict[str, str]]:
+        """Build reverse lookup from SIR variable names to forcing config.
+
+        Invert the ``forcing_variables.yml`` mapping so that each SIR
+        canonical name maps to its PRMS name, source, and unit config.
+        This allows per-variable temporal data to be matched to forcing
+        config without requiring all variables in a single dataset.
+
+        Parameters
+        ----------
+        tables_dir : pathlib.Path
+            Directory containing ``forcing_variables.yml``.
+
+        Returns
+        -------
+        dict[str, dict[str, str]]
+            Mapping from SIR name to config dict with keys:
+            ``prms_name``, ``sir_unit``, ``intermediate_unit``, ``source``.
+
+        Examples
+        --------
+        >>> lookup = deriv._build_sir_to_forcing_lookup(tables_dir)
+        >>> lookup["pr_mm_mean"]
+        {'prms_name': 'prcp', 'sir_unit': 'mm', 'intermediate_unit': 'mm', 'source': 'gridmet'}
+        """
+        config = self._load_lookup_table("forcing_variables", tables_dir)
+        datasets_config = config["mapping"]
+
+        lookup: dict[str, dict[str, str]] = {}
+        for source_name, variables in datasets_config.items():
+            for prms_name, var_cfg in variables.items():
+                sir_name = var_cfg["sir_name"]
+                lookup[sir_name] = {
+                    "prms_name": prms_name,
+                    "sir_unit": var_cfg["sir_unit"],
+                    "intermediate_unit": var_cfg["intermediate_unit"],
+                    "source": source_name,
+                }
+        return lookup
+
     def _derive_forcing(
         self,
         ctx: DerivationContext,
