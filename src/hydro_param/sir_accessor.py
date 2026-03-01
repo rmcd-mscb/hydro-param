@@ -95,6 +95,8 @@ class SIRAccessor:
                     f"before running Phase 2."
                 )
 
+        self._canonical_to_prefixed = _build_canonical_index(self._static)
+        self._temporal_canonical_to_prefixed = _build_canonical_index(self._temporal)
         self._validate_files()
 
     def _validate_files(self) -> None:
@@ -134,18 +136,27 @@ class SIRAccessor:
         return list(self._static.keys())
 
     def available_temporal(self) -> list[str]:
-        """List all temporal SIR dataset keys.
+        """List all temporal SIR dataset keys (canonical names).
+
+        Strip dataset prefixes (``"dataset__variable"`` → ``"variable"``)
+        so consumer code can match against canonical SIR variable names.
 
         Returns
         -------
         list[str]
-            Dataset keys available for ``load_temporal()``.
+            Canonical temporal dataset keys available for
+            ``load_temporal()``.
         """
-        return list(self._temporal.keys())
+        return [_parse_canonical_name(k) for k in self._temporal]
 
     @property
     def data_vars(self) -> list[str]:
-        """Return static variable names as a convenience list.
+        """Return canonical static variable names as a convenience list.
+
+        Strip dataset prefixes (``"dataset__variable"`` → ``"variable"``)
+        so derivation code can use ``startswith()`` patterns with
+        canonical names.  Use ``available_variables()`` to get the raw
+        (possibly prefixed) keys.
 
         Unlike ``xr.Dataset.data_vars``, this returns a plain
         ``list[str]``, not a mapping.
@@ -153,9 +164,9 @@ class SIRAccessor:
         Returns
         -------
         list[str]
-            Same as ``available_variables()``.
+            Canonical variable names (prefixes stripped).
         """
-        return self.available_variables()
+        return [_parse_canonical_name(k) for k in self._static]
 
     @property
     def sir_schema(self) -> list[SIRSchemaEntry]:
@@ -198,11 +209,12 @@ class SIRAccessor:
         registry key (e.g., a renamed variable), the sole data variable
         is returned regardless of its actual name.
         """
-        if name not in self._static:
+        resolved = self._resolve_static(name)
+        if resolved is None:
             raise KeyError(
                 f"SIR variable '{name}' not found. Available: {sorted(self._static.keys())}"
             )
-        path = self._output_dir / self._static[name]
+        path = self._output_dir / self._static[resolved]
         try:
             df = pd.read_csv(path, index_col=0)
         except Exception as exc:
@@ -214,6 +226,10 @@ class SIRAccessor:
         ds = xr.Dataset.from_dataframe(df)
         if name in ds:
             return ds[name]
+        # Try the canonical part of the resolved key
+        canonical = _parse_canonical_name(resolved)
+        if canonical and canonical in ds:
+            return ds[canonical]
         if not ds.data_vars:
             raise ValueError(
                 f"SIR file for '{name}' at {path} contains no data columns. "
@@ -241,12 +257,13 @@ class SIRAccessor:
         OSError
             If the NetCDF file is corrupt, truncated, or unreadable.
         """
-        if name not in self._temporal:
+        resolved = self._resolve_temporal(name)
+        if resolved is None:
             raise KeyError(
                 f"SIR temporal dataset '{name}' not found. "
                 f"Available: {sorted(self._temporal.keys())}"
             )
-        path = self._output_dir / self._temporal[name]
+        path = self._output_dir / self._temporal[resolved]
         try:
             return xr.open_dataset(path)
         except Exception as exc:
@@ -256,12 +273,59 @@ class SIRAccessor:
                 f"Re-run 'hydro-param run pipeline.yml' to regenerate."
             ) from exc
 
+    def _resolve_static(self, name: str) -> str | None:
+        """Resolve a variable name to a key in ``_static``.
+
+        Return the name as-is if it exists as a prefixed key.
+        Otherwise check the canonical-to-prefixed index for a match.
+        Return ``None`` if no match is found.
+        """
+        if name in self._static:
+            return name
+        return self._canonical_to_prefixed.get(name)
+
+    def _resolve_temporal(self, name: str) -> str | None:
+        """Resolve a temporal key to a key in ``_temporal``.
+
+        Return the name as-is if it exists as a prefixed key.
+        Otherwise check the canonical-to-prefixed index for a match.
+        Return ``None`` if no match is found.
+        """
+        if name in self._temporal:
+            return name
+        return self._temporal_canonical_to_prefixed.get(name)
+
+    def source_for(self, name: str) -> str | None:
+        """Return the source dataset name for a SIR variable.
+
+        Parse the dataset prefix from the prefixed key
+        (``"dataset__variable"``).  Return ``None`` if the variable
+        is not found or has no prefix.
+
+        Parameters
+        ----------
+        name : str
+            SIR variable name (canonical or prefixed).
+
+        Returns
+        -------
+        str or None
+            Source dataset name, or ``None`` if not found or unprefixed.
+        """
+        resolved = self._resolve_static(name)
+        if resolved is None:
+            resolved = self._resolve_temporal(name)
+        if resolved is None:
+            return None
+        return _parse_dataset_prefix(resolved)
+
     def __contains__(self, name: object) -> bool:
         """Check if a variable name is available (Dataset-compatible API).
 
-        Check both static and temporal variable maps.  Use
-        ``available_variables()`` or ``available_temporal()`` to query
-        each map separately.
+        Check both static and temporal variable maps, including
+        canonical (unprefixed) lookups via the canonical-to-prefixed
+        index.  Use ``available_variables()`` or ``available_temporal()``
+        to query each map separately.
 
         Notes
         -----
@@ -269,7 +333,9 @@ class SIRAccessor:
         ``__getitem__`` only loads static variables.  Use
         ``load_temporal()`` explicitly for temporal datasets.
         """
-        return isinstance(name, str) and (name in self._static or name in self._temporal)
+        if not isinstance(name, str):
+            return False
+        return self._resolve_static(name) is not None or self._resolve_temporal(name) is not None
 
     def __getitem__(self, name: str) -> xr.DataArray:
         """Load a static variable by name (Dataset-compatible API).
@@ -305,11 +371,12 @@ class SIRAccessor:
         OSError
             If the CSV file is corrupt, truncated, or unreadable.
         """
-        if name not in self._static:
+        resolved = self._resolve_static(name)
+        if resolved is None:
             raise KeyError(
                 f"SIR variable '{name}' not found. Available: {sorted(self._static.keys())}"
             )
-        path = self._output_dir / self._static[name]
+        path = self._output_dir / self._static[resolved]
         try:
             df = pd.read_csv(path, index_col=0)
         except Exception as exc:
@@ -323,9 +390,13 @@ class SIRAccessor:
     def find_variable(self, base_name: str) -> str | None:
         """Find a static variable by base name, allowing year suffixes.
 
-        Return ``base_name`` if it exists as-is.  Otherwise, search for
-        variables matching ``{base_name}_{year}`` where year is a 4-digit
+        Return ``base_name`` if it exists as-is (prefixed or canonical).
+        Otherwise, search for variables whose canonical part matches
+        ``{base_name}`` or ``{base_name}_{year}`` where year is a 4-digit
         number.  Returns the most recent year if multiple matches exist.
+
+        The returned key is always the actual (prefixed) key stored in
+        ``_static``, so callers can pass it directly to ``load_variable()``.
 
         Parameters
         ----------
@@ -335,12 +406,20 @@ class SIRAccessor:
         Returns
         -------
         str or None
-            The actual SIR variable name, or ``None`` if not found.
+            The actual SIR variable name (prefixed key), or ``None``
+            if not found.
         """
-        if base_name in self._static:
-            return base_name
+        # Exact match (prefixed key or canonical via index)
+        resolved = self._resolve_static(base_name)
+        if resolved is not None:
+            return resolved
+        # Year-suffix search across canonical parts
         pattern = re.compile(rf"^{re.escape(base_name)}_(\d{{4}})$")
-        matches = [v for v in self._static if pattern.match(v)]
+        matches: list[str] = []
+        for prefixed_key in self._static:
+            canonical = _parse_canonical_name(prefixed_key)
+            if pattern.match(canonical):
+                matches.append(prefixed_key)
         if matches:
             resolved = sorted(matches)[-1]
             logger.debug(
@@ -351,6 +430,76 @@ class SIRAccessor:
             )
             return resolved
         return None
+
+
+def _parse_dataset_prefix(name: str) -> str | None:
+    """Extract the dataset prefix from a prefixed SIR key.
+
+    Parameters
+    ----------
+    name : str
+        SIR key, possibly prefixed (e.g., ``"dem_3dep_10m__elevation_m_mean"``).
+
+    Returns
+    -------
+    str or None
+        Dataset name before ``__``, or ``None`` if no prefix.
+    """
+    if "__" in name:
+        return name.split("__", 1)[0]
+    return None
+
+
+def _parse_canonical_name(name: str) -> str:
+    """Extract the canonical variable name from a possibly prefixed SIR key.
+
+    Parameters
+    ----------
+    name : str
+        SIR key, possibly prefixed (e.g., ``"dem_3dep_10m__elevation_m_mean"``).
+
+    Returns
+    -------
+    str
+        The canonical part after ``__``, or the full name if no prefix.
+    """
+    if "__" in name:
+        return name.split("__", 1)[1]
+    return name
+
+
+def _build_canonical_index(mapping: dict[str, str]) -> dict[str, str]:
+    """Build a canonical-name-to-prefixed-key index.
+
+    Map canonical (unprefixed) names to their prefixed keys for
+    backward-compatible lookups.  If two prefixed keys share the same
+    canonical name, the last one wins (alphabetically) and a debug
+    message is logged.
+
+    Parameters
+    ----------
+    mapping : dict[str, str]
+        The ``_static`` or ``_temporal`` dict (prefixed key → rel path).
+
+    Returns
+    -------
+    dict[str, str]
+        Canonical name → prefixed key.
+    """
+    index: dict[str, str] = {}
+    for prefixed_key in sorted(mapping.keys()):
+        canonical = _parse_canonical_name(prefixed_key)
+        if canonical != prefixed_key:
+            if canonical in index:
+                logger.debug(
+                    "Canonical name '%s' maps to multiple prefixed keys: '%s' and '%s'; using '%s'",
+                    canonical,
+                    index[canonical],
+                    prefixed_key,
+                    prefixed_key,
+                )
+            index[canonical] = prefixed_key
+    return index
 
 
 def _glob_sir_static(sir_dir: Path) -> dict[str, str]:

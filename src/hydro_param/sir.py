@@ -199,6 +199,10 @@ class SIRVariableSchema:
         ``"log10_to_linear"`` (10^x), or ``"K_to_C"`` (Kelvin to Celsius).
     temporal : bool
         ``True`` for time-indexed variables (e.g., gridMET climate data).
+    dataset_name : str
+        Pipeline dataset registry key (e.g., ``"dem_3dep_10m"``,
+        ``"polaris_30m"``).  Used to prefix SIR filenames for source
+        provenance.
     """
 
     canonical_name: str
@@ -210,6 +214,7 @@ class SIRVariableSchema:
     valid_range: tuple[float, float] | None
     conversion: str | None
     temporal: bool = False
+    dataset_name: str = ""
 
 
 def build_sir_schema(
@@ -283,6 +288,7 @@ def build_sir_schema(
                             valid_range=(0.0, 1.0),
                             conversion=conversion,
                             temporal=is_temporal,
+                            dataset_name=ds_req.name,
                         )
                     )
             else:
@@ -303,6 +309,7 @@ def build_sir_schema(
                                 valid_range=None,
                                 conversion=conversion,
                                 temporal=is_temporal,
+                                dataset_name=ds_req.name,
                             )
                         )
     return schema
@@ -465,9 +472,10 @@ def normalize_sir(
                     )
                     skipped_variables.append(entry.canonical_name)
                     continue
-                out_path = output_dir / f"{entry.canonical_name}.csv"
+                prefixed = f"{entry.dataset_name}__{entry.canonical_name}"
+                out_path = output_dir / f"{prefixed}.csv"
                 out_df.to_csv(out_path)
-                sir_files[entry.canonical_name] = out_path
+                sir_files[prefixed] = out_path
                 logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
             else:
                 # Continuous: find the matching column and rename
@@ -517,9 +525,10 @@ def normalize_sir(
                     index=raw_df.index,
                 )
                 out_df.index.name = id_field
-                out_path = output_dir / f"{cname}.csv"
+                prefixed = f"{entry.dataset_name}__{cname}"
+                out_path = output_dir / f"{prefixed}.csv"
                 out_df.to_csv(out_path)
-                sir_files[cname] = out_path
+                sir_files[prefixed] = out_path
                 logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
 
     if skipped_variables:
@@ -635,7 +644,7 @@ def normalize_sir_temporal(
 
                 cname = schema_entry.canonical_name
                 # Include year suffix to avoid multi-year collisions
-                out_key = f"{cname}{year_suffix}"
+                out_key = f"{schema_entry.dataset_name}__{cname}{year_suffix}"
 
                 out_ds = xr.Dataset(
                     {cname: (ds[data_var].dims, values)},

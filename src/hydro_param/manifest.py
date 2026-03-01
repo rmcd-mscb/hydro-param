@@ -104,11 +104,15 @@ class SIRSchemaEntry(TypedDict):
         Physical units of the variable (e.g., ``"m"``, ``"fraction"``).
     statistic : str
         Zonal statistic used (e.g., ``"mean"``, ``"categorical"``).
+    source_dataset : str
+        Name of the pipeline dataset that produced this variable
+        (e.g., ``"dem_3dep_10m"``).  Empty string for legacy entries.
     """
 
     name: str
     units: str
     statistic: str
+    source_dataset: str
 
 
 class SIRManifestEntry(BaseModel):
