@@ -11,9 +11,10 @@ seed generation, and output file layout.
 
 Notes
 -----
-Version 3.0 of this schema eliminates Phase 1 fields (datasets, climate,
-processing) that were previously translated into a ``PipelineConfig``.
-Phase 2 now reads SIR output directly via ``SIRAccessor``.
+Version 4.0 adds three data sections (``static_datasets``, ``forcing``,
+``climate_normals``) that declare which pipeline datasets provide each
+pywatershed parameter.  This creates a consumer-oriented, self-documenting
+contract between the Phase 1 pipeline and the Phase 2 derivation plugin.
 
 See Also
 --------
@@ -31,6 +32,214 @@ from typing import Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class ParameterEntry(BaseModel):
+    """Declare the SIR data source for a single pywatershed parameter.
+
+    Each entry maps a pywatershed parameter to the pipeline dataset, source
+    variable(s), and zonal statistic that produced the SIR data.
+
+    Parameters
+    ----------
+    source : str
+        Pipeline dataset registry name (e.g., ``"dem_3dep_10m"``).
+    variable : str or None
+        Source variable name when a single variable is used.
+    variables : list[str] or None
+        Source variable names when multiple variables contribute
+        (e.g., ``["sand", "silt", "clay"]`` for soil_type).
+    statistic : str or None
+        Zonal statistic applied (``"mean"``, ``"categorical"``).
+    year : int or list[int] or None
+        NLCD year(s) for multi-epoch land cover.
+    time_period : list[str] or None
+        Temporal range ``[start, end]`` in ISO format for temporal datasets.
+    description : str
+        Human-readable description of what this parameter represents.
+    """
+
+    source: str
+    variable: str | None = None
+    variables: list[str] | None = None
+    statistic: str | None = None
+    year: int | list[int] | None = None
+    time_period: list[str] | None = None
+    description: str
+
+
+class TopographyDatasets(BaseModel):
+    """Topography parameters derived from DEM zonal statistics.
+
+    Parameters
+    ----------
+    available : list[str]
+        Curated datasets available in the registry for this category.
+    hru_elev : ParameterEntry or None
+        Mean HRU elevation.
+    hru_slope : ParameterEntry or None
+        Mean HRU land surface slope.
+    hru_aspect : ParameterEntry or None
+        Mean HRU aspect.
+    """
+
+    available: list[str] = Field(default_factory=list)
+    hru_elev: ParameterEntry | None = None
+    hru_slope: ParameterEntry | None = None
+    hru_aspect: ParameterEntry | None = None
+
+
+class SoilsDatasets(BaseModel):
+    """Soil parameters derived from soil property datasets.
+
+    Parameters
+    ----------
+    available : list[str]
+        Curated datasets available in the registry for this category.
+    soil_type : ParameterEntry or None
+        Soil type classification (1=sand, 2=loam, 3=clay).
+    sat_threshold : ParameterEntry or None
+        Gravity reservoir storage capacity (from porosity).
+    soil_moist_max : ParameterEntry or None
+        Maximum available water-holding capacity.
+    soil_rechr_max_frac : ParameterEntry or None
+        Recharge zone storage as fraction of soil_moist_max.
+    """
+
+    available: list[str] = Field(default_factory=list)
+    soil_type: ParameterEntry | None = None
+    sat_threshold: ParameterEntry | None = None
+    soil_moist_max: ParameterEntry | None = None
+    soil_rechr_max_frac: ParameterEntry | None = None
+
+
+class LandcoverDatasets(BaseModel):
+    """Land cover parameters derived from NLCD.
+
+    Parameters
+    ----------
+    available : list[str]
+        Curated datasets available in the registry for this category.
+    cov_type : ParameterEntry or None
+        Vegetation cover type.
+    hru_percent_imperv : ParameterEntry or None
+        Impervious surface fraction.
+    """
+
+    available: list[str] = Field(default_factory=list)
+    cov_type: ParameterEntry | None = None
+    hru_percent_imperv: ParameterEntry | None = None
+
+
+class SnowDatasets(BaseModel):
+    """Snow parameters derived from historical SWE data.
+
+    Parameters
+    ----------
+    available : list[str]
+        Curated datasets available in the registry for this category.
+    snarea_thresh : ParameterEntry or None
+        Snow depletion threshold (calibration seed from historical max SWE).
+    """
+
+    available: list[str] = Field(default_factory=list)
+    snarea_thresh: ParameterEntry | None = None
+
+
+class WaterbodyDatasets(BaseModel):
+    """Depression storage and HRU type from waterbody overlay.
+
+    Parameters
+    ----------
+    available : list[str]
+        Curated datasets available in the registry for this category.
+    hru_type : ParameterEntry or None
+        HRU type (0=inactive, 1=land, 2=lake, 3=swale).
+    dprst_frac : ParameterEntry or None
+        Fraction of HRU with surface depressions.
+    dprst_area_max : ParameterEntry or None
+        Maximum surface depression area.
+    """
+
+    available: list[str] = Field(default_factory=list)
+    hru_type: ParameterEntry | None = None
+    dprst_frac: ParameterEntry | None = None
+    dprst_area_max: ParameterEntry | None = None
+
+
+class StaticDatasetsConfig(BaseModel):
+    """Static dataset declarations grouped by domain category.
+
+    Each category contains explicit parameter fields that map to SIR data
+    produced by the Phase 1 pipeline.
+
+    Parameters
+    ----------
+    topography : TopographyDatasets
+        DEM-derived parameters (elevation, slope, aspect).
+    soils : SoilsDatasets
+        Soil property parameters.
+    landcover : LandcoverDatasets
+        Land cover and impervious surface parameters.
+    snow : SnowDatasets
+        Historical snow parameters.
+    waterbodies : WaterbodyDatasets
+        Depression storage and HRU type.
+    """
+
+    topography: TopographyDatasets = Field(default_factory=TopographyDatasets)
+    soils: SoilsDatasets = Field(default_factory=SoilsDatasets)
+    landcover: LandcoverDatasets = Field(default_factory=LandcoverDatasets)
+    snow: SnowDatasets = Field(default_factory=SnowDatasets)
+    waterbodies: WaterbodyDatasets = Field(default_factory=WaterbodyDatasets)
+
+
+class ForcingConfig(BaseModel):
+    """Temporal forcing time series declarations.
+
+    pywatershed expects one-variable-per-NetCDF in PRMS units (inches, degF).
+    Only the three required CBH variables appear here.
+
+    Parameters
+    ----------
+    available : list[str]
+        Temporal-capable datasets available in the registry.
+    prcp : ParameterEntry or None
+        Daily precipitation.
+    tmax : ParameterEntry or None
+        Daily maximum temperature.
+    tmin : ParameterEntry or None
+        Daily minimum temperature.
+    """
+
+    available: list[str] = Field(default_factory=list)
+    prcp: ParameterEntry | None = None
+    tmax: ParameterEntry | None = None
+    tmin: ParameterEntry | None = None
+
+
+class ClimateNormalsConfig(BaseModel):
+    """Long-term climate statistics for derived parameters.
+
+    Can use the same source as forcing, or a different one (e.g.,
+    forcing from CONUS404-BA but normals from gridMET).
+
+    Parameters
+    ----------
+    available : list[str]
+        Temporal-capable datasets available in the registry.
+    jh_coef : ParameterEntry or None
+        Jensen-Haise PET coefficient (monthly, from tmax/tmin normals).
+    transp_beg : ParameterEntry or None
+        Month transpiration begins (from last spring frost).
+    transp_end : ParameterEntry or None
+        Month transpiration ends (from first fall killing frost).
+    """
+
+    available: list[str] = Field(default_factory=list)
+    jh_coef: ParameterEntry | None = None
+    transp_beg: ParameterEntry | None = None
+    transp_end: ParameterEntry | None = None
 
 
 class PwsDomainConfig(BaseModel):
@@ -221,17 +430,17 @@ class PwsOutputConfig(BaseModel):
 class PywatershedRunConfig(BaseModel):
     """Define the top-level configuration for pywatershed model setup.
 
-    Phase 2 config that consumes pre-existing SIR output from the
-    generic Phase 1 pipeline.  Specify the domain fabric files,
-    simulation time period, SIR output location, manual parameter
-    overrides, calibration seed generation, and output file layout.
+    A consumer-oriented, self-documenting contract between the Phase 1
+    pipeline and the Phase 2 pywatershed derivation plugin.  Three data
+    sections (``static_datasets``, ``forcing``, ``climate_normals``)
+    declare which pipeline datasets provide each pywatershed parameter.
 
-    Attributes
+    Parameters
     ----------
     target_model : {"pywatershed"}
         Target model identifier (fixed to ``"pywatershed"``).
     version : str
-        Config schema version (default ``"3.0"``).
+        Config schema version (``"4.0"``).
     domain : PwsDomainConfig
         Domain fabric file paths and ID field names.
     time : PwsTimeConfig
@@ -240,7 +449,12 @@ class PywatershedRunConfig(BaseModel):
         Path to the Phase 1 pipeline output directory containing
         ``.manifest.yml`` and ``sir/`` subdirectory.  Relative paths
         are resolved against the config file's parent directory.
-        Default ``"output"``.
+    static_datasets : StaticDatasetsConfig
+        Static dataset declarations grouped by domain category.
+    forcing : ForcingConfig
+        Temporal forcing time series declarations.
+    climate_normals : ClimateNormalsConfig
+        Long-term climate statistics for derived parameters.
     parameter_overrides : PwsParameterOverrides
         Manual parameter value overrides.
     calibration : PwsCalibrationConfig
@@ -257,13 +471,98 @@ class PywatershedRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_model: Literal["pywatershed"] = "pywatershed"
-    version: Literal["3.0"] = "3.0"
+    version: Literal["4.0"] = "4.0"
     domain: PwsDomainConfig
     time: PwsTimeConfig
     sir_path: Path = Path("output")
+    static_datasets: StaticDatasetsConfig = Field(default_factory=StaticDatasetsConfig)
+    forcing: ForcingConfig = Field(default_factory=ForcingConfig)
+    climate_normals: ClimateNormalsConfig = Field(default_factory=ClimateNormalsConfig)
     parameter_overrides: PwsParameterOverrides = PwsParameterOverrides()
     calibration: PwsCalibrationConfig = PwsCalibrationConfig()
     output: PwsOutputConfig = PwsOutputConfig()
+
+    def declared_entries(self) -> dict[str, ParameterEntry]:
+        """Collect all declared ParameterEntry objects from the config.
+
+        Walk ``static_datasets``, ``forcing``, and ``climate_normals``
+        sections and return a flat dictionary keyed by parameter name.
+
+        Returns
+        -------
+        dict[str, ParameterEntry]
+            Parameter name to entry mapping for all non-None entries.
+        """
+        entries: dict[str, ParameterEntry] = {}
+
+        # Static datasets: walk each category
+        for category in (
+            self.static_datasets.topography,
+            self.static_datasets.soils,
+            self.static_datasets.landcover,
+            self.static_datasets.snow,
+            self.static_datasets.waterbodies,
+        ):
+            for field_name in type(category).model_fields:
+                if field_name == "available":
+                    continue
+                value = getattr(category, field_name)
+                if value is not None:
+                    entries[field_name] = value
+
+        # Forcing
+        for field_name in ("prcp", "tmax", "tmin"):
+            value = getattr(self.forcing, field_name)
+            if value is not None:
+                entries[field_name] = value
+
+        # Climate normals
+        for field_name in ("jh_coef", "transp_beg", "transp_end"):
+            value = getattr(self.climate_normals, field_name)
+            if value is not None:
+                entries[field_name] = value
+
+        return entries
+
+    def validate_available_fields(self) -> None:
+        """Check that ``available`` dataset names exist in the registry.
+
+        Load the bundled dataset registry and verify that every name in
+        each category's ``available`` list is a known dataset.  Unknown
+        entries emit a ``UserWarning`` rather than raising, because the
+        registry may have grown since ``hydro-param init`` ran.
+
+        Warnings
+        --------
+        UserWarning
+            For each dataset name in an ``available`` list that is not
+            found in the current registry.
+        """
+        from hydro_param.dataset_registry import get_all_dataset_names, load_registry
+        from hydro_param.pipeline import DEFAULT_REGISTRY
+
+        registry = load_registry(DEFAULT_REGISTRY)
+        known = get_all_dataset_names(registry)
+
+        categories: list[tuple[str, BaseModel]] = [
+            ("topography", self.static_datasets.topography),
+            ("soils", self.static_datasets.soils),
+            ("landcover", self.static_datasets.landcover),
+            ("snow", self.static_datasets.snow),
+            ("waterbodies", self.static_datasets.waterbodies),
+            ("forcing", self.forcing),
+            ("climate_normals", self.climate_normals),
+        ]
+        for cat_name, category in categories:
+            available: list[str] = getattr(category, "available", [])
+            for ds_name in available:
+                if ds_name not in known:
+                    warnings.warn(
+                        f"Dataset '{ds_name}' in {cat_name}.available "
+                        f"is not in the registry. Known: {sorted(known)}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
 
 
 def load_pywatershed_config(path: str | Path) -> PywatershedRunConfig:

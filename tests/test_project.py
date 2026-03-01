@@ -227,3 +227,15 @@ class TestGenerateGitignore:
 def test_pywatershed_template_contains_waterbody_path() -> None:
     template = generate_pywatershed_template("test_project")
     assert "waterbody_path" in template
+
+
+def test_pywatershed_template_v4() -> None:
+    """Generated template should be valid v4.0 config."""
+    template = generate_pywatershed_template("test_project")
+    assert 'version: "4.0"' in template
+    assert "static_datasets:" in template
+    assert "forcing:" in template
+    assert "climate_normals:" in template
+    assert "available:" in template
+    assert "hru_elev:" in template
+    assert "description:" in template

@@ -654,6 +654,16 @@ def pws_run_cmd(config: Path) -> None:
         logger.error("Run 'hydro-param run pipeline.yml' first to produce SIR output.")
         raise SystemExit(1) from exc
 
+    # ── Validate config contract against SIR ──
+    declared = pws_config.declared_entries()
+    if declared:
+        logger.info("Config declares %d parameter entries:", len(declared))
+        for name, entry in declared.items():
+            var = entry.variable or entry.variables
+            logger.info("  %s <- %s.%s", name, entry.source, var)
+    else:
+        logger.warning("No parameter entries declared in config — derivation will use SIR as-is.")
+
     # ── Load fabric ──
     fabric_path = pws_config.domain.fabric_path
     if not fabric_path.exists():

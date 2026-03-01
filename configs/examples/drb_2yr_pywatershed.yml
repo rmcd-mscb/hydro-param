@@ -1,5 +1,5 @@
-# DRB 2-year pywatershed model setup config
-# Generates parameters.nc, forcing/, and control.yml for pywatershed v2.
+# DRB 2-year pywatershed model setup config (v4.0)
+# Generates parameters.nc, forcing/, and control.yml for pywatershed.
 #
 # Usage:
 #   hydro-param pywatershed run configs/examples/drb_2yr_pywatershed.yml
@@ -9,12 +9,11 @@
 # the USGS Geospatial Fabric before running.
 
 target_model: pywatershed
-version: "2.0"
+version: "4.0"
+
+sir_path: "../../output"
 
 domain:
-  source: custom
-  extraction_method: bbox
-  bbox: [-75.8, 39.6, -74.4, 42.5]
   fabric_path: data/pywatershed_gis/drb_2yr/nhru.gpkg
   segment_path: data/pywatershed_gis/drb_2yr/nsegment.gpkg
   id_field: nhm_id
@@ -25,18 +24,116 @@ time:
   end: "2021-12-31"
   timestep: daily
 
-climate:
-  source: gridmet
-  method: area_weighted_mean
-  variables: [prcp, tmax, tmin]
+static_datasets:
 
-datasets:
-  topography: dem_3dep_10m
-  landcover: nlcd_osn_lndcov
+  topography:
+    available: [dem_3dep_10m]
+    hru_elev:
+      source: dem_3dep_10m
+      variable: elevation
+      statistic: mean
+      description: "Mean HRU elevation"
+    hru_slope:
+      source: dem_3dep_10m
+      variable: slope
+      statistic: mean
+      description: "Mean land surface slope"
+    hru_aspect:
+      source: dem_3dep_10m
+      variable: aspect
+      statistic: mean
+      description: "Mean HRU aspect"
 
-processing:
-  zonal_method: exactextract
-  batch_size: 500
+  soils:
+    available: [polaris_30m, gnatsgo_rasters]
+    soil_type:
+      source: polaris_30m
+      variables: [sand, silt, clay]
+      statistic: mean
+      description: "Soil type classification (1=sand, 2=loam, 3=clay)"
+    sat_threshold:
+      source: polaris_30m
+      variable: theta_s
+      statistic: mean
+      description: "Gravity reservoir storage capacity (from porosity)"
+    soil_moist_max:
+      source: gnatsgo_rasters
+      variable: aws0_100
+      statistic: mean
+      description: "Maximum available water-holding capacity"
+    soil_rechr_max_frac:
+      source: gnatsgo_rasters
+      variables: [rootznemc, rootznaws]
+      statistic: mean
+      description: "Recharge zone storage as fraction of soil_moist_max"
+
+  landcover:
+    available: [nlcd_osn_lndcov, nlcd_osn_fctimp]
+    cov_type:
+      source: nlcd_osn_lndcov
+      variable: LndCov
+      statistic: categorical
+      year: [2021]
+      description: "Vegetation cover type (0=bare, 1=grasses, 2=shrubs, 3=trees, 4=coniferous)"
+    hru_percent_imperv:
+      source: nlcd_osn_fctimp
+      variable: FctImp
+      statistic: mean
+      year: [2021]
+      description: "Impervious surface fraction"
+
+  snow:
+    available: [snodas]
+    snarea_thresh:
+      source: snodas
+      variable: SWE
+      statistic: mean
+      time_period: ["2020-01-01", "2021-12-31"]
+      description: "Snow depletion threshold (calibration seed from historical max SWE)"
+
+  waterbodies:
+    available: []
+
+forcing:
+  available: [gridmet]
+  prcp:
+    source: gridmet
+    variable: pr
+    statistic: mean
+    description: "Daily precipitation"
+  tmax:
+    source: gridmet
+    variable: tmmx
+    statistic: mean
+    description: "Daily maximum temperature"
+  tmin:
+    source: gridmet
+    variable: tmmn
+    statistic: mean
+    description: "Daily minimum temperature"
+
+climate_normals:
+  available: [gridmet]
+  jh_coef:
+    source: gridmet
+    variables: [tmmx, tmmn]
+    description: "Jensen-Haise PET coefficient (monthly, from tmax/tmin normals)"
+  transp_beg:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration begins (from last spring frost)"
+  transp_end:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration ends (from first fall killing frost)"
+
+calibration:
+  generate_seeds: true
+  seed_method: physically_based
+  preserve_from_existing: []
+
+parameter_overrides:
+  values: {}
 
 output:
   path: models/pywatershed
@@ -44,3 +141,4 @@ output:
   parameter_file: parameters.nc
   forcing_dir: forcing
   control_file: control.yml
+  soltab_file: soltab.nc
