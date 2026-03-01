@@ -172,30 +172,36 @@ def sir_full(
 
 @pytest.fixture()
 def temporal_gridmet() -> dict[str, xr.Dataset]:
-    """Synthetic SIR-normalized temporal data mimicking gridMET output."""
+    """Synthetic SIR-normalized temporal data mimicking per-variable SIR output.
+
+    Real SIR normalizes temporal data into per-variable-per-year NetCDF files.
+    Each dataset contains a single variable with its SIR canonical name.
+    """
     import pandas as pd
 
     nhru = 3
     rng = np.random.default_rng(42)
 
-    def _make_ds(year: int) -> xr.Dataset:
+    variables = {
+        "pr_mm_mean": lambda n, h: rng.uniform(0, 20, (n, h)),
+        "tmmx_C_mean": lambda n, h: rng.uniform(10, 35, (n, h)),
+        "tmmn_C_mean": lambda n, h: rng.uniform(-5, 15, (n, h)),
+        "srad_W_m2_mean": lambda n, h: rng.uniform(50, 300, (n, h)),
+        "pet_mm_mean": lambda n, h: rng.uniform(0, 8, (n, h)),
+    }
+
+    result: dict[str, xr.Dataset] = {}
+    for year in [2020, 2021]:
         times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
         ntime = len(times)
-        return xr.Dataset(
-            {
-                "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
-                "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
-                "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
-                "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
-                "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
-            },
-            coords={"time": times, "nhm_id": [1, 2, 3]},
-        )
+        for var_name, gen_fn in variables.items():
+            key = f"{var_name}_{year}"
+            result[key] = xr.Dataset(
+                {var_name: (("time", "nhm_id"), gen_fn(ntime, nhru))},
+                coords={"time": times, "nhm_id": [1, 2, 3]},
+            )
 
-    return {
-        "gridmet_2020": _make_ds(2020),
-        "gridmet_2021": _make_ds(2021),
-    }
+    return result
 
 
 @pytest.fixture()
@@ -263,10 +269,10 @@ class TestDerivationContextTemporal:
         )
         ctx = DerivationContext(
             sir=sir_topography,
-            temporal={"gridmet_2020": temporal_ds},
+            temporal={"pr_mm_mean_2020": temporal_ds},
         )
         assert ctx.temporal is not None
-        assert "gridmet_2020" in ctx.temporal
+        assert "pr_mm_mean_2020" in ctx.temporal
 
 
 class TestDeriveTopography:
@@ -1619,6 +1625,42 @@ class TestForcingVariablesYAML:
 # ------------------------------------------------------------------
 
 
+class TestBuildSirToForcingLookup:
+    """Tests for _build_sir_to_forcing_lookup reverse mapping."""
+
+    @pytest.fixture()
+    def lookup(self, derivation: PywatershedDerivation) -> dict[str, dict[str, str]]:
+        """Build the reverse lookup from the bundled forcing_variables.yml."""
+        from importlib.resources import files
+
+        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
+        return derivation._build_sir_to_forcing_lookup(tables_dir)
+
+    def test_returns_all_five_gridmet_variables(self, lookup: dict[str, dict[str, str]]) -> None:
+        """Reverse lookup contains all 5 gridmet SIR variable names."""
+        expected_sir_names = {
+            "pr_mm_mean",
+            "tmmx_C_mean",
+            "tmmn_C_mean",
+            "srad_W_m2_mean",
+            "pet_mm_mean",
+        }
+        assert set(lookup.keys()) == expected_sir_names
+
+    def test_prms_names_correct(self, lookup: dict[str, dict[str, str]]) -> None:
+        """Each SIR name maps to the correct PRMS name."""
+        assert lookup["pr_mm_mean"]["prms_name"] == "prcp"
+        assert lookup["tmmx_C_mean"]["prms_name"] == "tmax"
+        assert lookup["tmmn_C_mean"]["prms_name"] == "tmin"
+        assert lookup["srad_W_m2_mean"]["prms_name"] == "swrad"
+        assert lookup["pet_mm_mean"]["prms_name"] == "potet"
+
+    def test_source_field_present(self, lookup: dict[str, dict[str, str]]) -> None:
+        """Each entry includes the source dataset name."""
+        for entry in lookup.values():
+            assert entry["source"] == "gridmet"
+
+
 class TestDeriveForcing:
     """Tests for _derive_forcing (step 7)."""
 
@@ -1683,7 +1725,7 @@ class TestDeriveForcing:
     ) -> None:
         """swrad is converted from W/m2 to Langleys/day."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "srad_W_m2_mean_2020": xr.Dataset(
                 {"srad_W_m2_mean": (("time", "nhm_id"), np.array([[100.0, 200.0, 300.0]]))},
                 coords={"time": [0], "nhm_id": [1, 2, 3]},
             ),
@@ -1702,7 +1744,7 @@ class TestDeriveForcing:
     ) -> None:
         """potet is converted from mm to inches."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pet_mm_mean_2020": xr.Dataset(
                 {"pet_mm_mean": (("time", "nhm_id"), np.array([[25.4, 50.8, 0.0]]))},
                 coords={"time": [0], "nhm_id": [1, 2, 3]},
             ),
@@ -1720,7 +1762,7 @@ class TestDeriveForcing:
     ) -> None:
         """Temporal feature dim is renamed to match derived dataset nhru."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pr_mm_mean_2020": xr.Dataset(
                 {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
@@ -1736,9 +1778,9 @@ class TestDeriveForcing:
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Missing SIR variables are skipped with a warning."""
+        """Only provided forcing variables appear; absent ones are not created."""
         temporal = {
-            "gridmet_2020": xr.Dataset(
+            "pr_mm_mean_2020": xr.Dataset(
                 {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
@@ -1755,7 +1797,7 @@ class TestDeriveForcing:
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Completely unknown source with no matching variables is skipped."""
+        """Temporal variable with no matching forcing config entry is skipped."""
         temporal = {
             "unknown_source_2020": xr.Dataset(
                 {"some_unknown_var": (("time", "nhm_id"), np.ones((2, 3)))},
@@ -1767,19 +1809,23 @@ class TestDeriveForcing:
         result = derivation._derive_forcing(ctx, ds)
         assert len(result.data_vars) == 0
 
-    def test_fuzzy_match_by_variable_names(
+    def test_per_variable_temporal_matched(
         self,
         derivation: PywatershedDerivation,
         sir_topography: xr.Dataset,
     ) -> None:
-        """Source name doesn't match config key but SIR variables do → fuzzy match."""
+        """Per-variable temporal keys are matched via reverse lookup."""
         temporal = {
-            "climate_data_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
-                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 5.0),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0)},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 5.0)},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
         }
@@ -1787,7 +1833,6 @@ class TestDeriveForcing:
         ds = xr.Dataset()
         ds = ds.assign_coords(nhru=sir_topography["nhm_id"].values)
         result = derivation._derive_forcing(ctx, ds)
-        # Should fuzzy-match to gridmet config and rename variables
         assert "prcp" in result
         assert "tmax" in result
         assert "tmin" in result
@@ -1825,11 +1870,12 @@ class TestDeriveForcing:
             yaml.dump(custom_yaml, f)
 
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3))),
-                    "tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.ones((2, 3)))},
+                coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
+            ),
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.ones((2, 3)) * 20.0)},
                 coords={"time": [0, 1], "nhm_id": [1, 2, 3]},
             ),
         }
@@ -2395,13 +2441,14 @@ class TestDeriveTranspTiming:
         nhru = 1
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 30.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 15.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 30.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 15.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2431,13 +2478,14 @@ class TestDeriveTranspTiming:
         tmin_values[152:244, :] = 10.0  # °C, above freezing
 
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), tmin_values + 15.0),
-                    "tmmn_C_mean": (("time", "nhm_id"), tmin_values),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), tmin_values + 15.0)},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), tmin_values)},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2485,24 +2533,24 @@ class TestDeriveIntegrationPetTransp:
         rng = np.random.default_rng(42)
         nhru = 2
 
-        def _make_ds(year: int) -> xr.Dataset:
+        variables = {
+            "pr_mm_mean": lambda n, h: rng.uniform(0, 20, (n, h)),
+            "tmmx_C_mean": lambda n, h: rng.uniform(10, 35, (n, h)),
+            "tmmn_C_mean": lambda n, h: rng.uniform(-5, 15, (n, h)),
+            "srad_W_m2_mean": lambda n, h: rng.uniform(50, 300, (n, h)),
+            "pet_mm_mean": lambda n, h: rng.uniform(0, 8, (n, h)),
+        }
+
+        temporal: dict[str, xr.Dataset] = {}
+        for year in [2020, 2021]:
             times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
             ntime = len(times)
-            return xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
-                    "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
-                    "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
-                    "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
-                    "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
-                },
-                coords={"time": times, "nhm_id": [1, 2]},
-            )
-
-        temporal = {
-            "gridmet_2020": _make_ds(2020),
-            "gridmet_2021": _make_ds(2021),
-        }
+            for var_name, gen_fn in variables.items():
+                key = f"{var_name}_{year}"
+                temporal[key] = xr.Dataset(
+                    {var_name: (("time", "nhm_id"), gen_fn(ntime, nhru))},
+                    coords={"time": times, "nhm_id": [1, 2]},
+                )
 
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2556,13 +2604,14 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -10.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -20.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -10.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -20.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2589,13 +2638,14 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 35.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 20.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 35.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 20.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2623,12 +2673,10 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.full((len(times), 1), 5.0)),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.full((len(times), 1), 5.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(

@@ -2351,6 +2351,87 @@ class PywatershedDerivation:
     # Step 7: Forcing generation (temporal merge)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _concat_temporal_chunks(chunks: list[xr.Dataset]) -> xr.Dataset:
+        """Sort and concatenate multi-year temporal chunks along time.
+
+        Parameters
+        ----------
+        chunks : list[xr.Dataset]
+            One or more single-year temporal datasets to concatenate.
+
+        Returns
+        -------
+        xr.Dataset
+            Concatenated dataset sorted by time.
+        """
+        if len(chunks) > 1:
+            chunks.sort(key=lambda c: c["time"].values[0])
+            return xr.concat(chunks, dim="time")
+        return chunks[0]
+
+    def _build_sir_to_forcing_lookup(
+        self,
+        tables_dir: Path,
+    ) -> dict[str, dict[str, str]]:
+        """Build reverse lookup from SIR variable names to forcing config.
+
+        Invert the ``forcing_variables.yml`` mapping so that each SIR
+        canonical name maps to its PRMS name, source, and unit config.
+        This allows per-variable temporal data to be matched to forcing
+        config without requiring all variables in a single dataset.
+
+        Parameters
+        ----------
+        tables_dir : pathlib.Path
+            Directory containing ``forcing_variables.yml``.
+
+        Returns
+        -------
+        dict[str, dict[str, str]]
+            Mapping from SIR name to config dict with keys:
+            ``prms_name``, ``sir_unit``, ``intermediate_unit``, ``source``.
+
+        Examples
+        --------
+        >>> lookup = deriv._build_sir_to_forcing_lookup(tables_dir)
+        >>> lookup["pr_mm_mean"]
+        {'prms_name': 'prcp', 'sir_unit': 'mm', 'intermediate_unit': 'mm', 'source': 'gridmet'}
+        """
+        config = self._load_lookup_table("forcing_variables", tables_dir)
+        datasets_config = config["mapping"]
+
+        lookup: dict[str, dict[str, str]] = {}
+        for source_name, variables in datasets_config.items():
+            for prms_name, var_cfg in variables.items():
+                for required_key in ("sir_name", "sir_unit", "intermediate_unit"):
+                    if required_key not in var_cfg:
+                        raise ValueError(
+                            f"forcing_variables.yml: source '{source_name}', "
+                            f"variable '{prms_name}' is missing required key "
+                            f"'{required_key}'. Available keys: "
+                            f"{list(var_cfg.keys())}"
+                        )
+                sir_name = var_cfg["sir_name"]
+                if sir_name in lookup:
+                    logger.warning(
+                        "Duplicate SIR name '%s' in forcing_variables.yml: "
+                        "source '%s' (prms_name='%s') overwrites source '%s' "
+                        "(prms_name='%s').",
+                        sir_name,
+                        source_name,
+                        prms_name,
+                        lookup[sir_name]["source"],
+                        lookup[sir_name]["prms_name"],
+                    )
+                lookup[sir_name] = {
+                    "prms_name": prms_name,
+                    "sir_unit": var_cfg["sir_unit"],
+                    "intermediate_unit": var_cfg["intermediate_unit"],
+                    "source": source_name,
+                }
+        return lookup
+
     def _derive_forcing(
         self,
         ctx: DerivationContext,
@@ -2358,15 +2439,15 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Merge SIR-normalized temporal forcing into derived dataset (step 7).
 
-        Load variable mappings from ``forcing_variables.yml``, auto-detect
-        the source dataset by matching SIR variable names, rename to PRMS
-        conventions (e.g., ``tmmx`` -> ``tmax``), apply unit conversions
-        (e.g., K -> °F, mm -> inches), and merge time-series arrays into
-        the parameter dataset.
+        Look up each per-variable temporal dataset in the reverse mapping
+        from ``forcing_variables.yml``, rename to PRMS conventions
+        (e.g., ``tmmx_C_mean`` -> ``tmax``), apply unit conversions
+        (e.g., W/m² -> Langleys/day, mm -> inches), and merge time-series
+        arrays into the parameter dataset.
 
         Multi-year temporal chunks (keyed with ``_YYYY`` suffixes like
-        ``"gridmet_2020"``, ``"gridmet_2021"``) are concatenated along the
-        time dimension before processing.
+        ``"pr_mm_mean_2020"``, ``"pr_mm_mean_2021"``) are concatenated
+        along the time dimension before processing.
 
         Parameters
         ----------
@@ -2396,151 +2477,88 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _detect_forcing_dataset : Source dataset matching logic.
+        _build_sir_to_forcing_lookup : Reverse mapping from SIR names.
         """
         if ctx.temporal is None or len(ctx.temporal) == 0:
             logger.info("No temporal data provided; skipping forcing generation.")
             return ds
 
         tables_dir = ctx.resolved_lookup_tables_dir
-        config = self._load_lookup_table("forcing_variables", tables_dir)
-        datasets_config = config["mapping"]
+        sir_lookup = self._build_sir_to_forcing_lookup(tables_dir)
 
-        # Concat multi-year chunks by base name (strip _YYYY suffix)
-        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        # Group per-variable multi-year chunks: strip _YYYY suffix
+        chunks_by_var: dict[str, list[xr.Dataset]] = {}
         for ds_name, tds in ctx.temporal.items():
             base_name = re.sub(r"_\d{4}$", "", ds_name)
-            chunks_by_source.setdefault(base_name, []).append(tds)
+            chunks_by_var.setdefault(base_name, []).append(tds)
 
-        for source_name, chunks in chunks_by_source.items():
-            if len(chunks) > 1:
-                chunks.sort(key=lambda c: c["time"].values[0])
-                merged_temporal = xr.concat(chunks, dim="time")
-            else:
-                merged_temporal = chunks[0]
-
-            # Detect dataset config by matching source name or SIR variable names
-            dataset_cfg = self._detect_forcing_dataset(
-                source_name, merged_temporal, datasets_config
-            )
-            if dataset_cfg is None:
-                logger.warning(
-                    "Could not match temporal source '%s' to any forcing dataset config; skipping.",
-                    source_name,
+        forced_count = 0
+        for var_base, chunks in chunks_by_var.items():
+            # Look up config for this SIR variable
+            var_cfg = sir_lookup.get(var_base)
+            if var_cfg is None:
+                logger.debug(
+                    "Temporal variable '%s' is not a forcing variable; skipping.",
+                    var_base,
                 )
                 continue
 
-            # Process each mapped variable
-            for prms_name, var_cfg in dataset_cfg.items():
-                sir_name = var_cfg["sir_name"]
-                sir_unit = var_cfg["sir_unit"]
-                intermediate_unit = var_cfg["intermediate_unit"]
+            prms_name = var_cfg["prms_name"]
+            sir_unit = var_cfg["sir_unit"]
+            intermediate_unit = var_cfg["intermediate_unit"]
 
-                if sir_name not in merged_temporal:
-                    logger.warning(
-                        "Forcing variable '%s' (SIR name '%s') not found in "
-                        "temporal data; skipping.",
+            merged = self._concat_temporal_chunks(chunks)
+
+            if var_base not in merged:
+                logger.warning(
+                    "Forcing variable '%s' (SIR name '%s') not found in "
+                    "temporal data after concat; skipping.",
+                    prms_name,
+                    var_base,
+                )
+                continue
+
+            da = merged[var_base]
+
+            # Unit conversion (SIR unit → intermediate unit)
+            if sir_unit != intermediate_unit:
+                try:
+                    converted = convert(da.values.astype(np.float64), sir_unit, intermediate_unit)
+                except KeyError:
+                    logger.error(
+                        "No unit conversion registered for '%s' → '%s' "
+                        "(forcing variable '%s'). Register the conversion "
+                        "in units.py or fix forcing_variables.yml.",
+                        sir_unit,
+                        intermediate_unit,
                         prms_name,
-                        sir_name,
                     )
                     continue
+                da = da.copy(data=converted)
+                da.attrs["units"] = intermediate_unit
 
-                da = merged_temporal[sir_name]
+            # Align feature dimension to derived dataset
+            target_dim = "nhru"
+            feat_dims = [d for d in da.dims if d != "time"]
+            if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
+                da = da.rename({feat_dims[0]: target_dim})
 
-                # Unit conversion (SIR unit → intermediate unit)
-                if sir_unit != intermediate_unit:
-                    try:
-                        converted = convert(
-                            da.values.astype(np.float64), sir_unit, intermediate_unit
-                        )
-                    except KeyError:
-                        logger.error(
-                            "No unit conversion registered for '%s' → '%s' "
-                            "(forcing variable '%s' from source '%s'). "
-                            "Register the conversion in units.py or fix "
-                            "forcing_variables.yml.",
-                            sir_unit,
-                            intermediate_unit,
-                            prms_name,
-                            source_name,
-                        )
-                        continue
-                    da = da.copy(data=converted)
-                    da.attrs["units"] = intermediate_unit
+            ds[prms_name] = da
+            forced_count += 1
 
-                # Align feature dimension to derived dataset
-                target_dim = "nhru"
-                feat_dims = [d for d in da.dims if d != "time"]
-                if feat_dims and target_dim in ds.dims and feat_dims[0] != target_dim:
-                    da = da.rename({feat_dims[0]: target_dim})
-
-                ds[prms_name] = da
-
-            n_vars = sum(1 for p in dataset_cfg if p in ds)
-            logger.info(
-                "Step 7: merged %d forcing variables from '%s' (%d timesteps).",
-                n_vars,
-                source_name,
-                merged_temporal.sizes.get("time", 0),
+        if forced_count > 0:
+            logger.info("Step 7: merged %d forcing variables.", forced_count)
+        else:
+            logger.warning(
+                "Step 7: temporal data contained %d variable(s) but none "
+                "matched forcing config. Expected SIR names: %s. "
+                "Received: %s.",
+                len(chunks_by_var),
+                sorted(sir_lookup.keys()),
+                sorted(chunks_by_var.keys()),
             )
 
         return ds
-
-    @staticmethod
-    def _detect_forcing_dataset(
-        source_name: str,
-        temporal: xr.Dataset,
-        datasets_config: dict,
-    ) -> dict | None:
-        """Match a temporal dataset to its forcing config section.
-
-        Try exact name match on ``source_name`` first, then fall back to
-        a fuzzy match by counting how many SIR variable names from each
-        config section appear in the temporal dataset.  The section with
-        the most variable name hits is selected.
-
-        Parameters
-        ----------
-        source_name : str
-            Base name of the temporal source (e.g., ``"gridmet"``).
-        temporal : xr.Dataset
-            Temporal dataset to match against config sections.
-        datasets_config : dict
-            Forcing dataset configurations from ``forcing_variables.yml``,
-            keyed by dataset name.
-
-        Returns
-        -------
-        dict or None
-            The matched forcing config section (mapping PRMS names to
-            variable specs), or ``None`` if no match is found.
-        """
-        # Exact match on source name
-        if source_name in datasets_config:
-            return datasets_config[source_name]
-
-        # Fuzzy match: pick config with most SIR variable name hits
-        best_match: str | None = None
-        best_count = 0
-        temporal_vars = set(temporal.data_vars)
-        for cfg_name, cfg_vars in datasets_config.items():
-            sir_names = {v["sir_name"] for v in cfg_vars.values()}
-            count = len(sir_names & temporal_vars)
-            if count > best_count:
-                best_count = count
-                best_match = cfg_name
-
-        if best_match is not None and best_count > 0:
-            logger.info(
-                "Matched temporal source '%s' to forcing config '%s' (%d/%d variables matched).",
-                source_name,
-                best_match,
-                best_count,
-                len(datasets_config[best_match]),
-            )
-            return datasets_config[best_match]
-
-        return None
 
     # ------------------------------------------------------------------
     # Climate normals helpers (steps 10, 11)
@@ -2574,9 +2592,9 @@ class PywatershedDerivation:
         -----
         Temperature conversion: °C -> °F via ``T_f = T_c * 9/5 + 32``.
 
-        Requires full 12-month coverage in the temporal data to produce
-        reliable normals.  Sources with fewer than 12 months are skipped
-        with a warning.
+        Requires full 12-month coverage in both tmax and tmin temporal
+        data to produce reliable normals.  Returns ``None`` with a
+        warning if either variable covers fewer than 12 months.
 
         For single-HRU datasets, the output is reshaped from ``(12,)``
         to ``(12, 1)`` to maintain consistent 2-D array shape.
@@ -2585,87 +2603,80 @@ class PywatershedDerivation:
             return None
 
         tables_dir = ctx.resolved_lookup_tables_dir
-        config = self._load_lookup_table("forcing_variables", tables_dir)
-        datasets_config = config["mapping"]
+        sir_lookup = self._build_sir_to_forcing_lookup(tables_dir)
 
-        # Concat multi-year chunks by base name
-        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        # Find tmax and tmin SIR names from config
+        prms_to_sir = {cfg["prms_name"]: sn for sn, cfg in sir_lookup.items()}
+        tmax_sir = prms_to_sir.get("tmax")
+        tmin_sir = prms_to_sir.get("tmin")
+
+        if tmax_sir is None or tmin_sir is None:
+            logger.warning(
+                "Forcing config is missing tmax and/or tmin entries; "
+                "cannot compute climate normals."
+            )
+            return None
+
+        # Collect multi-year chunks for tmax and tmin independently
+        tmax_chunks: list[xr.Dataset] = []
+        tmin_chunks: list[xr.Dataset] = []
         for ds_name, tds in ctx.temporal.items():
             base_name = re.sub(r"_\d{4}$", "", ds_name)
-            chunks_by_source.setdefault(base_name, []).append(tds)
+            if base_name == tmax_sir:
+                tmax_chunks.append(tds)
+            elif base_name == tmin_sir:
+                tmin_chunks.append(tds)
 
-        for source_name, chunks in chunks_by_source.items():
-            if len(chunks) > 1:
-                chunks.sort(key=lambda c: c["time"].values[0])
-                merged = xr.concat(chunks, dim="time")
-            else:
-                merged = chunks[0]
+        if not tmax_chunks or not tmin_chunks:
+            logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
+            return None
 
-            dataset_cfg = self._detect_forcing_dataset(source_name, merged, datasets_config)
-            if dataset_cfg is None:
-                logger.warning(
-                    "Could not match temporal source '%s' to any forcing "
-                    "dataset config for climate normals; skipping.",
-                    source_name,
-                )
-                continue
+        tmax_merged = self._concat_temporal_chunks(tmax_chunks)
+        tmin_merged = self._concat_temporal_chunks(tmin_chunks)
 
-            # Find tmax and tmin SIR variable names
-            tmax_sir = dataset_cfg.get("tmax", {}).get("sir_name")
-            tmin_sir = dataset_cfg.get("tmin", {}).get("sir_name")
-
-            if tmax_sir is None or tmin_sir is None:
-                logger.warning(
-                    "Forcing config for source '%s' is missing tmax and/or "
-                    "tmin sir_name entries; cannot compute climate normals.",
-                    source_name,
-                )
-                continue
-            if tmax_sir not in merged or tmin_sir not in merged:
-                logger.warning(
-                    "Temporal source '%s' missing required variables: "
-                    "tmax='%s' (present=%s), tmin='%s' (present=%s).",
-                    source_name,
-                    tmax_sir,
-                    tmax_sir in merged,
-                    tmin_sir,
-                    tmin_sir in merged,
-                )
-                continue
-
-            # Group by month, compute mean, convert C -> F
-            tmax_monthly = merged[tmax_sir].groupby("time.month").mean(dim="time")
-            tmin_monthly = merged[tmin_sir].groupby("time.month").mean(dim="time")
-
-            # Validate full 12-month coverage
-            n_months = tmax_monthly.sizes.get("month", 0)
-            if n_months != 12:
-                logger.warning(
-                    "Temporal source '%s' covers only %d of 12 months; "
-                    "cannot compute reliable monthly normals. Skipping.",
-                    source_name,
-                    n_months,
-                )
-                continue
-
-            tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
-            tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
-
-            # Ensure 2-D shape (12, nhru) for single-HRU case
-            if tmax_f.ndim == 1:
-                tmax_f = tmax_f[:, np.newaxis]
-                tmin_f = tmin_f[:, np.newaxis]
-
-            logger.info(
-                "Computed monthly climate normals from '%s' (%d timesteps, %d HRUs).",
-                source_name,
-                merged.sizes.get("time", 0),
-                tmax_f.shape[1],
+        if tmax_sir not in tmax_merged or tmin_sir not in tmin_merged:
+            logger.warning(
+                "Temporal data missing tmax='%s' or tmin='%s' after concat.",
+                tmax_sir,
+                tmin_sir,
             )
-            return tmax_f, tmin_f
+            return None
 
-        logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
-        return None
+        # Group by month and compute mean
+        tmax_monthly = tmax_merged[tmax_sir].groupby("time.month").mean(dim="time")
+        tmin_monthly = tmin_merged[tmin_sir].groupby("time.month").mean(dim="time")
+
+        # Validate full 12-month coverage for both variables
+        n_tmax_months = tmax_monthly.sizes.get("month", 0)
+        n_tmin_months = tmin_monthly.sizes.get("month", 0)
+        if n_tmax_months != 12 or n_tmin_months != 12:
+            logger.warning(
+                "Temporal data covers only %d (tmax) / %d (tmin) of "
+                "12 months; cannot compute reliable monthly normals. "
+                "Skipping.",
+                n_tmax_months,
+                n_tmin_months,
+            )
+            return None
+
+        tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
+        tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
+
+        # Ensure 2-D shape (12, nhru) for single-HRU case
+        if tmax_f.ndim == 1:
+            tmax_f = tmax_f[:, np.newaxis]
+            tmin_f = tmin_f[:, np.newaxis]
+
+        logger.info(
+            "Computed monthly climate normals from tmax='%s', tmin='%s' "
+            "(%d + %d timesteps, %d HRUs).",
+            tmax_sir,
+            tmin_sir,
+            tmax_merged.sizes.get("time", 0),
+            tmin_merged.sizes.get("time", 0),
+            tmax_f.shape[1],
+        )
+        return tmax_f, tmin_f
 
     # ------------------------------------------------------------------
     # Step 10: PET coefficients (Jensen-Haise)
