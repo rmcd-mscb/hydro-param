@@ -250,12 +250,21 @@ def stage1_resolve_fabric(config: PipelineConfig) -> gpd.GeoDataFrame:
 
     Raises
     ------
+    FileNotFoundError
+        If the fabric file does not exist on disk.
     ValueError
         If the ``id_field`` is not found in the fabric columns, or if
         domain filtering produces an empty result.
     """
     logger.info("Stage 1: Loading target fabric from %s", config.target_fabric.path)
-    fabric = gpd.read_file(config.target_fabric.path)
+    fabric_path = config.target_fabric.path
+    if not fabric_path.exists():
+        raise FileNotFoundError(
+            f"Target fabric not found: {fabric_path}\n"
+            f"Download or copy the fabric file before running the pipeline. "
+            f"See 'hydro-param init --help' for project setup."
+        )
+    fabric = gpd.read_file(fabric_path)
 
     if config.target_fabric.id_field not in fabric.columns:
         raise ValueError(

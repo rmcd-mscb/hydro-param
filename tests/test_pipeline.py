@@ -125,6 +125,20 @@ def test_stage1_loads_fabric(config_yaml: Path, fabric_gpkg: Path):
     assert "featureid" in fabric.columns
 
 
+def test_stage1_missing_fabric_raises(tmp_path: Path):
+    """stage1 raises FileNotFoundError when fabric file doesn't exist."""
+    from hydro_param.config import PipelineConfig
+
+    cfg_dict = {
+        "target_fabric": {"path": str(tmp_path / "nonexistent.gpkg"), "id_field": "fid"},
+        "datasets": [],
+        "output": {"path": str(tmp_path / "output")},
+    }
+    config = PipelineConfig(**cfg_dict)
+    with pytest.raises(FileNotFoundError, match="Target fabric not found"):
+        stage1_resolve_fabric(config)
+
+
 def test_stage1_bbox_filter_clips_fabric(tmp_path: Path):
     """Bbox filter reduces feature count to only those within the bbox."""
     gdf = gpd.GeoDataFrame(
