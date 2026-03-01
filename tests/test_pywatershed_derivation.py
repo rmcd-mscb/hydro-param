@@ -545,6 +545,28 @@ class TestDeriveSoils:
         # soil_rechr_max_frac gates on soil_type
         assert "soil_rechr_max_frac" not in ds
 
+    def test_derive_soils_aws_cm_fallback(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max derived from aws0_100_cm_mean with cm->mm conversion."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0, 15.0, 8.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        # 5 cm = 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
+        # 15 cm = 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
+        # 8 cm = 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
+        expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
+
 
 class TestApplyLookupTables:
     """Tests for step 8: lookup table application."""

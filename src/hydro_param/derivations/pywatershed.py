@@ -1668,9 +1668,22 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
+        elif "aws0_100_cm_mean" in sir:
+            # Available water storage in cm — convert to mm first, then to inches.
+            aws_cm = sir["aws0_100_cm_mean"].values.astype(np.float64)
+            awc_mm = aws_cm * 10.0  # cm -> mm
+            soil_moist_max = convert(awc_mm, "mm", "in")
+            soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
+            ds["soil_moist_max"] = xr.DataArray(
+                soil_moist_max,
+                dims="nhru",
+                attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
+            )
+            logger.info("Used aws0_100_cm_mean (cm -> mm -> in) for soil_moist_max")
         else:
             logger.warning(
-                "Skipping soil_moist_max derivation (step 5): 'awc_mm_mean' not found in SIR."
+                "Skipping soil_moist_max derivation (step 5): neither 'awc_mm_mean' "
+                "nor 'aws0_100_cm_mean' found in SIR."
             )
 
         # --- soil_rechr_max_frac ---
