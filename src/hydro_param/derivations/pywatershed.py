@@ -1542,8 +1542,7 @@ class PywatershedDerivation:
                         continue
 
                     inner_prefix = f"{v}_"
-                    for inner_v in sorted(inner_ds.data_vars):
-                        inner_name = str(inner_v)
+                    for inner_name in sorted(str(v_) for v_ in inner_ds.data_vars):
                         if not inner_name.startswith(inner_prefix):
                             continue
                         inner_suffix = inner_name[len(inner_prefix) :]
