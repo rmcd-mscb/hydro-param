@@ -155,33 +155,17 @@ class PipelineResult:
 
         Assemble all per-variable SIR CSV files into a single
         ``xr.Dataset`` with the fabric ``id_field`` as the dimension.
-        Prefer normalized SIR files (canonical names and units) when
-        available; fall back to raw stage 4 static files for backward
-        compatibility.
 
         Returns
         -------
         xr.Dataset
             Combined dataset with one data variable per SIR variable.
-            Returns an empty dataset if no files are available.
-
-        Warnings
-        --------
-        When falling back to raw static files, variable names use source
-        conventions (not canonical SIR names) and units are not converted.
+            Returns an empty dataset if no SIR files are available.
         """
-        if self.sir_files:
-            files = self.sir_files
-        elif self.static_files:
-            logger.warning(
-                "No normalized SIR files available; falling back to raw static files. "
-                "Variable names will use source conventions, not canonical SIR names."
-            )
-            files = self.static_files
-        else:
-            logger.warning("No SIR or static files available — returning empty dataset")
+        if not self.sir_files:
+            logger.warning("No SIR files available — returning empty dataset")
             return xr.Dataset()
-        dfs = [pd.read_csv(p, index_col=0) for p in files.values()]
+        dfs = [pd.read_csv(p, index_col=0) for p in self.sir_files.values()]
         combined = pd.concat(dfs, axis=1)
         return xr.Dataset.from_dataframe(combined)
 

@@ -374,7 +374,7 @@ def test_load_sir_merges_variable_files(config_yaml: Path, fabric_gpkg: Path):
 
     result = PipelineResult(
         output_dir=config.output.path,
-        static_files={"elevation": elev_path, "slope": slope_path},
+        sir_files={"elevation": elev_path, "slope": slope_path},
     )
     sir = result.load_sir()
 
@@ -400,7 +400,7 @@ def test_load_sir_multi_statistic_round_trip(config_yaml: Path, fabric_gpkg: Pat
     path = _write_variable_file("elevation", df, "topo", config, feature_ids)
     result = PipelineResult(
         output_dir=config.output.path,
-        static_files={"elevation": path},
+        sir_files={"elevation": path},
     )
     sir = result.load_sir()
 
@@ -2249,22 +2249,6 @@ class TestPipelineResultSIR:
         )
         sir = result.load_sir()
         assert "elevation_m_mean" in sir.data_vars
-
-    def test_load_sir_falls_back_to_static(self, tmp_path: Path) -> None:
-        """load_sir() falls back to static_files when no sir_files."""
-        df = pd.DataFrame(
-            {"elevation": [100.0]},
-            index=pd.Index([1], name="nhm_id"),
-        )
-        path = tmp_path / "elevation.csv"
-        df.to_csv(path)
-
-        result = PipelineResult(
-            output_dir=tmp_path,
-            static_files={"elevation": path},
-        )
-        sir = result.load_sir()
-        assert "elevation" in sir.data_vars
 
     def test_load_raw_sir(self, tmp_path: Path) -> None:
         """load_raw_sir() always reads from static_files."""
