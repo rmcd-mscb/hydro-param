@@ -353,7 +353,14 @@ class TestSIRManifestEntry:
         entry = SIRManifestEntry(
             static_files={"elevation_m_mean": "sir/elevation_m_mean.csv"},
             temporal_files={"gridmet_2020": "sir/gridmet_2020.nc"},
-            sir_schema=[{"name": "elevation_m_mean", "units": "m", "statistic": "mean"}],
+            sir_schema=[
+                {
+                    "name": "elevation_m_mean",
+                    "units": "m",
+                    "statistic": "mean",
+                    "source_dataset": "dem_3dep_10m",
+                }
+            ],
         )
         data = entry.model_dump(mode="json")
         restored = SIRManifestEntry(**data)

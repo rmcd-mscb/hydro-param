@@ -1431,6 +1431,7 @@ def stage5_normalize_sir(
                 name=s.canonical_name,
                 units=s.canonical_units,
                 statistic="categorical" if s.categorical else "continuous",
+                source_dataset=s.dataset_name,
             )
             for s in schema
         ],

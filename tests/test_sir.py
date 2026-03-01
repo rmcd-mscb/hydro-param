@@ -384,6 +384,45 @@ class TestBuildSIRSchema:
         schema = build_sir_schema([(entry, ds_req, var_specs)])
         assert schema[0].canonical_name == "lambda_mean"
 
+    def test_dataset_name_populated(self) -> None:
+        """build_sir_schema populates dataset_name from DatasetRequest.name."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = self._make_entry(
+            variables=[VariableSpec(name="elevation", units="m", long_name="Elevation")]
+        )
+        ds_req = DatasetRequest(name="dem_3dep_10m", variables=["elevation"], statistics=["mean"])
+        var_specs: list[VariableSpec | DerivedVariableSpec] = [
+            VariableSpec(name="elevation", units="m", long_name="Elevation")
+        ]
+        schema = build_sir_schema([(entry, ds_req, var_specs)])
+        assert schema[0].dataset_name == "dem_3dep_10m"
+
+    def test_dataset_name_on_categorical(self) -> None:
+        """Categorical schema entries also get dataset_name."""
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import VariableSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = self._make_entry(
+            variables=[
+                VariableSpec(name="land_cover", units="", categorical=True, long_name="NLCD")
+            ]
+        )
+        ds_req = DatasetRequest(
+            name="nlcd_osn_lndcov",
+            variables=["land_cover"],
+            statistics=["categorical"],
+            year=[2021],
+        )
+        var_specs: list[VariableSpec | DerivedVariableSpec] = [
+            VariableSpec(name="land_cover", units="", categorical=True, long_name="NLCD")
+        ]
+        schema = build_sir_schema([(entry, ds_req, var_specs)])
+        assert schema[0].dataset_name == "nlcd_osn_lndcov"
+
 
 class TestApplyConversion:
     """Tests for SIR unit conversion application."""
@@ -471,6 +510,7 @@ class TestNormalizeSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="dem_test",
             )
         ]
 
@@ -482,8 +522,8 @@ class TestNormalizeSIR:
             id_field="nhm_id",
         )
 
-        assert "elevation_m_mean" in sir_files
-        result = pd.read_csv(sir_files["elevation_m_mean"], index_col=0)
+        assert "dem_test__elevation_m_mean" in sir_files
+        result = pd.read_csv(sir_files["dem_test__elevation_m_mean"], index_col=0)
         assert "elevation_m_mean" in result.columns
         assert_allclose(result["elevation_m_mean"].values, [100.0, 200.0])
 
@@ -513,6 +553,7 @@ class TestNormalizeSIR:
                 categorical=False,
                 valid_range=None,
                 conversion="log10_to_linear",
+                dataset_name="soils_test",
             )
         ]
 
@@ -524,7 +565,7 @@ class TestNormalizeSIR:
             id_field="nhm_id",
         )
 
-        result = pd.read_csv(sir_files["ksat_cm_hr_mean"], index_col=0)
+        result = pd.read_csv(sir_files["soils_test__ksat_cm_hr_mean"], index_col=0)
         assert_allclose(result["ksat_cm_hr_mean"].values, [1.0, 10.0, 100.0])
 
     def test_categorical_fraction_rename(self, tmp_path: Path) -> None:
@@ -552,6 +593,7 @@ class TestNormalizeSIR:
                 categorical=True,
                 valid_range=(0.0, 1.0),
                 conversion=None,
+                dataset_name="nlcd_test",
             )
         ]
 
@@ -563,8 +605,8 @@ class TestNormalizeSIR:
             id_field="nhm_id",
         )
 
-        assert "lndcov_frac" in sir_files
-        result = pd.read_csv(sir_files["lndcov_frac"], index_col=0)
+        assert "nlcd_test__lndcov_frac" in sir_files
+        result = pd.read_csv(sir_files["nlcd_test__lndcov_frac"], index_col=0)
         assert "lndcov_frac_11" in result.columns
         assert "lndcov_frac_21" in result.columns
         assert "lndcov_frac_41" in result.columns
@@ -594,6 +636,7 @@ class TestNormalizeSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="dem_test",
             ),
             SIRVariableSchema(
                 canonical_name="elevation_m_min",
@@ -604,6 +647,7 @@ class TestNormalizeSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="dem_test",
             ),
         ]
 
@@ -615,8 +659,8 @@ class TestNormalizeSIR:
             id_field="nhm_id",
         )
 
-        assert "elevation_m_mean" in sir_files
-        assert "elevation_m_min" in sir_files
+        assert "dem_test__elevation_m_mean" in sir_files
+        assert "dem_test__elevation_m_min" in sir_files
 
     def test_nan_values_preserved(self, tmp_path: Path) -> None:
         """NaN values pass through normalization unchanged."""
@@ -643,6 +687,7 @@ class TestNormalizeSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="dem_test",
             )
         ]
 
@@ -654,7 +699,7 @@ class TestNormalizeSIR:
             id_field="nhm_id",
         )
 
-        result = pd.read_csv(sir_files["elevation_m_mean"], index_col=0)
+        result = pd.read_csv(sir_files["dem_test__elevation_m_mean"], index_col=0)
         assert np.isnan(result["elevation_m_mean"].iloc[1])
 
 
@@ -683,6 +728,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=(-500.0, 9000.0),
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         warnings = validate_sir({"elevation_m_mean": path}, schema)
@@ -702,6 +748,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         warnings = validate_sir({"elevation_m_mean": path}, schema)
@@ -724,6 +771,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=(-500.0, 9000.0),
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         warnings = validate_sir({"elevation_m_mean": path}, schema)
@@ -743,6 +791,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=(-500.0, 9000.0),
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         warnings = validate_sir({"elevation_m_mean": path}, schema)
@@ -764,6 +813,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         with pytest.raises(SIRValidationError):
@@ -783,6 +833,7 @@ class TestValidateSIR:
                 categorical=False,
                 valid_range=None,
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
         warnings = validate_sir({}, schema)
@@ -810,6 +861,7 @@ class TestValidateSIR:
                 valid_range=None,
                 conversion="K_to_C",
                 temporal=True,
+                dataset_name="test_dataset",
             )
         ]
         # Should not crash — .nc files are skipped.
@@ -834,6 +886,7 @@ class TestValidateSIR:
                 valid_range=None,
                 conversion=None,
                 temporal=True,
+                dataset_name="test_dataset",
             )
         ]
 
@@ -879,6 +932,7 @@ class TestValidateSIR:
                 categorical=True,
                 valid_range=(0.0, 1.0),
                 conversion=None,
+                dataset_name="test_dataset",
             )
         ]
 
@@ -959,6 +1013,7 @@ class TestNormalizeSIRTemporal:
         # Check temperature was converted K -> °C
         tmmx_keys = [k for k in result if "tmmx" in k]
         assert len(tmmx_keys) == 1
+        assert tmmx_keys[0].startswith("gridmet__")
         tmmx_ds = xr.open_dataset(result[tmmx_keys[0]])
         tmmx_var = [v for v in tmmx_ds.data_vars][0]
         np.testing.assert_allclose(tmmx_ds[tmmx_var].values[0], [300.0 - 273.15, 310.0 - 273.15])
@@ -967,6 +1022,7 @@ class TestNormalizeSIRTemporal:
         # Check precipitation passthrough (no conversion)
         pr_keys = [k for k in result if "pr" in k]
         assert len(pr_keys) == 1
+        assert pr_keys[0].startswith("gridmet__")
         pr_ds = xr.open_dataset(result[pr_keys[0]])
         pr_var = [v for v in pr_ds.data_vars][0]
         np.testing.assert_allclose(pr_ds[pr_var].values[0], [5.0, 10.0])
@@ -1034,10 +1090,10 @@ class TestNormalizeSIRTemporal:
             output_dir=out_dir,
         )
 
-        # Should have 2 separate output keys with year suffixes
-        assert "tmmx_C_mean_2020" in result
-        assert "tmmx_C_mean_2021" in result
-        assert result["tmmx_C_mean_2020"] != result["tmmx_C_mean_2021"]
+        # Should have 2 separate output keys with dataset prefix and year suffixes
+        assert "gridmet__tmmx_C_mean_2020" in result
+        assert "gridmet__tmmx_C_mean_2021" in result
+        assert result["gridmet__tmmx_C_mean_2020"] != result["gridmet__tmmx_C_mean_2021"]
 
     def test_skips_unknown_variables(self, tmp_path: Path) -> None:
         """Variables not in schema are skipped with a warning."""
@@ -1153,7 +1209,7 @@ class TestNormalizeSIRTemporal:
             output_dir=out_dir,
         )
         assert len(result) == 1
-        assert "swe_m_mean_2020" in result
+        assert "snodas__swe_m_mean_2020" in result
 
     def test_long_name_is_not_used_as_lookup_key(self, tmp_path: Path) -> None:
         """long_name should NOT be used for lookup — only native_name or name."""
