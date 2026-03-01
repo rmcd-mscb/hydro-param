@@ -9,8 +9,8 @@ Support a Dataset-compatible API (``__contains__``, ``__getitem__``,
 load data with minimal code changes.  ``__contains__`` checks both static
 and temporal variables.
 
-When the manifest is missing or corrupt, fall back to discovering SIR
-files by globbing the ``sir/`` subdirectory with a warning.
+A valid manifest with a SIR section is required.  If no manifest is
+found, ``SIRAccessor`` raises ``FileNotFoundError`` at construction time.
 
 See Also
 --------
@@ -47,9 +47,8 @@ class SIRAccessor:
     Raises
     ------
     FileNotFoundError
-        If a file referenced in the manifest does not exist on disk,
-        or if no SIR output files are found (neither manifest nor
-        ``sir/`` subdirectory).
+        If no valid manifest with a SIR section is found, or if a
+        file referenced in the manifest does not exist on disk.
 
     Notes
     -----
@@ -73,27 +72,15 @@ class SIRAccessor:
         self._sir_schema: list[SIRSchemaEntry] = []
 
         manifest = load_manifest(self._output_dir)
-        if manifest is not None and manifest.sir is not None:
-            self._static = dict(manifest.sir.static_files)
-            self._temporal = dict(manifest.sir.temporal_files)
-            self._sir_schema = list(manifest.sir.sir_schema)
-        else:
-            logger.warning(
-                "No valid manifest with SIR section at %s — discovering SIR "
-                "files by scanning sir/. Schema metadata will not be "
-                "available. Consider re-running 'hydro-param run pipeline.yml' "
-                "to regenerate the manifest.",
-                self._output_dir,
+        if manifest is None or manifest.sir is None:
+            raise FileNotFoundError(
+                f"No valid manifest with SIR section at {self._output_dir}. "
+                f"Run 'hydro-param run pipeline.yml' to produce SIR output "
+                f"before running Phase 2."
             )
-            sir_dir = self._output_dir / "sir"
-            self._static = _glob_sir_static(sir_dir)
-            self._temporal = _glob_sir_temporal(sir_dir)
-            if not self._static and not self._temporal:
-                raise FileNotFoundError(
-                    f"No SIR output files found at {sir_dir}. "
-                    f"Run 'hydro-param run pipeline.yml' to produce SIR output "
-                    f"before running Phase 2."
-                )
+        self._static = dict(manifest.sir.static_files)
+        self._temporal = dict(manifest.sir.temporal_files)
+        self._sir_schema = list(manifest.sir.sir_schema)
 
         self._canonical_to_prefixed = _build_canonical_index(self._static)
         self._temporal_canonical_to_prefixed = _build_canonical_index(self._temporal)
@@ -175,9 +162,8 @@ class SIRAccessor:
         Returns
         -------
         list[SIRSchemaEntry]
-            Schema entries from the manifest, or empty list if
-            discovered via glob fallback.  Returns a copy to prevent
-            external mutation of internal state.
+            Schema entries from the manifest.  Returns a copy to
+            prevent external mutation of internal state.
         """
         return list(self._sir_schema)
 
@@ -489,7 +475,7 @@ def _build_canonical_index(mapping: dict[str, str]) -> dict[str, str]:
     """Build a canonical-name-to-prefixed-key index.
 
     Map canonical (unprefixed) names to their prefixed keys for
-    backward-compatible lookups.  If two prefixed keys share the same
+    unprefixed lookups.  If two prefixed keys share the same
     canonical name, the last one wins (alphabetically) and a debug
     message is logged.
 
@@ -519,41 +505,3 @@ def _build_canonical_index(mapping: dict[str, str]) -> dict[str, str]:
                 )
             index[canonical] = prefixed_key
     return index
-
-
-def _glob_sir_static(sir_dir: Path) -> dict[str, str]:
-    """Discover static SIR files by globbing CSV files.
-
-    Parameters
-    ----------
-    sir_dir : Path
-        The ``sir/`` subdirectory to scan.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of variable names (stem) to paths relative to the
-        parent output directory.
-    """
-    if not sir_dir.is_dir():
-        return {}
-    return {p.stem: str(p.relative_to(sir_dir.parent)) for p in sorted(sir_dir.glob("*.csv"))}
-
-
-def _glob_sir_temporal(sir_dir: Path) -> dict[str, str]:
-    """Discover temporal SIR files by globbing NetCDF files.
-
-    Parameters
-    ----------
-    sir_dir : Path
-        The ``sir/`` subdirectory to scan.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of dataset keys (stem) to paths relative to the
-        parent output directory.
-    """
-    if not sir_dir.is_dir():
-        return {}
-    return {p.stem: str(p.relative_to(sir_dir.parent)) for p in sorted(sir_dir.glob("*.nc"))}

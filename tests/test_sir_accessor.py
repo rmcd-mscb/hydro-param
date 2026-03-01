@@ -81,13 +81,15 @@ class TestSIRAccessor:
         with pytest.raises(KeyError, match="no_such_var"):
             acc.load_variable("no_such_var")
 
-    def test_glob_fallback_no_manifest(self, sir_dir: Path) -> None:
-        """Without manifest, SIRAccessor falls back to globbing sir/."""
+    def test_no_manifest_raises(self, tmp_path: Path) -> None:
+        """SIRAccessor requires a manifest — no glob fallback."""
         from hydro_param.sir_accessor import SIRAccessor
 
-        acc = SIRAccessor(sir_dir)
-        assert "elevation_m_mean" in acc.available_variables()
-        assert "gridmet_2020" in acc.available_temporal()
+        sir_dir = tmp_path / "sir"
+        sir_dir.mkdir()
+        pd.DataFrame({"val": [1.0]}).to_csv(sir_dir / "foo.csv")
+        with pytest.raises(FileNotFoundError, match="No valid manifest"):
+            SIRAccessor(tmp_path)
 
     def test_contains_check_static(self, sir_dir_with_manifest: Path) -> None:
         from hydro_param.sir_accessor import SIRAccessor
@@ -133,18 +135,18 @@ class TestSIRAccessor:
             SIRAccessor(tmp_path)
 
     def test_empty_sir_dir_raises(self, tmp_path: Path) -> None:
-        """Glob fallback with no sir/ dir raises FileNotFoundError."""
+        """Missing manifest raises FileNotFoundError."""
         from hydro_param.sir_accessor import SIRAccessor
 
-        with pytest.raises(FileNotFoundError, match="No SIR output files found"):
+        with pytest.raises(FileNotFoundError, match="No valid manifest"):
             SIRAccessor(tmp_path)
 
     def test_empty_sir_subdir_raises(self, tmp_path: Path) -> None:
-        """Glob fallback with empty sir/ subdir raises FileNotFoundError."""
+        """Missing manifest with sir/ subdir raises FileNotFoundError."""
         (tmp_path / "sir").mkdir()
         from hydro_param.sir_accessor import SIRAccessor
 
-        with pytest.raises(FileNotFoundError, match="No SIR output files found"):
+        with pytest.raises(FileNotFoundError, match="No valid manifest"):
             SIRAccessor(tmp_path)
 
     def test_corrupt_csv_raises(self, sir_dir_with_manifest: Path) -> None:
@@ -377,7 +379,7 @@ def prefixed_sir_dir(tmp_path: Path) -> Path:
 
 
 class TestPrefixedSIRLookups:
-    """Tests for backward-compatible canonical lookups with prefixed keys."""
+    """Tests for canonical lookups with prefixed keys."""
 
     def test_contains_canonical_name(self, prefixed_sir_dir: Path) -> None:
         """Canonical (unprefixed) name works with __contains__."""
@@ -582,18 +584,3 @@ def test_parse_helpers() -> None:
     # Multiple __ — only first split
     assert _parse_canonical_name("a__b__c") == "b__c"
     assert _parse_dataset_prefix("a__b__c") == "a"
-
-
-def test_glob_fallback_prefixed(tmp_path: Path) -> None:
-    """Glob fallback discovers prefixed filenames correctly."""
-    from hydro_param.sir_accessor import SIRAccessor
-
-    sir_dir = tmp_path / "sir"
-    sir_dir.mkdir()
-    df = pd.DataFrame({"val": [1.0]}, index=pd.Index([1], name="nhm_id"))
-    df.to_csv(sir_dir / "dem_3dep_10m__elevation_m_mean.csv")
-    # No manifest — trigger glob fallback
-    acc = SIRAccessor(tmp_path)
-    assert "elevation_m_mean" in acc
-    assert "dem_3dep_10m__elevation_m_mean" in acc
-    assert acc.source_for("elevation_m_mean") == "dem_3dep_10m"
