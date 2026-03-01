@@ -269,10 +269,10 @@ class TestDerivationContextTemporal:
         )
         ctx = DerivationContext(
             sir=sir_topography,
-            temporal={"gridmet_2020": temporal_ds},
+            temporal={"pr_mm_mean_2020": temporal_ds},
         )
         assert ctx.temporal is not None
-        assert "gridmet_2020" in ctx.temporal
+        assert "pr_mm_mean_2020" in ctx.temporal
 
 
 class TestDeriveTopography:
@@ -2405,13 +2405,14 @@ class TestDeriveTranspTiming:
         nhru = 1
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 30.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 15.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 30.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), nhru), 15.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2441,13 +2442,14 @@ class TestDeriveTranspTiming:
         tmin_values[152:244, :] = 10.0  # °C, above freezing
 
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), tmin_values + 15.0),
-                    "tmmn_C_mean": (("time", "nhm_id"), tmin_values),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), tmin_values + 15.0)},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), tmin_values)},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2495,24 +2497,24 @@ class TestDeriveIntegrationPetTransp:
         rng = np.random.default_rng(42)
         nhru = 2
 
-        def _make_ds(year: int) -> xr.Dataset:
+        variables = {
+            "pr_mm_mean": lambda n, h: rng.uniform(0, 20, (n, h)),
+            "tmmx_C_mean": lambda n, h: rng.uniform(10, 35, (n, h)),
+            "tmmn_C_mean": lambda n, h: rng.uniform(-5, 15, (n, h)),
+            "srad_W_m2_mean": lambda n, h: rng.uniform(50, 300, (n, h)),
+            "pet_mm_mean": lambda n, h: rng.uniform(0, 8, (n, h)),
+        }
+
+        temporal: dict[str, xr.Dataset] = {}
+        for year in [2020, 2021]:
             times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
             ntime = len(times)
-            return xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
-                    "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
-                    "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
-                    "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
-                    "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
-                },
-                coords={"time": times, "nhm_id": [1, 2]},
-            )
-
-        temporal = {
-            "gridmet_2020": _make_ds(2020),
-            "gridmet_2021": _make_ds(2021),
-        }
+            for var_name, gen_fn in variables.items():
+                key = f"{var_name}_{year}"
+                temporal[key] = xr.Dataset(
+                    {var_name: (("time", "nhm_id"), gen_fn(ntime, nhru))},
+                    coords={"time": times, "nhm_id": [1, 2]},
+                )
 
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2566,13 +2568,14 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -10.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -20.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -10.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), -20.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2599,13 +2602,14 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 35.0)),
-                    "tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 20.0)),
-                },
+            "tmmx_C_mean_2020": xr.Dataset(
+                {"tmmx_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 35.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
+            "tmmn_C_mean_2020": xr.Dataset(
+                {"tmmn_C_mean": (("time", "nhm_id"), np.full((len(times), 1), 20.0))},
+                coords={"time": times, "nhm_id": [1]},
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(
@@ -2633,12 +2637,10 @@ class TestClimateNormalsEdgeCases:
 
         times = pd.date_range("2020-01-01", "2020-12-31", freq="D")
         temporal = {
-            "gridmet_2020": xr.Dataset(
-                {
-                    "pr_mm_mean": (("time", "nhm_id"), np.full((len(times), 1), 5.0)),
-                },
+            "pr_mm_mean_2020": xr.Dataset(
+                {"pr_mm_mean": (("time", "nhm_id"), np.full((len(times), 1), 5.0))},
                 coords={"time": times, "nhm_id": [1]},
-            )
+            ),
         }
         sir = _MockSIRAccessor(
             xr.Dataset(

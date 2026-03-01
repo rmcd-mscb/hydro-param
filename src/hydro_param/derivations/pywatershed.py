@@ -2617,87 +2617,91 @@ class PywatershedDerivation:
             return None
 
         tables_dir = ctx.resolved_lookup_tables_dir
-        config = self._load_lookup_table("forcing_variables", tables_dir)
-        datasets_config = config["mapping"]
+        sir_lookup = self._build_sir_to_forcing_lookup(tables_dir)
 
-        # Concat multi-year chunks by base name
-        chunks_by_source: dict[str, list[xr.Dataset]] = {}
+        # Find tmax and tmin SIR names from config
+        tmax_sir: str | None = None
+        tmin_sir: str | None = None
+        for sir_name, cfg in sir_lookup.items():
+            if cfg["prms_name"] == "tmax":
+                tmax_sir = sir_name
+            elif cfg["prms_name"] == "tmin":
+                tmin_sir = sir_name
+
+        if tmax_sir is None or tmin_sir is None:
+            logger.warning(
+                "Forcing config is missing tmax and/or tmin entries; "
+                "cannot compute climate normals."
+            )
+            return None
+
+        # Collect multi-year chunks for tmax and tmin independently
+        tmax_chunks: list[xr.Dataset] = []
+        tmin_chunks: list[xr.Dataset] = []
         for ds_name, tds in ctx.temporal.items():
             base_name = re.sub(r"_\d{4}$", "", ds_name)
-            chunks_by_source.setdefault(base_name, []).append(tds)
+            if base_name == tmax_sir:
+                tmax_chunks.append(tds)
+            elif base_name == tmin_sir:
+                tmin_chunks.append(tds)
 
-        for source_name, chunks in chunks_by_source.items():
-            if len(chunks) > 1:
-                chunks.sort(key=lambda c: c["time"].values[0])
-                merged = xr.concat(chunks, dim="time")
-            else:
-                merged = chunks[0]
+        if not tmax_chunks or not tmin_chunks:
+            logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
+            return None
 
-            dataset_cfg = self._detect_forcing_dataset(source_name, merged, datasets_config)
-            if dataset_cfg is None:
-                logger.warning(
-                    "Could not match temporal source '%s' to any forcing "
-                    "dataset config for climate normals; skipping.",
-                    source_name,
-                )
-                continue
+        # Concat multi-year chunks
+        if len(tmax_chunks) > 1:
+            tmax_chunks.sort(key=lambda c: c["time"].values[0])
+            tmax_merged = xr.concat(tmax_chunks, dim="time")
+        else:
+            tmax_merged = tmax_chunks[0]
 
-            # Find tmax and tmin SIR variable names
-            tmax_sir = dataset_cfg.get("tmax", {}).get("sir_name")
-            tmin_sir = dataset_cfg.get("tmin", {}).get("sir_name")
+        if len(tmin_chunks) > 1:
+            tmin_chunks.sort(key=lambda c: c["time"].values[0])
+            tmin_merged = xr.concat(tmin_chunks, dim="time")
+        else:
+            tmin_merged = tmin_chunks[0]
 
-            if tmax_sir is None or tmin_sir is None:
-                logger.warning(
-                    "Forcing config for source '%s' is missing tmax and/or "
-                    "tmin sir_name entries; cannot compute climate normals.",
-                    source_name,
-                )
-                continue
-            if tmax_sir not in merged or tmin_sir not in merged:
-                logger.warning(
-                    "Temporal source '%s' missing required variables: "
-                    "tmax='%s' (present=%s), tmin='%s' (present=%s).",
-                    source_name,
-                    tmax_sir,
-                    tmax_sir in merged,
-                    tmin_sir,
-                    tmin_sir in merged,
-                )
-                continue
-
-            # Group by month, compute mean, convert C -> F
-            tmax_monthly = merged[tmax_sir].groupby("time.month").mean(dim="time")
-            tmin_monthly = merged[tmin_sir].groupby("time.month").mean(dim="time")
-
-            # Validate full 12-month coverage
-            n_months = tmax_monthly.sizes.get("month", 0)
-            if n_months != 12:
-                logger.warning(
-                    "Temporal source '%s' covers only %d of 12 months; "
-                    "cannot compute reliable monthly normals. Skipping.",
-                    source_name,
-                    n_months,
-                )
-                continue
-
-            tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
-            tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
-
-            # Ensure 2-D shape (12, nhru) for single-HRU case
-            if tmax_f.ndim == 1:
-                tmax_f = tmax_f[:, np.newaxis]
-                tmin_f = tmin_f[:, np.newaxis]
-
-            logger.info(
-                "Computed monthly climate normals from '%s' (%d timesteps, %d HRUs).",
-                source_name,
-                merged.sizes.get("time", 0),
-                tmax_f.shape[1],
+        if tmax_sir not in tmax_merged or tmin_sir not in tmin_merged:
+            logger.warning(
+                "Temporal data missing tmax='%s' or tmin='%s' after concat.",
+                tmax_sir,
+                tmin_sir,
             )
-            return tmax_f, tmin_f
+            return None
 
-        logger.warning("No tmax/tmin variables found in temporal data for climate normals.")
-        return None
+        # Group by month, compute mean, convert C -> F
+        tmax_monthly = tmax_merged[tmax_sir].groupby("time.month").mean(dim="time")
+        tmin_monthly = tmin_merged[tmin_sir].groupby("time.month").mean(dim="time")
+
+        # Validate full 12-month coverage
+        n_months = tmax_monthly.sizes.get("month", 0)
+        if n_months != 12:
+            logger.warning(
+                "Temporal tmax data covers only %d of 12 months; "
+                "cannot compute reliable monthly normals. Skipping.",
+                n_months,
+            )
+            return None
+
+        tmax_f = tmax_monthly.values * 9.0 / 5.0 + 32.0
+        tmin_f = tmin_monthly.values * 9.0 / 5.0 + 32.0
+
+        # Ensure 2-D shape (12, nhru) for single-HRU case
+        if tmax_f.ndim == 1:
+            tmax_f = tmax_f[:, np.newaxis]
+            tmin_f = tmin_f[:, np.newaxis]
+
+        logger.info(
+            "Computed monthly climate normals from tmax='%s', tmin='%s' "
+            "(%d + %d timesteps, %d HRUs).",
+            tmax_sir,
+            tmin_sir,
+            tmax_merged.sizes.get("time", 0),
+            tmin_merged.sizes.get("time", 0),
+            tmax_f.shape[1],
+        )
+        return tmax_f, tmin_f
 
     # ------------------------------------------------------------------
     # Step 10: PET coefficients (Jensen-Haise)
