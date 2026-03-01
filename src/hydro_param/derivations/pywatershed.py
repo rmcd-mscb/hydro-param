@@ -227,9 +227,9 @@ class PywatershedDerivation:
             Typed input bundle containing the SIR dataset, target fabric
             GeoDataFrame, segment GeoDataFrame, waterbody GeoDataFrame,
             temporal forcing datasets, lookup table directory, and
-            pipeline configuration.  When invoked via the CLI
-            ``pws_run_cmd``, ``temporal`` is ``None`` and forcing data
-            is merged separately after ``derive()`` returns.
+            pipeline configuration.  ``temporal`` may be ``None`` if no
+            temporal SIR data is available, in which case step 7 (forcing)
+            is skipped and PET/transpiration steps use scalar defaults.
 
         Returns
         -------

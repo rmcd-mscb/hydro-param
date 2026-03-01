@@ -720,52 +720,60 @@ def pws_run_cmd(config: Path) -> None:
 
     # ── Load temporal data from SIR ──
     temporal: dict[str, xr.Dataset] = {}
-    for name in sir.available_temporal():
-        try:
-            temporal[name] = sir.load_temporal(name)
-        except (OSError, KeyError) as exc:
-            logger.error("Failed to load temporal SIR data '%s': %s", name, exc)
-            logger.error("Re-run 'hydro-param run pipeline.yml' to regenerate SIR output.")
-            raise SystemExit(1) from exc
-
-    if temporal:
-        logger.info(
-            "Loaded %d temporal datasets: %s",
-            len(temporal),
-            list(temporal.keys()),
-        )
-    else:
-        logger.info("No temporal data in SIR; PET/transpiration will use defaults.")
-
-    # ── Derive parameters ──
-    logger.info("Deriving pywatershed parameters from SIR")
-
-    derivation_config: dict = {}
-    if pws_config.parameter_overrides.values:
-        derivation_config["parameter_overrides"] = {
-            "values": pws_config.parameter_overrides.values,
-        }
-
-    ctx = DerivationContext(
-        sir=sir,
-        fabric=fabric,
-        segments=segments,
-        waterbodies=waterbodies,
-        fabric_id_field=pws_config.domain.id_field,
-        segment_id_field=pws_config.domain.segment_id_field,
-        config=derivation_config,
-        temporal=temporal or None,
-    )
-
     try:
+        for name in sir.available_temporal():
+            try:
+                temporal[name] = sir.load_temporal(name)
+            except (OSError, KeyError) as exc:
+                logger.error("Failed to load temporal SIR data '%s': %s", name, exc)
+                logger.error("Re-run 'hydro-param run pipeline.yml' to regenerate SIR output.")
+                raise SystemExit(1) from exc
+
+        if temporal:
+            logger.info(
+                "Loaded %d temporal datasets: %s",
+                len(temporal),
+                list(temporal.keys()),
+            )
+        else:
+            logger.info(
+                "No temporal data in SIR; forcing generation will be skipped "
+                "and PET/transpiration will use scalar defaults."
+            )
+
+        # ── Derive parameters ──
+        logger.info("Deriving pywatershed parameters from SIR")
+
+        derivation_config: dict = {}
+        if pws_config.parameter_overrides.values:
+            derivation_config["parameter_overrides"] = {
+                "values": pws_config.parameter_overrides.values,
+            }
+
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            waterbodies=waterbodies,
+            fabric_id_field=pws_config.domain.id_field,
+            segment_id_field=pws_config.domain.segment_id_field,
+            config=derivation_config,
+            temporal=temporal,
+        )
+
         plugin = PywatershedDerivation()
         derived = plugin.derive(ctx)
+    except SystemExit:
+        raise
     except Exception as exc:
         logger.exception("Parameter derivation failed.")
         raise SystemExit(1) from exc
     finally:
         for ds in temporal.values():
-            ds.close()
+            try:
+                ds.close()
+            except Exception:
+                logger.debug("Failed to close temporal dataset", exc_info=True)
 
     # ── Format and write ──
     formatter = get_formatter("pywatershed")
