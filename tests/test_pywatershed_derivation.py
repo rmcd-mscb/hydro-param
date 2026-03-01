@@ -172,30 +172,36 @@ def sir_full(
 
 @pytest.fixture()
 def temporal_gridmet() -> dict[str, xr.Dataset]:
-    """Synthetic SIR-normalized temporal data mimicking gridMET output."""
+    """Synthetic SIR-normalized temporal data mimicking per-variable SIR output.
+
+    Real SIR normalizes temporal data into per-variable-per-year NetCDF files.
+    Each dataset contains a single variable with its SIR canonical name.
+    """
     import pandas as pd
 
     nhru = 3
     rng = np.random.default_rng(42)
 
-    def _make_ds(year: int) -> xr.Dataset:
+    variables = {
+        "pr_mm_mean": lambda n, h: rng.uniform(0, 20, (n, h)),
+        "tmmx_C_mean": lambda n, h: rng.uniform(10, 35, (n, h)),
+        "tmmn_C_mean": lambda n, h: rng.uniform(-5, 15, (n, h)),
+        "srad_W_m2_mean": lambda n, h: rng.uniform(50, 300, (n, h)),
+        "pet_mm_mean": lambda n, h: rng.uniform(0, 8, (n, h)),
+    }
+
+    result: dict[str, xr.Dataset] = {}
+    for year in [2020, 2021]:
         times = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
         ntime = len(times)
-        return xr.Dataset(
-            {
-                "pr_mm_mean": (("time", "nhm_id"), rng.uniform(0, 20, (ntime, nhru))),
-                "tmmx_C_mean": (("time", "nhm_id"), rng.uniform(10, 35, (ntime, nhru))),
-                "tmmn_C_mean": (("time", "nhm_id"), rng.uniform(-5, 15, (ntime, nhru))),
-                "srad_W_m2_mean": (("time", "nhm_id"), rng.uniform(50, 300, (ntime, nhru))),
-                "pet_mm_mean": (("time", "nhm_id"), rng.uniform(0, 8, (ntime, nhru))),
-            },
-            coords={"time": times, "nhm_id": [1, 2, 3]},
-        )
+        for var_name, gen_fn in variables.items():
+            key = f"{var_name}_{year}"
+            result[key] = xr.Dataset(
+                {var_name: (("time", "nhm_id"), gen_fn(ntime, nhru))},
+                coords={"time": times, "nhm_id": [1, 2, 3]},
+            )
 
-    return {
-        "gridmet_2020": _make_ds(2020),
-        "gridmet_2021": _make_ds(2021),
-    }
+    return result
 
 
 @pytest.fixture()
