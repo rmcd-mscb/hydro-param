@@ -469,6 +469,22 @@ class DatasetRegistry(BaseModel):
         )
 
 
+def get_all_dataset_names(registry: DatasetRegistry) -> set[str]:
+    """Return the set of all dataset names in the registry.
+
+    Parameters
+    ----------
+    registry : DatasetRegistry
+        A loaded dataset registry.
+
+    Returns
+    -------
+    set[str]
+        All dataset names (e.g., ``{"dem_3dep_10m", "gridmet", ...}``).
+    """
+    return set(registry.datasets.keys())
+
+
 def load_registry(path: str | Path) -> DatasetRegistry:
     """Load a dataset registry from a YAML file or directory of YAML files.
 

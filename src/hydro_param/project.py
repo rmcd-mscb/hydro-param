@@ -245,11 +245,13 @@ processing:
 
 
 def generate_pywatershed_template(project_name: str) -> str:
-    """Generate a well-commented pywatershed run config template (v3.0).
+    """Generate a well-commented pywatershed run config template (v4.0).
 
     Produce a starter ``pywatershed_run.yml`` for Phase 2 parameterization.
     This config consumes existing SIR output produced by ``hydro-param run``
-    and derives pywatershed-specific parameters.
+    and derives pywatershed-specific parameters.  The v4.0 format includes
+    three data sections (``static_datasets``, ``forcing``, ``climate_normals``)
+    that declare the pipeline-to-parameter data contract.
 
     Parameters
     ----------
@@ -284,7 +286,7 @@ def generate_pywatershed_template(project_name: str) -> str:
 #   docs/reference/pywatershed_dataset_param_map.yml
 
 target_model: pywatershed
-version: "3.0"
+version: "4.0"
 
 # --- SIR Output ---
 # Path to the pipeline output directory containing SIR files and .manifest.yml.
@@ -307,6 +309,124 @@ time:
   start: "1980-10-01"
   end: "2020-09-30"
   timestep: daily
+
+# --- Static Datasets ---
+# Declare which pipeline datasets provide each pywatershed parameter.
+# Each entry maps a pywatershed parameter to its SIR data source.
+static_datasets:
+
+  topography:
+    available: [dem_3dep_10m]
+    hru_elev:
+      source: dem_3dep_10m
+      variable: elevation
+      statistic: mean
+      description: "Mean HRU elevation"
+    hru_slope:
+      source: dem_3dep_10m
+      variable: slope
+      statistic: mean
+      description: "Mean land surface slope"
+    hru_aspect:
+      source: dem_3dep_10m
+      variable: aspect
+      statistic: mean
+      description: "Mean HRU aspect"
+
+  soils:
+    available: [polaris_30m, gnatsgo_rasters]
+    soil_type:
+      source: polaris_30m
+      variables: [sand, silt, clay]
+      statistic: mean
+      description: "Soil type classification (1=sand, 2=loam, 3=clay)"
+    sat_threshold:
+      source: polaris_30m
+      variable: theta_s
+      statistic: mean
+      description: "Gravity reservoir storage capacity (from porosity)"
+    soil_moist_max:
+      source: gnatsgo_rasters
+      variable: aws0_100
+      statistic: mean
+      description: "Maximum available water-holding capacity"
+    soil_rechr_max_frac:
+      source: gnatsgo_rasters
+      variables: [rootznemc, rootznaws]
+      statistic: mean
+      description: "Recharge zone storage as fraction of soil_moist_max"
+
+  landcover:
+    available: [nlcd_osn_lndcov, nlcd_osn_fctimp]
+    cov_type:
+      source: nlcd_osn_lndcov
+      variable: LndCov
+      statistic: categorical
+      year: [2021]
+      description: "Vegetation cover type (0=bare, 1=grasses, 2=shrubs, 3=trees, 4=coniferous)"
+    hru_percent_imperv:
+      source: nlcd_osn_fctimp
+      variable: FctImp
+      statistic: mean
+      year: [2021]
+      description: "Impervious surface fraction"
+
+  snow:
+    available: [snodas]
+    snarea_thresh:
+      source: snodas
+      variable: SWE
+      statistic: mean
+      time_period: ["2020-01-01", "2021-12-31"]
+      description: "Snow depletion threshold (calibration seed from historical max SWE)"
+
+  waterbodies:
+    available: []
+    # Uncomment after adding waterbody_path above:
+    # hru_type:
+    #   source: domain.waterbody_path
+    #   description: "HRU type (0=inactive, 1=land, 2=lake, 3=swale)"
+    # dprst_frac:
+    #   source: domain.waterbody_path
+    #   description: "Fraction of HRU with surface depressions"
+
+# --- Forcing ---
+# Temporal climate time series for model input (prcp, tmax, tmin).
+forcing:
+  available: [gridmet]
+  prcp:
+    source: gridmet
+    variable: pr
+    statistic: mean
+    description: "Daily precipitation"
+  tmax:
+    source: gridmet
+    variable: tmmx
+    statistic: mean
+    description: "Daily maximum temperature"
+  tmin:
+    source: gridmet
+    variable: tmmn
+    statistic: mean
+    description: "Daily minimum temperature"
+
+# --- Climate Normals ---
+# Long-term climate statistics for derived parameters (PET, transpiration).
+# Can use a different source than forcing (e.g., gridMET normals with CONUS404-BA forcing).
+climate_normals:
+  available: [gridmet]
+  jh_coef:
+    source: gridmet
+    variables: [tmmx, tmmn]
+    description: "Jensen-Haise PET coefficient (monthly, from tmax/tmin normals)"
+  transp_beg:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration begins (from monthly mean tmin threshold)"
+  transp_end:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration ends (from monthly mean tmin threshold)"
 
 # --- Parameter Overrides ---
 # Manually override any derived parameter value.

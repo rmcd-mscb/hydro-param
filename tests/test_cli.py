@@ -789,7 +789,7 @@ def _write_pws_config(
     """Write a v3.0 pywatershed run config YAML for testing."""
     cfg: dict = {
         "target_model": "pywatershed",
-        "version": "3.0",
+        "version": "4.0",
         "domain": {
             "fabric_path": str(fabric_path),
         },
@@ -900,7 +900,7 @@ def test_pws_run_relative_sir_path(tmp_path: Path) -> None:
 
     cfg: dict = {
         "target_model": "pywatershed",
-        "version": "3.0",
+        "version": "4.0",
         "domain": {"fabric_path": str(fabric_path)},
         "time": {"start": "2020-10-01", "end": "2021-09-30"},
         # Relative to config's parent: configs/../output = tmp_path/output
