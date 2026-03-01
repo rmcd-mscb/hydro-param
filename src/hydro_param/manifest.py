@@ -132,7 +132,8 @@ class SIRManifestEntry(BaseModel):
         output directory (e.g., ``{"gridmet_2020": "sir/gridmet_2020.nc"}``).
     sir_schema : list[SIRSchemaEntry]
         SIR variable schema entries from ``build_sir_schema()``.
-        Each entry contains ``name``, ``units``, and ``statistic`` keys.
+        Each entry contains ``name``, ``units``, ``statistic``, and
+        ``source_dataset`` keys.
     completed_at : datetime
         UTC timestamp when SIR normalization completed.
 

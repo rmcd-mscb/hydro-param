@@ -472,10 +472,14 @@ def normalize_sir(
                     )
                     skipped_variables.append(entry.canonical_name)
                     continue
-                prefixed = f"{entry.dataset_name}__{entry.canonical_name}"
-                out_path = output_dir / f"{prefixed}.csv"
+                out_key = (
+                    f"{entry.dataset_name}__{entry.canonical_name}"
+                    if entry.dataset_name
+                    else entry.canonical_name
+                )
+                out_path = output_dir / f"{out_key}.csv"
                 out_df.to_csv(out_path)
-                sir_files[prefixed] = out_path
+                sir_files[out_key] = out_path
                 logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
             else:
                 # Continuous: find the matching column and rename
@@ -525,10 +529,10 @@ def normalize_sir(
                     index=raw_df.index,
                 )
                 out_df.index.name = id_field
-                prefixed = f"{entry.dataset_name}__{cname}"
-                out_path = output_dir / f"{prefixed}.csv"
+                out_key = f"{entry.dataset_name}__{cname}" if entry.dataset_name else cname
+                out_path = output_dir / f"{out_key}.csv"
                 out_df.to_csv(out_path)
-                sir_files[prefixed] = out_path
+                sir_files[out_key] = out_path
                 logger.info("SIR normalized: %s → %s", raw_key, out_path.name)
 
     if skipped_variables:
@@ -644,7 +648,11 @@ def normalize_sir_temporal(
 
                 cname = schema_entry.canonical_name
                 # Include year suffix to avoid multi-year collisions
-                out_key = f"{schema_entry.dataset_name}__{cname}{year_suffix}"
+                out_key = (
+                    f"{schema_entry.dataset_name}__{cname}{year_suffix}"
+                    if schema_entry.dataset_name
+                    else f"{cname}{year_suffix}"
+                )
 
                 out_ds = xr.Dataset(
                     {cname: (ds[data_var].dims, values)},

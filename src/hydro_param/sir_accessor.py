@@ -65,7 +65,7 @@ class SIRAccessor:
     True
     >>> elev = sir["elevation_m_mean"]
     >>> sir.available_temporal()
-    ['gridmet_2020', 'gridmet_2021']
+    ['pr_mm_mean_2020', 'tmmx_C_mean_2020']
     """
 
     def __init__(self, output_dir: Path) -> None:
@@ -235,7 +235,19 @@ class SIRAccessor:
                 f"SIR file for '{name}' at {path} contains no data columns. "
                 f"Re-run 'hydro-param run pipeline.yml' to regenerate."
             )
-        return next(iter(ds.data_vars.values()))
+        fallback = next(iter(ds.data_vars.values()))
+        if len(ds.data_vars) > 1:
+            logger.warning(
+                "SIR variable '%s' not found as a column in %s. "
+                "File contains %d columns: %s. Returning first column '%s'. "
+                "This may indicate a column naming mismatch.",
+                name,
+                path.name,
+                len(ds.data_vars),
+                sorted(str(v) for v in ds.data_vars),
+                fallback.name,
+            )
+        return fallback
 
     def load_temporal(self, name: str) -> xr.Dataset:
         """Load a single temporal SIR file from disk.
@@ -421,7 +433,12 @@ class SIRAccessor:
             if pattern.match(canonical):
                 matches.append(prefixed_key)
         if matches:
-            resolved = sorted(matches)[-1]
+
+            def _year_key(prefixed: str) -> int:
+                m = pattern.search(_parse_canonical_name(prefixed))
+                return int(m.group(1)) if m else 0
+
+            resolved = max(matches, key=_year_key)
             logger.debug(
                 "Resolved '%s' to year-suffixed variant '%s' (%d candidate(s))",
                 base_name,
@@ -491,8 +508,10 @@ def _build_canonical_index(mapping: dict[str, str]) -> dict[str, str]:
         canonical = _parse_canonical_name(prefixed_key)
         if canonical != prefixed_key:
             if canonical in index:
-                logger.debug(
-                    "Canonical name '%s' maps to multiple prefixed keys: '%s' and '%s'; using '%s'",
+                logger.warning(
+                    "Canonical name '%s' maps to multiple prefixed keys: "
+                    "'%s' and '%s'; using '%s'. Use prefixed names for "
+                    "explicit access.",
                     canonical,
                     index[canonical],
                     prefixed_key,
