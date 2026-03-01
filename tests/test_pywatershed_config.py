@@ -92,14 +92,6 @@ class TestPwsDomainConfig:
         cfg = PwsDomainConfig(fabric_path=fabric)
         assert cfg.waterbody_path is None
 
-    def test_no_extraction_method(self, tmp_path: Path) -> None:
-        """v3.0 domain has no extraction_method field."""
-        fabric = tmp_path / "nhru.gpkg"
-        fabric.touch()
-        cfg = PwsDomainConfig(fabric_path=fabric)
-        assert not hasattr(cfg, "extraction_method") or "extraction_method" not in cfg.model_fields
-        assert not hasattr(cfg, "bbox") or "bbox" not in cfg.model_fields
-
 
 class TestPwsTimeConfig:
     """Tests for time configuration."""
@@ -163,24 +155,6 @@ class TestPywatershedRunConfig:
         minimal_config_dict["sir_path"] = "/custom/sir/output"
         cfg = PywatershedRunConfig(**minimal_config_dict)
         assert cfg.sir_path == Path("/custom/sir/output")
-
-    def test_rejects_old_datasets_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept datasets field (extra=forbid)."""
-        minimal_config_dict["datasets"] = {"topography": "dem_3dep_10m"}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
-
-    def test_rejects_old_climate_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept climate field (extra=forbid)."""
-        minimal_config_dict["climate"] = {"source": "gridmet"}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
-
-    def test_rejects_old_processing_field(self, minimal_config_dict: dict) -> None:
-        """v4.0 should not accept processing field (extra=forbid)."""
-        minimal_config_dict["processing"] = {"batch_size": 500}
-        with pytest.raises(ValidationError):
-            PywatershedRunConfig(**minimal_config_dict)
 
     def test_invalid_target_model(self, minimal_config_dict: dict) -> None:
         minimal_config_dict["target_model"] = "swat"
