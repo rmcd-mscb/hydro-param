@@ -432,8 +432,8 @@ def test_write_variable_file_warns_on_index_mismatch(
 
 
 def test_load_sir_empty_returns_empty_dataset():
-    """load_sir() returns empty Dataset when no files exist."""
-    result = PipelineResult(output_dir=Path("/tmp"), static_files={})
+    """load_sir() returns empty Dataset when sir_files is empty."""
+    result = PipelineResult(output_dir=Path("/tmp"))
     sir = result.load_sir()
     assert isinstance(sir, xr.Dataset)
     assert len(sir.data_vars) == 0

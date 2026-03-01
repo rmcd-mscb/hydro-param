@@ -428,8 +428,9 @@ class PwsOutputConfig(BaseModel):
         Filename for simulation control (default ``"control.yml"``).
     soltab_file : str
         Filename for solar radiation tables (default ``"soltab.nc"``).
-
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     path: Path = Path("./output")
     format: Literal["netcdf", "prms_text"] = "netcdf"

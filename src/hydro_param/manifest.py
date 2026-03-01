@@ -87,8 +87,10 @@ class ManifestEntry(BaseModel):
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
-        """Parse ISO date strings."""
+        """Parse ISO date strings; treat empty strings as incomplete entries."""
         if isinstance(v, str):
+            if not v:
+                return datetime.min.replace(tzinfo=timezone.utc)
             return datetime.fromisoformat(v)
         return v
 
@@ -156,8 +158,10 @@ class SIRManifestEntry(BaseModel):
     @field_validator("completed_at", mode="before")
     @classmethod
     def _parse_completed_at(cls, v: object) -> object:
-        """Parse ISO date strings."""
+        """Parse ISO date strings; treat empty strings as incomplete entries."""
         if isinstance(v, str):
+            if not v:
+                return datetime.min.replace(tzinfo=timezone.utc)
             return datetime.fromisoformat(v)
         return v
 

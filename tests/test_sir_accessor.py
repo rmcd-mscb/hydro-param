@@ -91,6 +91,16 @@ class TestSIRAccessor:
         with pytest.raises(FileNotFoundError, match="No valid manifest"):
             SIRAccessor(tmp_path)
 
+    def test_manifest_without_sir_section_raises(self, tmp_path: Path) -> None:
+        """SIRAccessor raises when manifest exists but sir is None."""
+        from hydro_param.manifest import PipelineManifest
+        from hydro_param.sir_accessor import SIRAccessor
+
+        manifest = PipelineManifest(fabric_fingerprint="test.gpkg|1.0|100", sir=None)
+        manifest.save(tmp_path)
+        with pytest.raises(FileNotFoundError, match="No valid manifest"):
+            SIRAccessor(tmp_path)
+
     def test_contains_check_static(self, sir_dir_with_manifest: Path) -> None:
         from hydro_param.sir_accessor import SIRAccessor
 

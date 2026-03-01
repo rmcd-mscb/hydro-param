@@ -476,8 +476,8 @@ def _build_canonical_index(mapping: dict[str, str]) -> dict[str, str]:
 
     Map canonical (unprefixed) names to their prefixed keys for
     unprefixed lookups.  If two prefixed keys share the same
-    canonical name, the last one wins (alphabetically) and a debug
-    message is logged.
+    canonical name, the last one wins (alphabetically) and a warning
+    is logged.
 
     Parameters
     ----------
