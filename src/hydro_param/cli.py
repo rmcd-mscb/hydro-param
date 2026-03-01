@@ -623,11 +623,9 @@ def pws_run_cmd(config: Path) -> None:
     )
 
     import geopandas as gpd
+    import xarray as xr
 
-    from hydro_param.derivations.pywatershed import (
-        PywatershedDerivation,
-        merge_temporal_into_derived,
-    )
+    from hydro_param.derivations.pywatershed import PywatershedDerivation
     from hydro_param.plugins import DerivationContext, get_formatter
     from hydro_param.pywatershed_config import load_pywatershed_config
     from hydro_param.sir_accessor import SIRAccessor
@@ -720,6 +718,25 @@ def pws_run_cmd(config: Path) -> None:
             )
             raise SystemExit(1)
 
+    # ── Load temporal data from SIR ──
+    temporal: dict[str, xr.Dataset] = {}
+    for name in sir.available_temporal():
+        try:
+            temporal[name] = sir.load_temporal(name)
+        except (OSError, KeyError) as exc:
+            logger.error("Failed to load temporal SIR data '%s': %s", name, exc)
+            logger.error("Re-run 'hydro-param run pipeline.yml' to regenerate SIR output.")
+            raise SystemExit(1) from exc
+
+    if temporal:
+        logger.info(
+            "Loaded %d temporal datasets: %s",
+            len(temporal),
+            list(temporal.keys()),
+        )
+    else:
+        logger.info("No temporal data in SIR; PET/transpiration will use defaults.")
+
     # ── Derive parameters ──
     logger.info("Deriving pywatershed parameters from SIR")
 
@@ -737,6 +754,7 @@ def pws_run_cmd(config: Path) -> None:
         fabric_id_field=pws_config.domain.id_field,
         segment_id_field=pws_config.domain.segment_id_field,
         config=derivation_config,
+        temporal=temporal or None,
     )
 
     try:
@@ -745,23 +763,6 @@ def pws_run_cmd(config: Path) -> None:
     except Exception as exc:
         logger.exception("Parameter derivation failed.")
         raise SystemExit(1) from exc
-
-    # ── Load and merge temporal data ──
-    temporal = {}
-    try:
-        for name in sir.available_temporal():
-            temporal[name] = sir.load_temporal(name)
-    except (OSError, KeyError) as exc:
-        logger.error("Failed to load temporal SIR data: %s", exc)
-        logger.error("Re-run 'hydro-param run pipeline.yml' to regenerate SIR output.")
-        raise SystemExit(1) from exc
-    try:
-        derived = merge_temporal_into_derived(
-            derived,
-            temporal,
-            renames={"pr": "prcp", "tmmx": "tmax", "tmmn": "tmin"},
-            conversions={"tmax": ("K", "C"), "tmin": ("K", "C")},
-        )
     finally:
         for ds in temporal.values():
             ds.close()
