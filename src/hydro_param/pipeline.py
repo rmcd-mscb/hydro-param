@@ -1005,35 +1005,6 @@ def _write_temporal_file(
     return temporal_path
 
 
-def _build_sir_attrs(config: PipelineConfig, n_features: int) -> dict[str, object]:
-    """Build CF-1.8 global metadata attributes for SIR output.
-
-    Parameters
-    ----------
-    config : PipelineConfig
-        Pipeline configuration (provides ``sir_name``, fabric path, etc.).
-    n_features : int
-        Number of features in the target fabric.
-
-    Returns
-    -------
-    dict[str, object]
-        CF-1.8 compliant attribute dictionary suitable for
-        ``xr.Dataset.attrs``.
-    """
-    return {
-        "title": f"Hydrologic parameters: {config.output.sir_name}",
-        "institution": "hydro-param",
-        "source": "hydro-param pipeline",
-        "history": (f"Created {datetime.now(timezone.utc).isoformat()} by hydro-param"),
-        "Conventions": "CF-1.8",
-        "target_fabric": str(config.target_fabric.path),
-        "target_fabric_id_field": config.target_fabric.id_field,
-        "n_features": n_features,
-        "processing_engine": config.processing.engine,
-    }
-
-
 def _save_manifest_to_disk(
     manifest: _manifest_mod.PipelineManifest,
     output_dir: Path,
