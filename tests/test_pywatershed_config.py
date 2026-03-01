@@ -605,6 +605,159 @@ class TestAvailableFieldValidation:
             cfg.validate_available_fields()
 
 
+class TestExtraForbidOnNestedModels:
+    """Verify extra='forbid' catches typos in all nested models."""
+
+    def test_parameter_entry_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            ParameterEntry(
+                source="dem_3dep_10m",
+                variable="elevation",
+                statistic="mean",
+                description="test",
+                typo_field="oops",
+            )
+
+    def test_topography_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            TopographyDatasets(hru_elevv="typo")
+
+    def test_soils_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            SoilsDatasets(soil_typee="typo")
+
+    def test_landcover_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            LandcoverDatasets(cov_types="typo")
+
+    def test_snow_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            SnowDatasets(snarea_threshh="typo")
+
+    def test_waterbody_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            WaterbodyDatasets(hru_types="typo")
+
+    def test_static_datasets_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            StaticDatasetsConfig(vegetation="typo")
+
+    def test_forcing_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            ForcingConfig(precipitation="typo")
+
+    def test_climate_normals_rejects_extra(self) -> None:
+        with pytest.raises(ValidationError, match="extra"):
+            ClimateNormalsConfig(jh_coeff="typo")
+
+
+class TestVariableFieldsMutualExclusion:
+    """Verify variable/variables mutual exclusivity validator."""
+
+    def test_both_variable_and_variables_raises(self) -> None:
+        with pytest.raises(ValidationError, match="variable.*variables|variables.*variable"):
+            ParameterEntry(
+                source="polaris_30m",
+                variable="sand",
+                variables=["sand", "silt", "clay"],
+                statistic="mean",
+                description="test",
+            )
+
+    def test_variable_only_ok(self) -> None:
+        entry = ParameterEntry(
+            source="dem_3dep_10m",
+            variable="elevation",
+            statistic="mean",
+            description="test",
+        )
+        assert entry.variable == "elevation"
+        assert entry.variables is None
+
+    def test_variables_only_ok(self) -> None:
+        entry = ParameterEntry(
+            source="polaris_30m",
+            variables=["sand", "silt", "clay"],
+            statistic="mean",
+            description="test",
+        )
+        assert entry.variables == ["sand", "silt", "clay"]
+        assert entry.variable is None
+
+    def test_neither_ok(self) -> None:
+        """Waterbody entries have no SIR variable."""
+        entry = ParameterEntry(
+            source="domain.waterbody_path",
+            description="HRU type from waterbody overlay",
+        )
+        assert entry.variable is None
+        assert entry.variables is None
+
+
+class TestLoadEmptyYAML:
+    """Verify load_pywatershed_config handles empty/malformed YAML."""
+
+    def test_empty_file_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty.yml"
+        path.write_text("")
+        with pytest.raises(ValueError, match="Expected YAML mapping"):
+            load_pywatershed_config(path)
+
+    def test_non_mapping_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "list.yml"
+        path.write_text("- item1\n- item2\n")
+        with pytest.raises(ValueError, match="Expected YAML mapping"):
+            load_pywatershed_config(path)
+
+
+class TestDeclaredEntriesCombined:
+    """Test declared_entries() collects from all three sections."""
+
+    def test_combined_entries_from_all_sections(self, tmp_path: Path) -> None:
+        fabric = tmp_path / "nhru.gpkg"
+        fabric.touch()
+        cfg = PywatershedRunConfig(
+            version="4.0",
+            domain=PwsDomainConfig(fabric_path=fabric),
+            time=PwsTimeConfig(start="2020-01-01", end="2020-12-31"),
+            static_datasets=StaticDatasetsConfig(
+                topography=TopographyDatasets(
+                    hru_elev=ParameterEntry(
+                        source="dem_3dep_10m",
+                        variable="elevation",
+                        statistic="mean",
+                        description="Mean HRU elevation",
+                    ),
+                ),
+                soils=SoilsDatasets(
+                    soil_type=ParameterEntry(
+                        source="polaris_30m",
+                        variables=["sand", "silt", "clay"],
+                        statistic="mean",
+                        description="Soil type",
+                    ),
+                ),
+            ),
+            forcing=ForcingConfig(
+                prcp=ParameterEntry(
+                    source="gridmet",
+                    variable="pr",
+                    statistic="mean",
+                    description="Daily precipitation",
+                ),
+            ),
+            climate_normals=ClimateNormalsConfig(
+                jh_coef=ParameterEntry(
+                    source="gridmet",
+                    variables=["tmmx", "tmmn"],
+                    description="Jensen-Haise PET coefficient",
+                ),
+            ),
+        )
+        entries = cfg.declared_entries()
+        assert set(entries.keys()) == {"hru_elev", "soil_type", "prcp", "jh_coef"}
+
+
 class TestExampleConfig:
     """Tests for example config files."""
 

@@ -602,7 +602,7 @@ def pws_run_cmd(config: Path) -> None:
     Parameters
     ----------
     config
-        Path to a pywatershed run config YAML file (v3.0).  See
+        Path to a pywatershed run config YAML file (v4.0).  See
         ``PywatershedRunConfig`` for the expected schema.
 
     Raises
@@ -654,7 +654,10 @@ def pws_run_cmd(config: Path) -> None:
         logger.error("Run 'hydro-param run pipeline.yml' first to produce SIR output.")
         raise SystemExit(1) from exc
 
-    # ── Validate config contract against SIR ──
+    # ── Validate available datasets against registry ──
+    pws_config.validate_available_fields()
+
+    # ── Log declared parameter entries for diagnostics ──
     declared = pws_config.declared_entries()
     if declared:
         logger.info("Config declares %d parameter entries:", len(declared))

@@ -5,8 +5,9 @@ Provide Pydantic models that validate the YAML configuration for the
 config that consumes pre-existing SIR output from the generic Phase 1
 pipeline.  It does NOT configure the Phase 1 pipeline itself.
 
-The configuration covers six sections: domain file paths, simulation
-time period, SIR output location, manual parameter overrides, calibration
+The configuration covers nine sections: domain file paths, simulation
+time period, SIR output location, static dataset declarations, forcing
+time series, climate normals, manual parameter overrides, calibration
 seed generation, and output file layout.
 
 Notes
@@ -40,10 +41,17 @@ class ParameterEntry(BaseModel):
     Each entry maps a pywatershed parameter to the pipeline dataset, source
     variable(s), and zonal statistic that produced the SIR data.
 
+    Exactly one of ``variable`` (single) or ``variables`` (list) must be
+    provided for entries backed by SIR data.  Both may be ``None`` only
+    for entries whose ``source`` is not a pipeline dataset (e.g.,
+    waterbody parameters derived from fabric overlay).
+
     Parameters
     ----------
     source : str
-        Pipeline dataset registry name (e.g., ``"dem_3dep_10m"``).
+        Pipeline dataset registry name (e.g., ``"dem_3dep_10m"``),
+        or a reference like ``"domain.waterbody_path"`` for non-SIR
+        entries.
     variable : str or None
         Source variable name when a single variable is used.
     variables : list[str] or None
@@ -57,7 +65,14 @@ class ParameterEntry(BaseModel):
         Temporal range ``[start, end]`` in ISO format for temporal datasets.
     description : str
         Human-readable description of what this parameter represents.
+
+    Raises
+    ------
+    ValueError
+        If both ``variable`` and ``variables`` are set simultaneously.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     source: str
     variable: str | None = None
@@ -66,6 +81,13 @@ class ParameterEntry(BaseModel):
     year: int | list[int] | None = None
     time_period: list[str] | None = None
     description: str
+
+    @model_validator(mode="after")
+    def _check_variable_fields(self) -> Self:
+        """Validate that variable and variables are not both set."""
+        if self.variable is not None and self.variables is not None:
+            raise ValueError("Provide 'variable' (single) or 'variables' (list), not both.")
+        return self
 
 
 class TopographyDatasets(BaseModel):
@@ -82,6 +104,8 @@ class TopographyDatasets(BaseModel):
     hru_aspect : ParameterEntry or None
         Mean HRU aspect.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
     hru_elev: ParameterEntry | None = None
@@ -106,6 +130,8 @@ class SoilsDatasets(BaseModel):
         Recharge zone storage as fraction of soil_moist_max.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     available: list[str] = Field(default_factory=list)
     soil_type: ParameterEntry | None = None
     sat_threshold: ParameterEntry | None = None
@@ -126,6 +152,8 @@ class LandcoverDatasets(BaseModel):
         Impervious surface fraction.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     available: list[str] = Field(default_factory=list)
     cov_type: ParameterEntry | None = None
     hru_percent_imperv: ParameterEntry | None = None
@@ -141,6 +169,8 @@ class SnowDatasets(BaseModel):
     snarea_thresh : ParameterEntry or None
         Snow depletion threshold (calibration seed from historical max SWE).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
     snarea_thresh: ParameterEntry | None = None
@@ -160,6 +190,8 @@ class WaterbodyDatasets(BaseModel):
     dprst_area_max : ParameterEntry or None
         Maximum surface depression area.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
     hru_type: ParameterEntry | None = None
@@ -187,6 +219,8 @@ class StaticDatasetsConfig(BaseModel):
         Depression storage and HRU type.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     topography: TopographyDatasets = Field(default_factory=TopographyDatasets)
     soils: SoilsDatasets = Field(default_factory=SoilsDatasets)
     landcover: LandcoverDatasets = Field(default_factory=LandcoverDatasets)
@@ -197,8 +231,9 @@ class StaticDatasetsConfig(BaseModel):
 class ForcingConfig(BaseModel):
     """Temporal forcing time series declarations.
 
-    pywatershed expects one-variable-per-NetCDF in PRMS units (inches, degF).
-    Only the three required CBH variables appear here.
+    The Phase 2 derivation plugin converts forcing data from SIR units
+    (metric: mm, degC) to PRMS units (inches, degF) during output
+    formatting.  pywatershed expects one-variable-per-NetCDF.
 
     Parameters
     ----------
@@ -211,6 +246,8 @@ class ForcingConfig(BaseModel):
     tmin : ParameterEntry or None
         Daily minimum temperature.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
     prcp: ParameterEntry | None = None
@@ -231,10 +268,12 @@ class ClimateNormalsConfig(BaseModel):
     jh_coef : ParameterEntry or None
         Jensen-Haise PET coefficient (monthly, from tmax/tmin normals).
     transp_beg : ParameterEntry or None
-        Month transpiration begins (from last spring frost).
+        Month transpiration begins (from monthly mean tmin threshold).
     transp_end : ParameterEntry or None
-        Month transpiration ends (from first fall killing frost).
+        Month transpiration ends (from monthly mean tmin threshold).
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
     jh_coef: ParameterEntry | None = None
@@ -529,8 +568,9 @@ class PywatershedRunConfig(BaseModel):
 
         Load the bundled dataset registry and verify that every name in
         each category's ``available`` list is a known dataset.  Unknown
-        entries emit a ``UserWarning`` rather than raising, because the
-        registry may have grown since ``hydro-param init`` ran.
+        entries emit a ``UserWarning`` rather than raising, because they
+        may refer to user-provided local datasets not in the bundled
+        registry.
 
         Warnings
         --------
@@ -600,4 +640,9 @@ def load_pywatershed_config(path: str | Path) -> PywatershedRunConfig:
     """
     with open(path) as f:
         raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Expected YAML mapping in {path}, got {type(raw).__name__}. "
+            f"Check that the file is non-empty and contains valid config."
+        )
     return PywatershedRunConfig(**raw)

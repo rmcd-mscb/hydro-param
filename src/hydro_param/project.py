@@ -422,11 +422,11 @@ climate_normals:
   transp_beg:
     source: gridmet
     variable: tmmn
-    description: "Month transpiration begins (from last spring frost)"
+    description: "Month transpiration begins (from monthly mean tmin threshold)"
   transp_end:
     source: gridmet
     variable: tmmn
-    description: "Month transpiration ends (from first fall killing frost)"
+    description: "Month transpiration ends (from monthly mean tmin threshold)"
 
 # --- Parameter Overrides ---
 # Manually override any derived parameter value.
