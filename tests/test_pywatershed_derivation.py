@@ -1625,6 +1625,55 @@ class TestForcingVariablesYAML:
 # ------------------------------------------------------------------
 
 
+class TestBuildSirToForcingLookup:
+    """Tests for _build_sir_to_forcing_lookup reverse mapping."""
+
+    def test_returns_all_five_gridmet_variables(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Reverse lookup contains all 5 gridmet SIR variable names."""
+        from importlib.resources import files
+
+        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
+        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
+        expected_sir_names = {
+            "pr_mm_mean",
+            "tmmx_C_mean",
+            "tmmn_C_mean",
+            "srad_W_m2_mean",
+            "pet_mm_mean",
+        }
+        assert set(lookup.keys()) == expected_sir_names
+
+    def test_prms_names_correct(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Each SIR name maps to the correct PRMS name."""
+        from importlib.resources import files
+
+        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
+        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
+        assert lookup["pr_mm_mean"]["prms_name"] == "prcp"
+        assert lookup["tmmx_C_mean"]["prms_name"] == "tmax"
+        assert lookup["tmmn_C_mean"]["prms_name"] == "tmin"
+        assert lookup["srad_W_m2_mean"]["prms_name"] == "swrad"
+        assert lookup["pet_mm_mean"]["prms_name"] == "potet"
+
+    def test_source_field_present(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Each entry includes the source dataset name."""
+        from importlib.resources import files
+
+        tables_dir = Path(str(files("hydro_param").joinpath("data/pywatershed/lookup_tables")))
+        lookup = derivation._build_sir_to_forcing_lookup(tables_dir)
+        for entry in lookup.values():
+            assert entry["source"] == "gridmet"
+
+
 class TestDeriveForcing:
     """Tests for _derive_forcing (step 7)."""
 
