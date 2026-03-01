@@ -323,10 +323,10 @@ class TestCategoryModels:
         assert isinstance(sd.waterbodies, WaterbodyDatasets)
 
 
-class TestPywatershedRunConfigV4:
-    """Tests for v4.0 config with static_datasets, forcing, climate_normals."""
+class TestPywatershedRunConfigSections:
+    """Tests for config sections: static_datasets, forcing, climate_normals."""
 
-    def test_v4_accepts_new_sections(self, tmp_path: Path) -> None:
+    def test_accepts_dataset_sections(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         cfg = PywatershedRunConfig(
@@ -348,7 +348,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.version == "4.0"
         assert cfg.static_datasets.topography.hru_elev is not None
 
-    def test_v4_defaults_all_sections_empty(self, tmp_path: Path) -> None:
+    def test_defaults_all_sections_empty(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         cfg = PywatershedRunConfig(
@@ -360,7 +360,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.forcing.prcp is None
         assert cfg.climate_normals.jh_coef is None
 
-    def test_v4_full_config_from_yaml(self, tmp_path: Path) -> None:
+    def test_full_config_from_yaml(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         config_dict = {
@@ -436,7 +436,7 @@ class TestPywatershedRunConfigV4:
         assert cfg.forcing.prcp.source == "gridmet"
         assert cfg.climate_normals.transp_beg.source == "gridmet"
 
-    def test_v4_rejects_unknown_top_level_field(self, tmp_path: Path) -> None:
+    def test_rejects_unknown_top_level_field(self, tmp_path: Path) -> None:
         fabric = tmp_path / "nhru.gpkg"
         fabric.touch()
         with pytest.raises(ValidationError, match="extra"):
