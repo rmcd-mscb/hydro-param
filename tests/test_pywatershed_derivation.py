@@ -573,6 +573,239 @@ class TestDeriveSoils:
         expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
+    def test_soil_type_from_continuous_percentages(self, derivation: PywatershedDerivation) -> None:
+        """Falls back to USDA texture triangle when only continuous percentages available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0, 40.0, 20.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([5.0, 40.0, 20.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0, 20.0, 60.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0, 100.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # sand(90/5/5) -> PRMS 1, loam(40/40/20) -> PRMS 2, clay(20/20/60) -> PRMS 3
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2, 3])
+
+    def test_soil_type_percentages_preferred_over_skip(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Percentages path used when no fractions or single texture available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([82.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([10.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([8.0])),
+                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # loamy_sand(82/10/8) -> PRMS 1 (coarse)
+        assert ds["soil_type"].values[0] == 1
+
+    def test_soil_type_fractions_preferred_over_percentages(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Fraction columns take priority over continuous percentages."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # Fractions say sand dominant
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.8])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2])),
+                    # Percentages say clay dominant (should be ignored)
+                    "sand_pct_mean": ("nhm_id", np.array([10.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([10.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([80.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Fractions win: sand=0.8 > clay=0.2 -> PRMS 1
+        assert ds["soil_type"].values[0] == 1
+
+    def test_soil_type_continuous_with_partial_nan(self, derivation: PywatershedDerivation) -> None:
+        """Partial NaN in one HRU defaults that HRU to loam (soil_type=2)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0, np.nan])),
+                    "silt_pct_mean": ("nhm_id", np.array([5.0, 30.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0, 30.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # HRU 1: sand(90/5/5) -> PRMS 1; HRU 2: NaN -> default loam -> PRMS 2
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2])
+
+    def test_soil_type_skipped_with_partial_continuous_vars(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Only 2 of 3 continuous vars present — should skip, not crash."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0])),
+                    # silt_pct_mean intentionally missing
+                    "awc_mm_mean": ("nhm_id", np.array([50.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # No texture data available — soil_type should not be derived
+        assert "soil_type" not in ds
+
+
+class TestClassifyUsdaTexture:
+    """Tests for USDA soil texture triangle classification."""
+
+    def test_pure_sand(self, derivation: PywatershedDerivation) -> None:
+        """High sand, low clay -> sand."""
+        result = derivation._classify_usda_texture(
+            np.array([90.0]), np.array([5.0]), np.array([5.0])
+        )
+        assert result[0] == "sand"
+
+    def test_pure_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay -> clay."""
+        result = derivation._classify_usda_texture(
+            np.array([20.0]), np.array([20.0]), np.array([60.0])
+        )
+        assert result[0] == "clay"
+
+    def test_loam_center(self, derivation: PywatershedDerivation) -> None:
+        """Classic loam composition."""
+        result = derivation._classify_usda_texture(
+            np.array([40.0]), np.array([40.0]), np.array([20.0])
+        )
+        assert result[0] == "loam"
+
+    def test_silt(self, derivation: PywatershedDerivation) -> None:
+        """Very high silt, low clay -> silt."""
+        result = derivation._classify_usda_texture(
+            np.array([5.0]), np.array([90.0]), np.array([5.0])
+        )
+        assert result[0] == "silt"
+
+    def test_silt_loam(self, derivation: PywatershedDerivation) -> None:
+        """High silt, moderate clay -> silt_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([20.0]), np.array([60.0]), np.array([20.0])
+        )
+        assert result[0] == "silt_loam"
+
+    def test_sandy_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate sand, low clay -> sandy_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([65.0]), np.array([25.0]), np.array([10.0])
+        )
+        assert result[0] == "sandy_loam"
+
+    def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
+        """High sand but not pure sand -> loamy_sand.
+
+        The loamy_sand region requires silt + 1.5*clay >= 15 (above the
+        sand boundary) AND silt + 2*clay < 30 (below the sandy_loam
+        boundary).  Point (82/10/8) has silt + 2*clay = 26, clearly
+        interior.
+        """
+        result = derivation._classify_usda_texture(
+            np.array([82.0]), np.array([10.0]), np.array([8.0])
+        )
+        assert result[0] == "loamy_sand"
+
+    def test_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, moderate sand -> clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([30.0]), np.array([35.0]), np.array([35.0])
+        )
+        assert result[0] == "clay_loam"
+
+    def test_silty_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, high silt, low sand -> silty_clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([10.0]), np.array([55.0]), np.array([35.0])
+        )
+        assert result[0] == "silty_clay_loam"
+
+    def test_sandy_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, high sand, low silt -> sandy_clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([60.0]), np.array([15.0]), np.array([25.0])
+        )
+        assert result[0] == "sandy_clay_loam"
+
+    def test_sandy_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay + high sand -> sandy_clay."""
+        result = derivation._classify_usda_texture(
+            np.array([50.0]), np.array([10.0]), np.array([40.0])
+        )
+        assert result[0] == "sandy_clay"
+
+    def test_silty_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay + high silt -> silty_clay."""
+        result = derivation._classify_usda_texture(
+            np.array([5.0]), np.array([50.0]), np.array([45.0])
+        )
+        assert result[0] == "silty_clay"
+
+    def test_vectorized_multiple_hrus(self, derivation: PywatershedDerivation) -> None:
+        """Classifies multiple HRUs at once."""
+        sand = np.array([90.0, 20.0, 40.0])
+        silt = np.array([5.0, 20.0, 40.0])
+        clay = np.array([5.0, 60.0, 20.0])
+        result = derivation._classify_usda_texture(sand, silt, clay)
+        assert list(result) == ["sand", "clay", "loam"]
+
+    def test_nan_values_default_to_loam(self, derivation: PywatershedDerivation) -> None:
+        """NaN inputs classify as loam (safe default)."""
+        result = derivation._classify_usda_texture(
+            np.array([np.nan]), np.array([np.nan]), np.array([np.nan])
+        )
+        assert result[0] == "loam"
+
+    def test_exhaustive_no_false_loam_defaults(self, derivation: PywatershedDerivation) -> None:
+        """Every integer (sand, silt, clay) triple classifies into a region
+        that matches the USDA Soil Survey Manual definition — no points
+        fall through to the default loam unless they genuinely belong there.
+
+        Sweeps all 5151 valid triples at 1% resolution.
+        """
+        for sand in range(0, 101):
+            for clay in range(0, 101 - sand):
+                silt = 100 - sand - clay
+                result = derivation._classify_usda_texture(
+                    np.array([float(sand)]),
+                    np.array([float(silt)]),
+                    np.array([float(clay)]),
+                )[0]
+                if result == "loam":
+                    assert clay >= 7 and clay < 27 and silt >= 28 and silt < 50 and sand <= 52, (
+                        f"({sand}, {silt}, {clay}) classified as loam but "
+                        f"is outside the USDA loam region"
+                    )
+
 
 class TestApplyLookupTables:
     """Tests for step 8: lookup table application."""
