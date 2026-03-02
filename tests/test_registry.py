@@ -916,3 +916,31 @@ def test_bundled_temporal_datasets_have_year_range_and_time_step():
         if entry.temporal:
             assert entry.year_range is not None, f"Temporal dataset '{name}' missing year_range"
             assert entry.time_step is not None, f"Temporal dataset '{name}' missing time_step"
+
+
+class TestDerivedCategoricalSpec:
+    """Tests for DerivedCategoricalSpec model."""
+
+    def test_basic_creation(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        spec = DerivedCategoricalSpec(
+            name="soil_texture",
+            sources=["sand", "silt", "clay"],
+            method="usda_texture_triangle",
+            units="class",
+            long_name="USDA soil texture classification",
+        )
+        assert spec.name == "soil_texture"
+        assert spec.sources == ["sand", "silt", "clay"]
+        assert spec.method == "usda_texture_triangle"
+
+    def test_sources_must_have_at_least_two(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        with pytest.raises(ValidationError):
+            DerivedCategoricalSpec(
+                name="bad",
+                sources=["single"],
+                method="test",
+            )

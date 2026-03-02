@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class VariableSpec(BaseModel):
@@ -109,6 +109,52 @@ class DerivedVariableSpec(BaseModel):
     method: str
     units: str = ""
     long_name: str = ""
+
+
+class DerivedCategoricalSpec(BaseModel):
+    """Describe a categorical variable derived from multiple source variables.
+
+    Multi-source categorical derivations classify pixels by combining
+    two or more source bands (e.g., USDA texture triangle from
+    sand/silt/clay percentages).  The result is a single-band
+    categorical raster processed with categorical zonal statistics to
+    produce per-class fraction columns.
+
+    Unlike ``DerivedVariableSpec`` (single source, continuous output),
+    this always produces categorical output with per-class fractions.
+
+    Attributes
+    ----------
+    name : str
+        Logical name for the derived variable (e.g.,
+        ``"soil_texture"``).
+    sources : list[str]
+        Names of the source ``VariableSpec`` entries this is derived
+        from (e.g., ``["sand", "silt", "clay"]``).  Must contain at
+        least 2 entries.
+    method : str
+        Classification method key used to look up the derivation
+        function via
+        ``hydro_param.data_access.CATEGORICAL_DERIVATION_FUNCTIONS``.
+    units : str
+        Units of the derived variable (typically ``"class"``).
+    long_name : str
+        Human-readable description for metadata.
+    """
+
+    name: str
+    sources: list[str]
+    method: str
+    units: str = ""
+    long_name: str = ""
+
+    @field_validator("sources")
+    @classmethod
+    def _check_min_sources(cls, v: list[str]) -> list[str]:
+        if len(v) < 2:
+            msg = "DerivedCategoricalSpec requires at least 2 sources"
+            raise ValueError(msg)
+        return v
 
 
 class DownloadFile(BaseModel):
