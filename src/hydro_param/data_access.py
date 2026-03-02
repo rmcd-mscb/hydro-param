@@ -291,6 +291,14 @@ def classify_usda_texture_raster(
     xarray DataArray I/O.  Returns a float64 raster with class codes
     (1--12) suitable for categorical zonal statistics.
 
+    Before classification, sand/silt/clay values are normalized to sum
+    to 100% at each pixel.  This is necessary because POLARIS (and
+    similar ML-derived soil products) estimate each fraction
+    independently, so pixel-level sums can deviate significantly from
+    100%.  Normalization preserves the relative proportions — which
+    correctly indicate the texture triangle region — while ensuring
+    each pixel represents a valid soil composition.
+
     Parameters
     ----------
     sand : xr.DataArray
@@ -311,11 +319,33 @@ def classify_usda_texture_raster(
     hydro_param.classification.classify_usda_texture : Core classifier.
     hydro_param.classification.USDA_TEXTURE_CLASSES : Code-to-name mapping.
     """
-    codes = classify_usda_texture(
-        sand.values.astype(np.float64).ravel(),
-        silt.values.astype(np.float64).ravel(),
-        clay.values.astype(np.float64).ravel(),
-    )
+    s = sand.values.astype(np.float64).ravel()
+    si = silt.values.astype(np.float64).ravel()
+    c = clay.values.astype(np.float64).ravel()
+
+    # Normalize to sum=100 where all three values are valid.
+    # This corrects for independently-estimated fractions (e.g. POLARIS)
+    # that don't sum to 100%.
+    total = s + si + c
+    valid = ~(np.isnan(s) | np.isnan(si) | np.isnan(c))
+    need_norm = valid & (np.abs(total - 100.0) > 0.01)
+    n_normalized = int(np.sum(need_norm))
+    if n_normalized > 0:
+        deviations = np.abs(total[need_norm] - 100.0)
+        logger.info(
+            "classify_usda_texture_raster: normalized %d/%d pixel(s) "
+            "to sum=100%% (mean deviation: %.1f%%, max: %.1f%%)",
+            n_normalized,
+            int(np.sum(valid)),
+            float(np.mean(deviations)),
+            float(np.max(deviations)),
+        )
+        scale = 100.0 / total[need_norm]
+        s[need_norm] *= scale
+        si[need_norm] *= scale
+        c[need_norm] *= scale
+
+    codes = classify_usda_texture(s, si, c)
     out = sand.copy(data=codes.reshape(sand.shape))
     out.name = "soil_texture"
     out.attrs = {"units": "class", "long_name": "USDA soil texture classification"}
