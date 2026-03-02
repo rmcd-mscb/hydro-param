@@ -1512,7 +1512,7 @@ class PywatershedDerivation:
         available water capacity (``awc_mm_mean``) or, as a fallback,
         available water storage (``aws0_100_cm_mean``).
 
-        Supports two input modes for soil texture:
+        Supports three input modes for soil texture:
 
         1. **Soil texture fractions** (preferred): SIR contains columns
            like ``soil_texture_frac_sand``, ``soil_texture_frac_loam``,
@@ -1521,6 +1521,11 @@ class PywatershedDerivation:
         2. **Single texture class**: ``soil_texture`` or
            ``soil_texture_majority`` variable containing the dominant
            USDA texture class name per HRU.
+        3. **Continuous percentages** (fallback): SIR contains
+           ``sand_pct_mean``, ``silt_pct_mean``, ``clay_pct_mean``
+           from POLARIS.  Each HRU's mean percentages are classified
+           via the USDA soil texture triangle, then mapped to PRMS
+           soil_type.  This is an aggregate-then-classify approach.
 
         Parameters
         ----------
@@ -1569,8 +1574,9 @@ class PywatershedDerivation:
         else:
             logger.warning(
                 "Skipping soil_type derivation (step 5): no soil texture data "
-                "found in SIR. Expected soil_texture_frac_* columns or "
-                "soil_texture/soil_texture_majority variable."
+                "found in SIR. Expected soil_texture_frac_* columns, "
+                "soil_texture/soil_texture_majority variable, or continuous "
+                "sand_pct_mean/silt_pct_mean/clay_pct_mean percentages."
             )
 
         # --- soil_moist_max ---
@@ -1712,8 +1718,9 @@ class PywatershedDerivation:
         """Compute PRMS soil_type from SIR soil texture data.
 
         Try fraction columns first (argmax across texture classes), then
-        fall back to a single texture class variable.  Unrecognized
-        texture names default to loam (soil_type=2).
+        fall back to a single texture class variable, then to continuous
+        sand/silt/clay percentages via USDA texture triangle classification.
+        Unrecognized texture names default to loam (soil_type=2).
 
         Parameters
         ----------
@@ -1733,8 +1740,9 @@ class PywatershedDerivation:
         prefix = "soil_texture_frac_"
         fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
         has_single = any(c in sir for c in ("soil_texture", "soil_texture_majority"))
+        has_continuous = all(v in sir for v in ("sand_pct_mean", "silt_pct_mean", "clay_pct_mean"))
 
-        if len(fraction_vars) < 2 and not has_single:
+        if len(fraction_vars) < 2 and not has_single and not has_continuous:
             return None
 
         tables_dir = ctx.resolved_lookup_tables_dir
@@ -1789,6 +1797,22 @@ class PywatershedDerivation:
                         candidate,
                     )
                 return np.array(result)
+
+        # Fallback: classify continuous sand/silt/clay percentages via
+        # the USDA texture triangle.  This is an aggregate-then-classify
+        # approach — HRU-mean percentages are classified directly, which
+        # may differ from pixel-level classification.
+        if has_continuous:
+            sand = sir["sand_pct_mean"].values.astype(np.float64)
+            silt = sir["silt_pct_mean"].values.astype(np.float64)
+            clay = sir["clay_pct_mean"].values.astype(np.float64)
+            texture_names = self._classify_usda_texture(sand, silt, clay)
+            logger.info(
+                "soil_type: classified %d HRUs from continuous sand/silt/clay "
+                "percentages via USDA texture triangle (aggregate-then-classify)",
+                len(texture_names),
+            )
+            return np.array([mapping.get(name, 2) for name in texture_names])
 
         return None
 
