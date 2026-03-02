@@ -969,3 +969,26 @@ class TestDerivedCategoricalParsing:
     def test_defaults_to_empty_list(self) -> None:
         entry = DatasetEntry(strategy="local_tiff", variables=[])
         assert entry.derived_categorical_variables == []
+
+    def test_resolve_derived_categorical_variable(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        entry = DatasetEntry(
+            strategy="local_tiff",
+            variables=[
+                VariableSpec(name="sand"),
+                VariableSpec(name="silt"),
+                VariableSpec(name="clay"),
+            ],
+            derived_categorical_variables=[
+                DerivedCategoricalSpec(
+                    name="soil_texture",
+                    sources=["sand", "silt", "clay"],
+                    method="usda_texture_triangle",
+                )
+            ],
+        )
+        registry = DatasetRegistry(datasets={"test": entry})
+        spec = registry.resolve_variable("test", "soil_texture")
+        assert isinstance(spec, DerivedCategoricalSpec)
+        assert spec.sources == ["sand", "silt", "clay"]

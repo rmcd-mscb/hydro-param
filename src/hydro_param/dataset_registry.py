@@ -477,11 +477,11 @@ class DatasetRegistry(BaseModel):
 
     def resolve_variable(
         self, dataset_name: str, variable_name: str
-    ) -> VariableSpec | DerivedVariableSpec:
+    ) -> VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec:
         """Resolve a variable name to its specification within a dataset.
 
-        Search both direct variables and derived variables in the named
-        dataset.  Direct variables are checked first.
+        Search direct variables, derived variables, and derived categorical
+        variables in the named dataset.  Direct variables are checked first.
 
         Parameters
         ----------
@@ -509,7 +509,14 @@ class DatasetRegistry(BaseModel):
         for dv in entry.derived_variables:
             if dv.name == variable_name:
                 return dv
-        available = [v.name for v in entry.variables] + [dv.name for dv in entry.derived_variables]
+        for dcv in entry.derived_categorical_variables:
+            if dcv.name == variable_name:
+                return dcv
+        available = (
+            [v.name for v in entry.variables]
+            + [dv.name for dv in entry.derived_variables]
+            + [dcv.name for dcv in entry.derived_categorical_variables]
+        )
         raise KeyError(
             f"Variable '{variable_name}' not found in dataset '{dataset_name}'. "
             f"Available: {', '.join(available)}"
