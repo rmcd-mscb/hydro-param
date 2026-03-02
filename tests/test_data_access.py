@@ -490,3 +490,91 @@ class TestClassifyUsdaTextureRaster:
         result = classify_usda_texture_raster(sand, silt, clay)
         assert list(result.coords["y"].values) == [1.0]
         assert list(result.coords["x"].values) == [2.0]
+
+    def test_normalization_corrects_sum(self) -> None:
+        """Pixels with sand+silt+clay != 100 are normalized before classification."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        # 45+38+22 = 105 (percentages ~ 43/36/21 after normalization → loam)
+        sand = xr.DataArray([[45.0]], dims=["y", "x"])
+        silt = xr.DataArray([[38.0]], dims=["y", "x"])
+        clay = xr.DataArray([[22.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        # After normalization: sand≈42.9, silt≈36.2, clay≈21.0 → loam (5)
+        assert result.values[0, 0] == 5
+
+    def test_normalization_preserves_correct_sums(self) -> None:
+        """Pixels already summing to 100 are not modified."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[90.0]], dims=["y", "x"])
+        silt = xr.DataArray([[5.0]], dims=["y", "x"])
+        clay = xr.DataArray([[5.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert result.values[0, 0] == 1  # sand
+
+    def test_normalization_skips_nan_pixels(self) -> None:
+        """NaN pixels are not normalized and remain NaN."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[np.nan, 90.0]], dims=["y", "x"])
+        silt = xr.DataArray([[np.nan, 5.0]], dims=["y", "x"])
+        clay = xr.DataArray([[np.nan, 5.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert np.isnan(result.values[0, 0])
+        assert result.values[0, 1] == 1  # sand
+
+    def test_normalization_large_deviation(self) -> None:
+        """Large deviations are corrected — relative proportions decide class."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        # 60+40+30 = 130 → normalized: sand≈46.2, silt≈30.8, clay≈23.1
+        # clay∈[7,27), silt∈[28,50), sand≤52 → loam (5)
+        sand = xr.DataArray([[60.0]], dims=["y", "x"])
+        silt = xr.DataArray([[40.0]], dims=["y", "x"])
+        clay = xr.DataArray([[30.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert result.values[0, 0] == 5  # loam
+
+    def test_normalization_under_sum(self) -> None:
+        """Pixels summing below 100 are scaled up, preserving relative percentages."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        # 36+32+12 = 80 → normalized: sand=45, silt=40, clay=15 → loam (5)
+        sand = xr.DataArray([[36.0]], dims=["y", "x"])
+        silt = xr.DataArray([[32.0]], dims=["y", "x"])
+        clay = xr.DataArray([[12.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert result.values[0, 0] == 5  # loam
+
+    def test_normalization_zero_sum_produces_nan(self) -> None:
+        """All-zero fractions are treated as no-data (NaN)."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[0.0]], dims=["y", "x"])
+        silt = xr.DataArray([[0.0]], dims=["y", "x"])
+        clay = xr.DataArray([[0.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert np.isnan(result.values[0, 0])
+
+    def test_normalization_partial_nan(self) -> None:
+        """A pixel with only one NaN component is treated as no-data."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[40.0]], dims=["y", "x"])
+        silt = xr.DataArray([[np.nan]], dims=["y", "x"])
+        clay = xr.DataArray([[20.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert np.isnan(result.values[0, 0])
+
+    def test_negative_values_clamped_to_zero(self) -> None:
+        """Negative ML regression artifacts are clamped to zero before classification."""
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        # sand=-5 clamped to 0, then 0+90+10=100 → silt (8)
+        sand = xr.DataArray([[-5.0]], dims=["y", "x"])
+        silt = xr.DataArray([[90.0]], dims=["y", "x"])
+        clay = xr.DataArray([[10.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        # After clamping: 0+90+10=100 → silt>=80, clay<12 → silt (8)
+        assert result.values[0, 0] == 8  # silt
