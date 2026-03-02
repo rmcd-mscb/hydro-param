@@ -201,14 +201,14 @@ parameters:
   soltab_potsw:
     dimension: [nhru, 366]
     units: langleys_per_day
-    valid_range: [0.0, 1000.0]
+    valid_range: [0.0, 2000.0]
     required: false
     description: "Potential shortwave radiation table"
 
   soltab_horad_potsw:
     dimension: [nhru, 366]
     units: langleys_per_day
-    valid_range: [0.0, 1000.0]
+    valid_range: [0.0, 2000.0]
     required: false
     description: "Horizontal potential shortwave radiation"
 
