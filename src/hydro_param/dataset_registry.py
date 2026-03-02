@@ -7,9 +7,10 @@ stage 2 (``stage2_resolve_datasets``) consults the registry to resolve
 user-requested datasets and variables into concrete access instructions.
 
 The registry supports five access strategies (``stac_cog``, ``local_tiff``,
-``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and two
-variable types (direct ``VariableSpec`` and terrain-derived
-``DerivedVariableSpec``).
+``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and three
+variable types (direct ``VariableSpec``, terrain-derived
+``DerivedVariableSpec``, and multi-source categorical
+``DerivedCategoricalSpec``).
 
 References
 ----------
@@ -155,6 +156,10 @@ class DerivedCategoricalSpec(BaseModel):
             msg = "DerivedCategoricalSpec requires at least 2 sources"
             raise ValueError(msg)
         return v
+
+
+#: Union of all variable specification types used throughout the pipeline.
+AnyVariableSpec = VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec
 
 
 class DownloadFile(BaseModel):
@@ -492,8 +497,9 @@ class DatasetRegistry(BaseModel):
 
         Returns
         -------
-        VariableSpec or DerivedVariableSpec
-            The matching variable specification.
+        VariableSpec or DerivedVariableSpec or DerivedCategoricalSpec
+            The matching variable specification.  Direct variables are
+            checked first, then derived, then derived categorical.
 
         Raises
         ------

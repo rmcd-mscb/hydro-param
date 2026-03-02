@@ -42,6 +42,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 
 from hydro_param.config import DatasetRequest, PipelineConfig, ProcessingConfig
 from hydro_param.dataset_registry import (
+    AnyVariableSpec,
     DatasetEntry,
     DerivedCategoricalSpec,
     DerivedVariableSpec,
@@ -379,10 +380,34 @@ def fabric_fingerprint(config: PipelineConfig) -> str:
     return f"{path.name}|{stat.st_mtime}|{stat.st_size}"
 
 
+def _serialize_var_spec(v: AnyVariableSpec) -> dict[str, int | str | None]:
+    """Serialize a variable spec for fingerprinting."""
+    if isinstance(v, VariableSpec):
+        return {
+            "name": v.name,
+            "band": v.band,
+            "categorical": v.categorical,
+            "source_override": v.source_override,
+        }
+    if isinstance(v, DerivedCategoricalSpec):
+        return {
+            "name": v.name,
+            "sources": ",".join(v.sources),
+            "method": v.method,
+        }
+    if isinstance(v, DerivedVariableSpec):
+        return {
+            "name": v.name,
+            "source": v.source,
+            "method": v.method,
+        }
+    raise TypeError(f"Unexpected variable spec type: {type(v).__name__}")
+
+
 def dataset_fingerprint(
     ds_req: DatasetRequest,
     entry: DatasetEntry,
-    var_specs: list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+    var_specs: list[AnyVariableSpec],
     processing: ProcessingConfig,
 ) -> str:
     """Compute a SHA-256 fingerprint for a dataset processing request.
@@ -443,29 +468,7 @@ def dataset_fingerprint(
             "x_coord": entry.x_coord,
             "y_coord": entry.y_coord,
         },
-        "var_specs": [
-            (
-                {
-                    "name": v.name,
-                    "band": v.band,
-                    "categorical": v.categorical,
-                    "source_override": v.source_override,
-                }
-                if isinstance(v, VariableSpec)
-                else {
-                    "name": v.name,
-                    "sources": ",".join(v.sources),
-                    "method": v.method,
-                }
-                if isinstance(v, DerivedCategoricalSpec)
-                else {
-                    "name": v.name,
-                    "source": v.source,
-                    "method": v.method,
-                }
-            )
-            for v in var_specs
-        ],
+        "var_specs": [_serialize_var_spec(v) for v in var_specs],
         "processing": {
             "engine": processing.engine,
             "batch_size": processing.batch_size,

@@ -288,8 +288,8 @@ def classify_usda_texture_raster(
     """Classify sand/silt/clay percentage rasters into USDA texture classes.
 
     Thin wrapper around ``classify_usda_texture()`` that handles
-    xarray DataArray I/O.  Returns a single-band integer raster with
-    class codes (1--12) suitable for categorical zonal statistics.
+    xarray DataArray I/O.  Returns a float64 raster with class codes
+    (1--12) suitable for categorical zonal statistics.
 
     Parameters
     ----------
@@ -303,8 +303,8 @@ def classify_usda_texture_raster(
     Returns
     -------
     xr.DataArray
-        Integer raster with USDA texture class codes (1--12).
-        NaN inputs produce NaN output.
+        Float64 raster with USDA texture class codes (1--12).
+        Elements where any input is NaN remain NaN.
 
     See Also
     --------

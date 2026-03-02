@@ -1561,7 +1561,7 @@ class PywatershedDerivation:
         See Also
         --------
         _compute_soil_type : Texture classification and PRMS mapping.
-        _classify_usda_texture : USDA texture triangle decision tree.
+        hydro_param.classification.classify_usda_texture : USDA texture triangle.
         """
         sir = ctx.sir
 
@@ -1660,7 +1660,7 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _classify_usda_texture : USDA texture triangle decision tree.
+        hydro_param.classification.classify_usda_texture : USDA texture triangle.
         """
         # Check data availability before loading lookup table
         prefix = "soil_texture_frac_"
@@ -1733,6 +1733,16 @@ class PywatershedDerivation:
             silt = sir["silt_pct_mean"].values.astype(np.float64)
             clay = sir["clay_pct_mean"].values.astype(np.float64)
             codes = classify_usda_texture(sand, silt, clay)
+            nan_mask = np.isnan(codes)
+            nan_count = int(np.sum(nan_mask))
+            if nan_count > 0:
+                logger.warning(
+                    "soil_type: %d/%d HRU(s) have NaN sand/silt/clay "
+                    "percentages; defaulting to loam (soil_type=2). "
+                    "Check source data coverage.",
+                    nan_count,
+                    len(codes),
+                )
             texture_names = np.array(
                 [
                     USDA_TEXTURE_CLASSES.get(int(c), "loam") if not np.isnan(c) else "loam"
@@ -1744,7 +1754,18 @@ class PywatershedDerivation:
                 "percentages via USDA texture triangle (aggregate-then-classify)",
                 len(texture_names),
             )
-            return np.array([mapping[name] for name in texture_names])
+            result_arr = []
+            for name in texture_names:
+                if name in mapping:
+                    result_arr.append(mapping[name])
+                else:
+                    logger.warning(
+                        "soil_type: unrecognized texture name '%s' from USDA "
+                        "triangle; defaulting to loam (soil_type=2)",
+                        name,
+                    )
+                    result_arr.append(mapping.get("loam", 2))
+            return np.array(result_arr)
 
         return None
 

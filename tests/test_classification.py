@@ -100,10 +100,7 @@ class TestClassifyUsdaTexture:
         assert len(USDA_TEXTURE_CLASSES) == 12
         assert set(USDA_TEXTURE_CLASSES.keys()) == set(range(1, 13))
 
-    def test_fraction_scale_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Values in 0-1 range trigger a warning."""
-        import logging
-
-        with caplog.at_level(logging.WARNING):
+    def test_fraction_scale_raises(self) -> None:
+        """Values in 0-1 range raise ValueError."""
+        with pytest.raises(ValueError, match="fractions"):
             classify_usda_texture(np.array([0.4]), np.array([0.4]), np.array([0.2]))
-        assert "fractions" in caplog.text.lower()

@@ -2566,3 +2566,51 @@ def test_stage2_auto_includes_derived_categorical_sources() -> None:
     assert "clay" in var_names
     assert "soil_texture" in var_names
     assert "ksat" in var_names
+
+    # Verify ordering: sources appear before DerivedCategoricalSpec
+    from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+    dc_idx = next(i for i, v in enumerate(var_specs) if isinstance(v, DerivedCategoricalSpec))
+    for src in ["sand", "silt", "clay"]:
+        src_idx = var_names.index(src)
+        assert src_idx < dc_idx, f"Source '{src}' should appear before DerivedCategoricalSpec"
+
+
+def test_process_batch_derived_categorical_missing_source(tmp_path: Path) -> None:
+    """_process_batch raises FileNotFoundError when source GeoTIFFs are missing."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import (
+        DatasetEntry,
+        DerivedCategoricalSpec,
+    )
+    from hydro_param.pipeline import _process_batch
+
+    entry = DatasetEntry(strategy="local_tiff")
+    ds_req = DatasetRequest(
+        name="test_ds",
+        variables=["soil_texture"],
+        statistics=["categorical"],
+    )
+    dc_spec = DerivedCategoricalSpec(
+        name="soil_texture",
+        sources=["sand", "silt", "clay"],
+        method="usda_texture_triangle",
+    )
+    config = PipelineConfig(
+        target_fabric={"path": "/tmp/test.gpkg", "id_field": "nhm_id"},
+        datasets=[ds_req],
+        output={"path": "/tmp/out"},
+    )
+
+    fabric = gpd.GeoDataFrame(
+        {"nhm_id": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    # Only DerivedCategoricalSpec in var_specs, no source GeoTIFFs on disk
+    with pytest.raises(FileNotFoundError, match="missing source GeoTIFFs"):
+        _process_batch(fabric, entry, ds_req, [dc_spec], config, tmp_path)

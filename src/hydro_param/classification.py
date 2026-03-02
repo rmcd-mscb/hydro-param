@@ -92,11 +92,12 @@ def classify_usda_texture(
     if valid.any():
         totals = (s + si + c)[valid]
         if np.all(totals < 2.0):
-            logger.warning(
+            msg = (
                 "classify_usda_texture: values appear to be fractions "
-                "(0-1) rather than percentages (0-100); classification "
-                "results will be incorrect. Check source data units."
+                "(0-1) rather than percentages (0-100). All valid-element "
+                "sums are below 2.0. Convert to percentages before calling."
             )
+            raise ValueError(msg)
         far_from_100 = np.abs(totals - 100.0) > 5.0
         if np.any(far_from_100):
             logger.warning(

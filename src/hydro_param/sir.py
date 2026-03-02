@@ -36,8 +36,8 @@ from numpy.typing import NDArray
 
 from hydro_param.config import DatasetRequest
 from hydro_param.dataset_registry import (
+    AnyVariableSpec,
     DerivedCategoricalSpec,
-    DerivedVariableSpec,
     VariableSpec,
 )
 
@@ -223,7 +223,7 @@ def build_sir_schema(
         tuple[
             object,
             DatasetRequest,
-            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+            list[AnyVariableSpec],
         ]
     ],
 ) -> list[SIRVariableSchema]:
@@ -244,7 +244,7 @@ def build_sir_schema(
 
         - ``DatasetEntry`` -- dataset metadata from the registry.
         - ``DatasetRequest`` -- user-specified request (statistics, year).
-        - ``list[VariableSpec | DerivedVariableSpec]`` -- resolved variables.
+        - ``list[AnyVariableSpec]`` -- resolved variable specifications.
 
     Returns
     -------
@@ -581,7 +581,7 @@ def normalize_sir_temporal(
         tuple[
             object,
             DatasetRequest,
-            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+            list[AnyVariableSpec],
         ]
     ],
     output_dir: Path,
