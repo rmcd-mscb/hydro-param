@@ -43,6 +43,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from hydro_param.config import DatasetRequest, PipelineConfig, ProcessingConfig
 from hydro_param.dataset_registry import (
     DatasetEntry,
+    DerivedCategoricalSpec,
     DerivedVariableSpec,
     VariableSpec,
 )
@@ -381,7 +382,7 @@ def fabric_fingerprint(config: PipelineConfig) -> str:
 def dataset_fingerprint(
     ds_req: DatasetRequest,
     entry: DatasetEntry,
-    var_specs: list[VariableSpec | DerivedVariableSpec],
+    var_specs: list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
     processing: ProcessingConfig,
 ) -> str:
     """Compute a SHA-256 fingerprint for a dataset processing request.
@@ -451,6 +452,12 @@ def dataset_fingerprint(
                     "source_override": v.source_override,
                 }
                 if isinstance(v, VariableSpec)
+                else {
+                    "name": v.name,
+                    "sources": ",".join(v.sources),
+                    "method": v.method,
+                }
+                if isinstance(v, DerivedCategoricalSpec)
                 else {
                     "name": v.name,
                     "source": v.source,

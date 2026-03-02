@@ -402,9 +402,10 @@ def stage2_resolve_datasets(
 
     Returns
     -------
-    list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         One tuple per dataset: the registry entry, the pipeline request,
-        and the resolved variable specifications.
+        and the resolved variable specifications (VariableSpec,
+        DerivedVariableSpec, or DerivedCategoricalSpec).
 
     Raises
     ------
@@ -547,7 +548,7 @@ def _process_batch(
     batch_fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
     ds_req: DatasetRequest,
-    var_specs: list[VariableSpec | DerivedVariableSpec],
+    var_specs: list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
     config: PipelineConfig,
     work_dir: Path,
 ) -> dict[str, pd.DataFrame]:
@@ -612,7 +613,7 @@ def _process_batch(
     if entry.strategy == "nhgf_stac" and not entry.temporal:
         zonal_proc = cast(ZonalProcessor, processor)
         for var_spec in var_specs:
-            if isinstance(var_spec, DerivedVariableSpec):
+            if isinstance(var_spec, DerivedVariableSpec | DerivedCategoricalSpec):
                 raise NotImplementedError("Derived variables not supported for nhgf_stac strategy")
             df = zonal_proc.process_nhgf_stac(
                 fabric=batch_fabric,
@@ -784,9 +785,8 @@ def _process_batch(
             if not src_tiff.exists():
                 missing.append(src_name)
                 continue
-            source_das.append(
-                cast("xr.DataArray", rioxarray.open_rasterio(src_tiff).squeeze("band", drop=True))
-            )
+            da = cast("xr.DataArray", rioxarray.open_rasterio(src_tiff))
+            source_das.append(da.squeeze("band", drop=True))
 
         if missing:
             logger.warning(
@@ -835,7 +835,7 @@ def _process_temporal(
     fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
     ds_req: DatasetRequest,
-    var_specs: list[VariableSpec | DerivedVariableSpec],
+    var_specs: list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
     config: PipelineConfig,
 ) -> xr.Dataset:
     """Process a temporal dataset using gdptools WeightGen + AggGen.
@@ -1159,7 +1159,13 @@ def _save_manifest(
 
 def stage4_process(
     fabric: gpd.GeoDataFrame,
-    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: list[
+        tuple[
+            DatasetEntry,
+            DatasetRequest,
+            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+        ]
+    ],
     config: PipelineConfig,
 ) -> Stage4Results:
     """Stage 4: Process all datasets with spatial batching and incremental writes.
@@ -1182,7 +1188,7 @@ def stage4_process(
     fabric : gpd.GeoDataFrame
         Target fabric with a ``batch_id`` column added by
         :func:`~hydro_param.batching.spatial_batch`.
-    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         Resolved dataset entries from :func:`stage2_resolve_datasets`.
     config : PipelineConfig
         Pipeline configuration (output path, engine, batch size, resume
@@ -1392,7 +1398,13 @@ def stage4_process(
 
 def stage5_normalize_sir(
     stage4: Stage4Results,
-    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: list[
+        tuple[
+            DatasetEntry,
+            DatasetRequest,
+            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+        ]
+    ],
     config: PipelineConfig,
 ) -> tuple[
     dict[str, Path],
@@ -1415,7 +1427,7 @@ def stage5_normalize_sir(
     ----------
     stage4 : Stage4Results
         Stage 4 results containing raw per-variable file paths.
-    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         Resolved dataset entries from :func:`stage2_resolve_datasets`,
         used to build the SIR schema.
     config : PipelineConfig

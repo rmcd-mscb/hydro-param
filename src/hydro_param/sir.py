@@ -219,7 +219,13 @@ class SIRVariableSchema:
 
 
 def build_sir_schema(
-    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: Sequence[
+        tuple[
+            object,
+            DatasetRequest,
+            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+        ]
+    ],
 ) -> list[SIRVariableSchema]:
     """Auto-generate the SIR schema from stage 2 resolved datasets.
 
@@ -233,7 +239,7 @@ def build_sir_schema(
 
     Parameters
     ----------
-    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : Sequence[tuple[object, DatasetRequest, list[...]]]
         Output of ``stage2_resolve_datasets()``.  Each tuple contains:
 
         - ``DatasetEntry`` -- dataset metadata from the registry.
@@ -571,7 +577,13 @@ def normalize_sir(
 def normalize_sir_temporal(
     temporal_files: dict[str, Path],
     schema: list[SIRVariableSchema],
-    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: Sequence[
+        tuple[
+            object,
+            DatasetRequest,
+            list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+        ]
+    ],
     output_dir: Path,
 ) -> dict[str, Path]:
     """Normalize temporal NetCDF files to canonical SIR format.
@@ -593,7 +605,7 @@ def normalize_sir_temporal(
         file path produced by stage 4.
     schema : list[SIRVariableSchema]
         SIR variable schema entries from ``build_sir_schema()``.
-    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : Sequence[tuple[object, DatasetRequest, list[...]]]
         Resolved dataset entries from stage 2.  Used to build the native
         name reverse lookup.
     output_dir : pathlib.Path

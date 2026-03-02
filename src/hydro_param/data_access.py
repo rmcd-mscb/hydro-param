@@ -38,6 +38,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from hydro_param.classification import classify_usda_texture
+
 if TYPE_CHECKING:
     from hydro_param.dataset_registry import DatasetEntry
 
@@ -276,8 +278,6 @@ DERIVATION_FUNCTIONS = {
 # ---------------------------------------------------------------------------
 # Categorical derivation functions
 # ---------------------------------------------------------------------------
-
-from hydro_param.classification import classify_usda_texture
 
 
 def classify_usda_texture_raster(
