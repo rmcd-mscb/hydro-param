@@ -573,6 +573,70 @@ class TestDeriveSoils:
         expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
+    def test_soil_type_from_continuous_percentages(self, derivation: PywatershedDerivation) -> None:
+        """Falls back to USDA texture triangle when only continuous percentages available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0, 40.0, 20.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([5.0, 40.0, 20.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0, 20.0, 60.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0, 100.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # sand(90/5/5) -> PRMS 1, loam(40/40/20) -> PRMS 2, clay(20/20/60) -> PRMS 3
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2, 3])
+
+    def test_soil_type_percentages_preferred_over_skip(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Percentages path used when no fractions or single texture available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([82.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([10.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([8.0])),
+                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # loamy_sand(82/10/8) -> PRMS 1 (coarse)
+        assert ds["soil_type"].values[0] == 1
+
+    def test_soil_type_fractions_preferred_over_percentages(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Fraction columns take priority over continuous percentages."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # Fractions say sand dominant
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.8])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2])),
+                    # Percentages say clay dominant (should be ignored)
+                    "sand_pct_mean": ("nhm_id", np.array([10.0])),
+                    "silt_pct_mean": ("nhm_id", np.array([10.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([80.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Fractions win: sand=0.8 > clay=0.2 -> PRMS 1
+        assert ds["soil_type"].values[0] == 1
+
 
 class TestClassifyUsdaTexture:
     """Tests for USDA soil texture triangle classification."""
