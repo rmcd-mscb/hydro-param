@@ -48,9 +48,11 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pynhd
 import pyproj
 import xarray as xr
 import yaml
+from shapely.errors import GEOSException
 
 from hydro_param.classification import USDA_TEXTURE_CLASSES, classify_usda_texture
 from hydro_param.plugins import DerivationContext
@@ -120,6 +122,7 @@ _LAKE_K_COEF = 24.0  # travel time for lake segments
 _LAKE_SEGMENT_TYPE = 1  # segment_type value for lake
 _CHANNEL_SEGMENT_TYPE = 0  # segment_type value for channel
 _SPATIAL_JOIN_BUFFER_M = 100.0  # metres — buffer around segments for NHD flowline clipping
+_NHD_MISSING_SLOPE_SENTINEL = -9998.0  # NHDPlus missing-data sentinel for slope
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -730,10 +733,9 @@ class PywatershedDerivation:
     ) -> np.ndarray:
         """Get slopes via spatial join to NHDPlus flowlines (length-weighted).
 
-        For each segment, find all NHDPlus flowlines that intersect it,
-        clip each flowline to a buffer around the segment, and return
-        a length-weighted mean slope using the clipped flowline lengths
-        as weights.  This handles GF/PRMS segments that have been
+        For each segment, find all NHD flowlines within a buffer corridor,
+        clip each flowline to the corridor, and return a length-weighted
+        mean slope.  This handles GF/PRMS segments that have been
         post-processed from NHD (split at POIs, trimmed to catchment
         boundaries) and therefore lack COMIDs for a direct VAA join.
 
@@ -750,18 +752,34 @@ class PywatershedDerivation:
         -------
         np.ndarray
             Length-weighted mean slope per segment.  Segments with no
-            intersecting NHD flowlines receive ``_FALLBACK_SLOPE``.
+            NHD flowlines within the buffer receive ``_FALLBACK_SLOPE``.
+
+        Raises
+        ------
+        ValueError
+            If ``segments`` has a geographic (non-projected) CRS.  The
+            buffer distance is in metres and requires a projected CRS.
 
         Notes
         -----
         GF/PRMS segments and NHD flowlines are independently digitized
-        representations of the same river network.  Direct line-on-line
-        intersection produces only Point geometries (zero length) because
-        the vertices never coincide exactly.  Buffering the segment by
-        ``_SPATIAL_JOIN_BUFFER_M`` (100 m) converts it to a polygon
-        corridor, then clipping each NHD flowline to that corridor yields
-        the flowline length that runs along the segment — a meaningful
-        weight for slope averaging.
+        representations of the same river network.  They may run parallel
+        with offsets of tens of metres and share no vertices.  A raw
+        ``gpd.sjoin`` with ``predicate="intersects"`` on the line
+        geometries would miss parallel-but-offset flowlines entirely, and
+        any crossing matches would produce only Point intersections (zero
+        length, unusable as weights).
+
+        The solution is two-fold:
+
+        1. **Candidate finding:** buffer each segment by
+           ``_SPATIAL_JOIN_BUFFER_M`` (100 m) to create a polygon
+           corridor, then spatial-join NHD flowlines against the
+           corridors.  This captures nearby flowlines regardless of
+           whether they cross the segment centreline.
+        2. **Length weighting:** clip each matched flowline to the
+           corridor polygon and use the clipped length as the weight
+           for slope averaging.
 
         CRS alignment is enforced: if the two GeoDataFrames differ in
         CRS, the NHD flowlines are reprojected to match the segments.
@@ -772,6 +790,12 @@ class PywatershedDerivation:
         _FALLBACK_SLOPE : Default slope for unmatched segments.
         _SPATIAL_JOIN_BUFFER_M : Buffer distance for flowline clipping.
         """
+        if segments.crs is not None and not segments.crs.is_projected:
+            raise ValueError(
+                f"_get_slopes_spatial_join requires a projected CRS (units in metres), "
+                f"got {segments.crs}. Reproject segments to e.g. EPSG:5070."
+            )
+
         # Ensure same CRS
         if segments.crs != nhd_flowlines.crs:
             nhd_flowlines = nhd_flowlines.to_crs(segments.crs)
@@ -780,8 +804,14 @@ class PywatershedDerivation:
         segs = segments.reset_index(drop=True)
         nhd = nhd_flowlines.reset_index(drop=True)
 
-        # Spatial join — find all NHD flowlines intersecting each segment
-        joined = gpd.sjoin(segs, nhd, how="left", predicate="intersects")
+        # Buffer segments into polygon corridors for candidate finding.
+        # This captures NHD flowlines that run parallel but offset from
+        # the segment centreline (see docstring Notes).
+        seg_buffers = segs.copy()
+        seg_buffers["geometry"] = segs.geometry.buffer(_SPATIAL_JOIN_BUFFER_M)
+
+        # Spatial join — find NHD flowlines within each segment corridor
+        joined = gpd.sjoin(seg_buffers, nhd, how="left", predicate="intersects")
 
         slopes = np.full(len(segs), _FALLBACK_SLOPE, dtype=np.float64)
         matched = np.zeros(len(segs), dtype=bool)
@@ -801,15 +831,9 @@ class PywatershedDerivation:
             if matches.empty:
                 continue
 
-            # Compute intersection lengths for weighting.
-            # GF/PRMS segments and NHD flowlines are independently digitized
-            # representations of the same rivers, so line-on-line intersection
-            # typically produces only Point geometries (zero length).  Buffer
-            # the segment to capture NHD flowline sections running along it,
-            # then clip flowlines to the buffer and use clipped length as
-            # the weight.
-            seg_geom = segs.geometry.iloc[seg_idx]
-            seg_buffer = seg_geom.buffer(_SPATIAL_JOIN_BUFFER_M)
+            # Clip each matched flowline to the buffer corridor and use
+            # clipped length as the weight for slope averaging.
+            seg_buffer = seg_buffers.geometry.iloc[seg_idx]
             weights: list[float] = []
             match_slopes: list[float] = []
             for _, row in matches.iterrows():
@@ -817,11 +841,13 @@ class PywatershedDerivation:
                 nhd_geom = nhd.geometry.iloc[nhd_idx]
                 try:
                     clipped = nhd_geom.intersection(seg_buffer)
-                except Exception:
+                except GEOSException as exc:
                     logger.warning(
-                        "Geometry intersection failed for segment %d with NHD index %d; skipping",
+                        "Geometry intersection failed for segment %d with NHD index %d: %s; "
+                        "skipping",
                         seg_idx,
                         nhd_idx,
+                        exc,
                     )
                     continue
                 if clipped.is_empty:
@@ -840,10 +866,11 @@ class PywatershedDerivation:
         n_fallback = int(np.sum(~matched))
         if n_fallback > 0:
             logger.warning(
-                "%d of %d segments have no intersecting NHDPlus flowlines; "
+                "%d of %d segments have no NHDPlus flowlines within %d m buffer; "
                 "using fallback slope %.1e",
                 n_fallback,
                 len(segs),
+                int(_SPATIAL_JOIN_BUFFER_M),
                 _FALLBACK_SLOPE,
             )
         return slopes
@@ -961,14 +988,8 @@ class PywatershedDerivation:
         -------
         pd.DataFrame or None
             VAA table with ``comid`` and ``slope`` columns (NaN slopes
-            and -9998 sentinel values removed), or ``None`` if pynhd
-            is not installed or the download fails.
-
-        Notes
-        -----
-        pynhd is an optional dependency.  When it is not installed this
-        method logs a warning and returns ``None`` so that the caller
-        can fall back to default slope values.
+            and ``_NHD_MISSING_SLOPE_SENTINEL`` values removed), or
+            ``None`` if the download fails.
 
         References
         ----------
@@ -976,16 +997,10 @@ class PywatershedDerivation:
             https://www.epa.gov/waterdata/nhdplus-national-data
         """
         try:
-            import pynhd as nhd
-        except ImportError:
-            logger.warning("pynhd not installed; cannot fetch NHDPlus slopes")
-            return None
-
-        try:
-            vaa = nhd.nhdplus_vaa()
+            vaa = pynhd.nhdplus_vaa()
             result = vaa[["comid", "slope"]].dropna(subset=["slope"])
             # NHDPlus uses -9998 as a sentinel for missing slope values.
-            result = result[result["slope"] >= 0]
+            result = result[result["slope"] != _NHD_MISSING_SLOPE_SENTINEL]
             return result
         except (OSError, KeyError) as exc:
             logger.error(
@@ -1020,13 +1035,8 @@ class PywatershedDerivation:
             if the fetch fails.
         """
         try:
-            import pynhd as nhd
-        except ImportError:
-            return None
-
-        try:
             bbox = segments.to_crs("EPSG:4326").total_bounds
-            wd = nhd.WaterData("nhdflowline_network")
+            wd = pynhd.WaterData("nhdflowline_network")
             flowlines = wd.bybox(tuple(bbox))
 
             # Join VAA slopes onto flowlines by COMID

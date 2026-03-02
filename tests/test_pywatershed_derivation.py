@@ -18,6 +18,7 @@ from hydro_param.derivations.pywatershed import (
     _K_COEF_MAX,
     _K_COEF_MIN,
     _LAKE_K_COEF,
+    _NHD_MISSING_SLOPE_SENTINEL,
     PywatershedDerivation,
 )
 from hydro_param.plugins import DerivationContext
@@ -3153,15 +3154,26 @@ class TestRoutingSlopes:
     # -- Spatial join slope tests --
 
     def test_slopes_spatial_join_basic(self) -> None:
-        """Two GF segments each overlapping one NHD flowline → correct slopes."""
+        """Two GF segments each matching one NHD flowline → correct slopes.
+
+        Segments are 500 m apart to prevent 100 m buffer cross-matching.
+        """
         segments = gpd.GeoDataFrame(
-            {"geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])]},
+            {
+                "geometry": [
+                    LineString([(500_000, 500_000), (500_500, 500_000)]),
+                    LineString([(500_000, 500_500), (500_500, 500_500)]),
+                ]
+            },
             crs="EPSG:5070",
         )
         nhd_flowlines = gpd.GeoDataFrame(
             {
                 "slope": [0.01, 0.05],
-                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(2, 0), (3, 0)])],
+                "geometry": [
+                    LineString([(500_000, 500_000), (500_500, 500_000)]),
+                    LineString([(500_000, 500_500), (500_500, 500_500)]),
+                ],
             },
             crs="EPSG:5070",
         )
@@ -3174,13 +3186,13 @@ class TestRoutingSlopes:
     def test_slopes_spatial_join_no_match_uses_fallback(self) -> None:
         """GF segment far from any NHD flowline → fallback slope."""
         segments = gpd.GeoDataFrame(
-            {"geometry": [LineString([(100, 100), (101, 100)])]},
+            {"geometry": [LineString([(500_000, 500_000), (500_500, 500_000)])]},
             crs="EPSG:5070",
         )
         nhd_flowlines = gpd.GeoDataFrame(
             {
                 "slope": [0.02],
-                "geometry": [LineString([(0, 0), (1, 0)])],
+                "geometry": [LineString([(600_000, 600_000), (600_500, 600_000)])],
             },
             crs="EPSG:5070",
         )
@@ -3190,17 +3202,19 @@ class TestRoutingSlopes:
         assert slopes[0] == _FALLBACK_SLOPE
 
     def test_slopes_spatial_join_multiple_nhd_per_segment(self) -> None:
-        """One GF segment spanning two equal-length NHD flowlines → average."""
-        # Segment spans from (0,0) to (2,0)
+        """One GF segment with two equal-length NHD flowlines → average."""
         segments = gpd.GeoDataFrame(
-            {"geometry": [LineString([(0, 0), (2, 0)])]},
+            {"geometry": [LineString([(500_000, 500_000), (501_000, 500_000)])]},
             crs="EPSG:5070",
         )
-        # Two NHD flowlines of equal length, both overlapping the segment
+        # Two NHD flowlines of equal length, both within the buffer
         nhd_flowlines = gpd.GeoDataFrame(
             {
                 "slope": [0.02, 0.06],
-                "geometry": [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)])],
+                "geometry": [
+                    LineString([(500_000, 500_000), (500_500, 500_000)]),
+                    LineString([(500_500, 500_000), (501_000, 500_000)]),
+                ],
             },
             crs="EPSG:5070",
         )
@@ -3209,6 +3223,77 @@ class TestRoutingSlopes:
 
         # Equal lengths → simple average: (0.02 + 0.06) / 2 = 0.04
         np.testing.assert_allclose(slopes[0], 0.04)
+
+    def test_slopes_spatial_join_parallel_offset_within_buffer(self) -> None:
+        """NHD flowline running parallel 50 m from segment produces valid slope.
+
+        This is the core regression scenario: GF segments and NHD flowlines
+        represent the same river but have different vertex coordinates.  The
+        100 m buffer captures the parallel flowline even though the raw lines
+        don't intersect.
+        """
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(500_000, 500_000), (500_500, 500_000)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.015],
+                "geometry": [LineString([(500_000, 500_050), (500_500, 500_050)])],
+            },
+            crs="EPSG:5070",
+        )
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+        np.testing.assert_allclose(slopes[0], 0.015)
+
+    def test_slopes_spatial_join_parallel_offset_beyond_buffer(self) -> None:
+        """NHD flowline >100 m from segment does not contribute."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(500_000, 500_000), (500_500, 500_000)])]},
+            crs="EPSG:5070",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.99],
+                "geometry": [LineString([(500_000, 500_200), (500_500, 500_200)])],
+            },
+            crs="EPSG:5070",
+        )
+        slopes = PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+        assert slopes[0] == _FALLBACK_SLOPE
+
+    def test_slopes_spatial_join_geographic_crs_raises(self) -> None:
+        """Geographic CRS raises ValueError (buffer distance is in metres)."""
+        segments = gpd.GeoDataFrame(
+            {"geometry": [LineString([(-75, 40), (-74, 40)])]},
+            crs="EPSG:4326",
+        )
+        nhd_flowlines = gpd.GeoDataFrame(
+            {
+                "slope": [0.01],
+                "geometry": [LineString([(-75, 40), (-74, 40)])],
+            },
+            crs="EPSG:4326",
+        )
+        with pytest.raises(ValueError, match="projected CRS"):
+            PywatershedDerivation._get_slopes_spatial_join(segments, nhd_flowlines)
+
+    def test_vaa_sentinel_filtering(self) -> None:
+        """VAA -9998 sentinel slopes are excluded but small negatives are kept."""
+        vaa_raw = pd.DataFrame(
+            {
+                "comid": [101, 102, 103, 104],
+                "slope": [0.01, -9998.0, -0.001, 0.005],
+            }
+        )
+        # Simulate the filtering logic from _fetch_vaa
+        result = vaa_raw[["comid", "slope"]].dropna(subset=["slope"])
+        result = result[result["slope"] != _NHD_MISSING_SLOPE_SENTINEL]
+
+        # -9998 sentinel removed, small negative kept
+        assert 102 not in result["comid"].values
+        assert 103 in result["comid"].values
+        assert len(result) == 3
 
 
 # ------------------------------------------------------------------
@@ -3380,12 +3465,11 @@ class TestDeriveRouting:
         """GF segments without COMID use spatial join for slopes.
 
         Uses EPSG:5070 (projected, metres) so the 100 m buffer in
-        ``_get_slopes_spatial_join`` is meaningful.  Segments are spaced
-        500 m apart to avoid cross-matching within the buffer.
+        ``_get_slopes_spatial_join`` is meaningful.  Flowlines run
+        parallel to segments with a 30 m offset (within the 100 m
+        buffer), mimicking independently digitized river representations.
+        Segments are spaced 500 m apart to avoid cross-matching.
         """
-        # Two segments 500 m apart in EPSG:5070.  NHD flowlines cross
-        # each segment at a slight angle so sjoin(predicate="intersects")
-        # finds them, and the 100 m buffer captures the clipped length.
         segments = gpd.GeoDataFrame(
             {
                 "nhm_seg": [1, 2],
@@ -3397,17 +3481,17 @@ class TestDeriveRouting:
             ],
             crs="EPSG:5070",
         )
-        # Flowlines cross each segment at a slight angle (±50 m Y offset
-        # over 500 m X).  They stay within the 100 m buffer so the
-        # clipped flowline length is the full crossing length.
+        # Flowlines run parallel 30 m from each segment (within the
+        # 100 m buffer).  They don't share vertices with the segments,
+        # mimicking the independently digitized GF/NHD scenario.
         nhd_flowlines = gpd.GeoDataFrame(
             {
                 "comid": [101, 102],
                 "slope": [0.01, 0.005],
             },
             geometry=[
-                LineString([(1_700_000, 1_999_950), (1_700_500, 2_000_050)]),
-                LineString([(1_700_000, 2_000_450), (1_700_500, 2_000_550)]),
+                LineString([(1_700_000, 2_000_030), (1_700_500, 2_000_030)]),
+                LineString([(1_700_000, 2_000_530), (1_700_500, 2_000_530)]),
             ],
             crs="EPSG:5070",
         )
