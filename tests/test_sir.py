@@ -731,7 +731,7 @@ class TestValidateSIR:
                 dataset_name="test_dataset",
             )
         ]
-        warnings = validate_sir({"elevation_m_mean": path}, schema)
+        warnings = validate_sir({"test_dataset__elevation_m_mean": path}, schema)
         assert warnings == []
 
     def test_all_nan_warns(self, tmp_path: Path) -> None:
@@ -751,7 +751,7 @@ class TestValidateSIR:
                 dataset_name="test_dataset",
             )
         ]
-        warnings = validate_sir({"elevation_m_mean": path}, schema)
+        warnings = validate_sir({"test_dataset__elevation_m_mean": path}, schema)
         assert len(warnings) == 1
         assert warnings[0].check_type == "nan_coverage"
 
@@ -774,7 +774,7 @@ class TestValidateSIR:
                 dataset_name="test_dataset",
             )
         ]
-        warnings = validate_sir({"elevation_m_mean": path}, schema)
+        warnings = validate_sir({"test_dataset__elevation_m_mean": path}, schema)
         assert warnings == []
 
     def test_out_of_range_warns(self, tmp_path: Path) -> None:
@@ -794,7 +794,7 @@ class TestValidateSIR:
                 dataset_name="test_dataset",
             )
         ]
-        warnings = validate_sir({"elevation_m_mean": path}, schema)
+        warnings = validate_sir({"test_dataset__elevation_m_mean": path}, schema)
         assert any(w.check_type == "range" for w in warnings)
 
     def test_strict_mode_raises(self, tmp_path: Path) -> None:
@@ -817,7 +817,7 @@ class TestValidateSIR:
             )
         ]
         with pytest.raises(SIRValidationError):
-            validate_sir({"elevation_m_mean": path}, schema, strict=True)
+            validate_sir({"test_dataset__elevation_m_mean": path}, schema, strict=True)
 
     def test_missing_schema_variable_warns(self, tmp_path: Path) -> None:
         """Schema expects variable not in sir_files -> warning."""
@@ -866,7 +866,7 @@ class TestValidateSIR:
         ]
         # Should not crash — .nc files are skipped.
         # Year-suffixed key "tmmx_C_mean_2020" satisfies temporal schema "tmmx_C_mean".
-        warnings = validate_sir({"tmmx_C_mean_2020": nc_path}, schema)
+        warnings = validate_sir({"test_dataset__tmmx_C_mean_2020": nc_path}, schema)
         assert len(warnings) == 0
 
     def test_temporal_year_suffix_satisfies_schema(self, tmp_path: Path) -> None:
@@ -896,8 +896,8 @@ class TestValidateSIR:
             ds.to_netcdf(tmp_path / f"pr_mm_mean_{year}.nc")
 
         sir_files = {
-            "pr_mm_mean_2020": tmp_path / "pr_mm_mean_2020.nc",
-            "pr_mm_mean_2021": tmp_path / "pr_mm_mean_2021.nc",
+            "test_dataset__pr_mm_mean_2020": tmp_path / "pr_mm_mean_2020.nc",
+            "test_dataset__pr_mm_mean_2021": tmp_path / "pr_mm_mean_2021.nc",
         }
         warnings = validate_sir(sir_files, schema)
         # No "missing" warning — year-suffixed keys satisfy the temporal schema
@@ -936,7 +936,7 @@ class TestValidateSIR:
             )
         ]
 
-        warnings = validate_sir({"lndcov_frac": path}, schema)
+        warnings = validate_sir({"test_dataset__lndcov_frac": path}, schema)
         # count column values [1000, 2000] should NOT produce range warnings
         range_warnings = [w for w in warnings if w.check_type == "range"]
         assert len(range_warnings) == 0
