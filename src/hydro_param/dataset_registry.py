@@ -388,6 +388,7 @@ class DatasetEntry(BaseModel):
     t_coord: str | None = None
     variables: list[VariableSpec] = []
     derived_variables: list[DerivedVariableSpec] = []
+    derived_categorical_variables: list[DerivedCategoricalSpec] = []
     category: str = ""
     temporal: bool = False
     time_step: Literal["daily", "monthly"] | None = None

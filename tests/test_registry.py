@@ -944,3 +944,28 @@ class TestDerivedCategoricalSpec:
                 sources=["single"],
                 method="test",
             )
+
+
+class TestDerivedCategoricalParsing:
+    """Tests for parsing derived_categorical_variables from YAML."""
+
+    def test_dataset_entry_has_derived_categorical(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        entry = DatasetEntry(
+            strategy="local_tiff",
+            variables=[],
+            derived_categorical_variables=[
+                DerivedCategoricalSpec(
+                    name="soil_texture",
+                    sources=["sand", "silt", "clay"],
+                    method="usda_texture_triangle",
+                )
+            ],
+        )
+        assert len(entry.derived_categorical_variables) == 1
+        assert entry.derived_categorical_variables[0].name == "soil_texture"
+
+    def test_defaults_to_empty_list(self) -> None:
+        entry = DatasetEntry(strategy="local_tiff", variables=[])
+        assert entry.derived_categorical_variables == []
