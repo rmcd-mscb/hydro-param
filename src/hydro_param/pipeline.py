@@ -675,6 +675,9 @@ def _process_batch(
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for i, var_spec in enumerate(var_specs):
+        if isinstance(var_spec, DerivedCategoricalSpec):
+            continue  # Processed after all source variables
+
         if isinstance(var_spec, DerivedVariableSpec):
             # Load source once, then derive.
             # Note: asset_key is not passed here — derived variables currently
@@ -733,8 +736,13 @@ def _process_batch(
         )
         results[var_spec.name] = df
 
-        # Clean up GeoTIFF after zonal stats
-        tiff_path.unlink(missing_ok=True)
+        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical
+        needed_by_dc = any(
+            isinstance(dc, DerivedCategoricalSpec) and var_spec.name in dc.sources
+            for dc in var_specs
+        )
+        if not needed_by_dc:
+            tiff_path.unlink(missing_ok=True)
 
         # Release source_cache entries no longer needed
         if isinstance(var_spec, DerivedVariableSpec):
@@ -754,6 +762,70 @@ def _process_batch(
             if not needed_by_derived and var_spec.name in source_cache:
                 del source_cache[var_spec.name]
 
+        gc.collect()
+
+    # Process derived categorical specs last — re-read source GeoTIFFs
+    # from disk rather than holding all sources in memory.
+    from hydro_param.data_access import CATEGORICAL_DERIVATION_FUNCTIONS
+
+    dc_specs = [v for v in var_specs if isinstance(v, DerivedCategoricalSpec)]
+    for dc_spec in dc_specs:
+        derive_fn = CATEGORICAL_DERIVATION_FUNCTIONS.get(dc_spec.method)
+        if derive_fn is None:
+            raise ValueError(f"No categorical derivation function for method '{dc_spec.method}'")
+
+        # Re-read source GeoTIFFs from disk
+        import rioxarray  # noqa: F401
+
+        source_das = []
+        missing = []
+        for src_name in dc_spec.sources:
+            src_tiff = work_dir / f"{src_name}.tif"
+            if not src_tiff.exists():
+                missing.append(src_name)
+                continue
+            source_das.append(
+                cast("xr.DataArray", rioxarray.open_rasterio(src_tiff).squeeze("band", drop=True))
+            )
+
+        if missing:
+            logger.warning(
+                "Skipping derived categorical '%s': missing source GeoTIFFs %s",
+                dc_spec.name,
+                missing,
+            )
+            continue
+
+        # Classify pixels
+        classified_da = derive_fn(*source_das)
+
+        # Free source arrays immediately
+        del source_das
+        gc.collect()
+
+        # Save classified raster and run categorical zonal stats
+        classified_tiff = work_dir / f"{dc_spec.name}.tif"
+        save_to_geotiff(classified_da, classified_tiff)
+        del classified_da
+
+        df = processor.process(
+            fabric=batch_fabric,
+            tiff_path=classified_tiff,
+            variable_name=dc_spec.name,
+            id_field=config.target_fabric.id_field,
+            engine=config.processing.engine,
+            statistics=ds_req.statistics,
+            categorical=True,
+            source_crs=entry.crs,
+            x_coord=entry.x_coord,
+            y_coord=entry.y_coord,
+        )
+        results[dc_spec.name] = df
+
+        # Clean up classified and source GeoTIFFs
+        classified_tiff.unlink(missing_ok=True)
+        for src_name in dc_spec.sources:
+            (work_dir / f"{src_name}.tif").unlink(missing_ok=True)
         gc.collect()
 
     return results
