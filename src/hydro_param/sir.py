@@ -730,7 +730,10 @@ def validate_sir(
     Parameters
     ----------
     sir_files : dict[str, pathlib.Path]
-        Mapping of canonical name to normalized file path (CSV or NetCDF).
+        Mapping of dataset-prefixed key to normalized file path (CSV or
+        NetCDF).  Keys use the format ``"{dataset_name}__{canonical_name}"``
+        (e.g., ``"dem_3dep_10m__elevation_m_mean"``), matching the output
+        of ``normalize_sir()``.
     schema : list[SIRVariableSchema]
         Expected SIR variable schema entries from ``build_sir_schema()``.
     strict : bool
@@ -760,13 +763,22 @@ def validate_sir(
     warnings: list[SIRValidationWarning] = []
 
     # Check completeness: schema variables present in files.
-    # Temporal variables have year-suffixed keys (e.g. "pr_mm_mean_2020"),
-    # so check if any key starts with the canonical name for temporal entries.
+    # Keys use dataset-prefixed format: "{dataset_name}__{canonical_name}"
+    # (e.g. "dem_3dep_10m__elevation_m_mean").  Temporal variables also have
+    # year-suffixed keys (e.g. "gridmet__pr_mm_mean_2020").
     sir_keys = set(sir_files.keys())
+
+    def _expected_key(entry: SIRVariableSchema) -> str:
+        """Build the expected sir_files key for a schema entry."""
+        if entry.dataset_name:
+            return f"{entry.dataset_name}__{entry.canonical_name}"
+        return entry.canonical_name
+
     for entry in schema:
-        if entry.canonical_name in sir_keys:
+        expected = _expected_key(entry)
+        if expected in sir_keys:
             continue
-        if entry.temporal and any(k.startswith(entry.canonical_name + "_") for k in sir_keys):
+        if entry.temporal and any(k.startswith(expected + "_") for k in sir_keys):
             continue
         warnings.append(
             SIRValidationWarning(
@@ -776,14 +788,18 @@ def validate_sir(
             )
         )
 
+    # Build lookup: expected key → schema entry for data validation
+    schema_by_key = {_expected_key(s): s for s in schema}
+
     # Check each file (skip temporal NetCDF — CSV validation only)
     for cname, path in sir_files.items():
         if path.suffix == ".nc":
             continue
         df = pd.read_csv(path, index_col=0)
 
-        # Find matching schema entry
-        matching = [s for s in schema if s.canonical_name == cname]
+        # Find matching schema entry via prefixed key
+        match = schema_by_key.get(cname)
+        matching = [match] if match is not None else []
 
         for col in df.columns:
             # For categorical entries, only validate fraction columns (skip count, etc.)
