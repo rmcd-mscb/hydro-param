@@ -97,6 +97,34 @@ _DEFAULTS: dict[str, float] = {
     # Transpiration timing
     "transp_beg": 4,  # April
     "transp_end": 10,  # October
+    # --- Depression storage (operational) ---
+    "dprst_et_coef": 1.0,
+    "dprst_flow_coef": 0.05,
+    "dprst_frac_init": 0.5,
+    "dprst_frac_open": 1.0,
+    "dprst_seep_rate_clos": 0.02,
+    "dprst_seep_rate_open": 0.02,
+    "sro_to_dprst_imperv": 0.2,
+    "sro_to_dprst_perv": 0.2,
+    "op_flow_thres": 1.0,
+    "va_clos_exp": 0.001,
+    "va_open_exp": 0.001,
+    # --- Snow (additional) ---
+    "cecn_coef": 5.0,
+    "rad_trncf": 0.5,
+    "melt_force": 140,  # Julian day
+    "melt_look": 90,  # Julian day
+    "snowinfil_max": 2.0,
+    "snowpack_init": 0.0,
+    "hru_deplcrv": 1,  # index into snarea_curve
+    "tstorm_mo": 0,
+    # --- Atmosphere ---
+    "ppt_rad_adj": 0.02,
+    "radadj_intcp": 1.0,
+    "radadj_slope": 0.0,
+    "tmax_index": 50.0,  # degF
+    # --- Soilzone ---
+    "sat_threshold": 999.0,
     # Depression storage — hru_type only; dprst_frac and dprst_area_max are
     # always set by _derive_waterbody (or _waterbody_defaults), so no scalar
     # fallback is needed here.
@@ -104,7 +132,85 @@ _DEFAULTS: dict[str, float] = {
 }
 
 # Parameters with non-scalar defaults handled specially in _apply_defaults
-_DEFAULTS_SPECIAL: frozenset[str] = frozenset({"jh_coef", "transp_beg", "transp_end", "hru_type"})
+_DEFAULTS_SPECIAL: frozenset[str] = frozenset(
+    {
+        "jh_coef",
+        "transp_beg",
+        "transp_end",
+        "hru_type",
+        "doy",
+        "hru_in_to_cf",
+        "temp_units",
+        "snarea_curve",
+        "pref_flow_infil_frac",
+    }
+)
+
+# Dimension mapping for default parameters.  Every entry in _DEFAULTS
+# that is NOT in _DEFAULTS_SPECIAL must appear here.  pywatershed v2.0
+# requires all parameters as correctly-dimensioned arrays.
+_PARAM_DIMS: dict[str, tuple[str, ...]] = {
+    # Per-HRU (nhru,)
+    "den_init": ("nhru",),
+    "den_max": ("nhru",),
+    "settle_const": ("nhru",),
+    "emis_noppt": ("nhru",),
+    "freeh2o_cap": ("nhru",),
+    "potet_sublim": ("nhru",),
+    "albset_rna": ("nhru",),
+    "albset_snm": ("nhru",),
+    "albset_rnm": ("nhru",),
+    "albset_sna": ("nhru",),
+    "radj_sppt": ("nhru",),
+    "radj_wppt": ("nhru",),
+    "soil_moist_init_frac": ("nhru",),
+    "soil_rechr_init_frac": ("nhru",),
+    "ssstor_init_frac": ("nhru",),
+    "gwstor_init": ("nhru",),
+    "gwstor_min": ("nhru",),
+    "dprst_depth_avg": ("nhru",),
+    "transp_tmax": ("nhru",),
+    "jh_coef_hru": ("nhru",),
+    # Depression storage (operational)
+    "dprst_et_coef": ("nhru",),
+    "dprst_flow_coef": ("nhru",),
+    "dprst_frac_init": ("nhru",),
+    "dprst_frac_open": ("nhru",),
+    "dprst_seep_rate_clos": ("nhru",),
+    "dprst_seep_rate_open": ("nhru",),
+    "sro_to_dprst_imperv": ("nhru",),
+    "sro_to_dprst_perv": ("nhru",),
+    "op_flow_thres": ("nhru",),
+    "va_clos_exp": ("nhru",),
+    "va_open_exp": ("nhru",),
+    # Snow (additional)
+    "rad_trncf": ("nhru",),
+    "melt_force": ("nhru",),
+    "melt_look": ("nhru",),
+    "snowinfil_max": ("nhru",),
+    "snowpack_init": ("nhru",),
+    "hru_deplcrv": ("nhru",),
+    # Soilzone
+    "sat_threshold": ("nhru",),
+    # Per-month-per-HRU (nmonths, nhru)
+    "tmax_allsnow": ("nmonth", "nhru"),
+    "radmax": ("nmonth", "nhru"),
+    "cecn_coef": ("nmonth", "nhru"),
+    "tstorm_mo": ("nmonth", "nhru"),
+    "ppt_rad_adj": ("nmonth", "nhru"),
+    "radadj_intcp": ("nmonth", "nhru"),
+    "radadj_slope": ("nmonth", "nhru"),
+    "tmax_index": ("nmonth", "nhru"),
+    # Monthly calibration seeds (step 14)
+    "rain_cbh_adj": ("nmonth", "nhru"),
+    "snow_cbh_adj": ("nmonth", "nhru"),
+    "tmax_cbh_adj": ("nmonth", "nhru"),
+    "tmin_cbh_adj": ("nmonth", "nhru"),
+    "tmax_allrain_offset": ("nmonth", "nhru"),
+    "adjmix_rain": ("nmonth", "nhru"),
+    "dday_slope": ("nmonth", "nhru"),
+    "dday_intcp": ("nmonth", "nhru"),
+}
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
@@ -2251,26 +2357,32 @@ class PywatershedDerivation:
 
         Notes
         -----
-        Special-case parameters that require array shapes:
+        Special-case parameters that require unique shapes or derivations:
 
         - ``jh_coef``: shape ``(nhru, 12)`` --- per_degF_per_day
         - ``transp_beg``, ``transp_end``: shape ``(nhru,)`` --- integer month
         - ``hru_type``: shape ``(nhru,)`` --- integer (1=land, 2=lake)
+        - ``doy``: shape ``(366,)`` --- day-of-year coordinate
+        - ``hru_in_to_cf``: shape ``(nhru,)`` --- derived from ``hru_area``
+        - ``temp_units``: scalar --- 0 for Fahrenheit
+        - ``snarea_curve``: shape ``(11,)`` --- snow depletion curve
 
-        All other defaults are scalar values broadcast by xarray as needed.
-        Default units match PRMS conventions: inches for storage depths,
-        degree-days for ``transp_tmax``, etc.
+        All other defaults are broadcast to ``(nhru,)`` or ``(nmonths, nhru)``
+        using the ``_PARAM_DIMS`` mapping.  Default units match PRMS
+        conventions: inches for storage depths, degree-days for
+        ``transp_tmax``, etc.  Segment-level defaults are added only when
+        routing topology (``nsegment`` dimension) is present.
 
         References
         ----------
         Regan, R. S., et al. (2018). USGS Techniques and Methods 6-B9.
         Markstrom, S. L., et al. (2015). USGS Techniques and Methods 6-B7.
         """
-        # Special handling for 2D jh_coef default (nhru, 12)
+        # Special handling for 2D jh_coef default (nmonth, nhru)
         if "jh_coef" not in ds:
             ds["jh_coef"] = xr.DataArray(
-                np.full((nhru, 12), _DEFAULTS["jh_coef"]),
-                dims=("nhru", "nmonths"),
+                np.full((12, nhru), _DEFAULTS["jh_coef"]),
+                dims=("nmonth", "nhru"),
                 attrs={
                     "units": "per_degF_per_day",
                     "long_name": "Jensen-Haise PET coefficient (default)",
@@ -2294,14 +2406,105 @@ class PywatershedDerivation:
                 attrs={"units": "none", "long_name": "HRU type (default)"},
             )
 
+        # doy: coordinate array 1-366
+        if "doy" not in ds:
+            ds["doy"] = xr.DataArray(
+                np.arange(1, 367, dtype=np.int32),
+                dims=("ndoy",),
+                attrs={"long_name": "Day of year"},
+            )
+
+        # hru_in_to_cf: unit conversion factor (inches*acres → cubic feet)
+        # 1 inch over 1 acre = 43560/12 = 3630 ft³
+        if "hru_in_to_cf" not in ds and "hru_area" in ds:
+            ds["hru_in_to_cf"] = xr.DataArray(
+                ds["hru_area"].values * (43560.0 / 12.0),
+                dims=("nhru",),
+                attrs={
+                    "units": "cubic_feet_per_inch_acre",
+                    "long_name": "Inches to cubic feet conversion factor",
+                },
+            )
+
+        # temp_units: 0 = Fahrenheit (PRMS convention)
+        if "temp_units" not in ds:
+            ds["temp_units"] = xr.DataArray(
+                np.int32(0),
+                attrs={"long_name": "Temperature units (0=F, 1=C)"},
+            )
+
+        # snarea_curve: snow depletion curve (11 values, default all 1.0)
+        if "snarea_curve" not in ds:
+            ds["snarea_curve"] = xr.DataArray(
+                np.ones(11, dtype=np.float64),
+                dims=("ndeplval",),
+                attrs={"long_name": "Snow area depletion curve"},
+            )
+
+        # pref_flow_infil_frac: pywatershed v2.0 requires values in [0, 1].
+        # Use pref_flow_den if available, otherwise default to 0.0.
+        if "pref_flow_infil_frac" not in ds:
+            if "pref_flow_den" in ds:
+                ds["pref_flow_infil_frac"] = xr.DataArray(
+                    ds["pref_flow_den"].values.copy(),
+                    dims=("nhru",),
+                    attrs={"long_name": "Preferential flow infiltration fraction"},
+                )
+            else:
+                ds["pref_flow_infil_frac"] = xr.DataArray(
+                    np.zeros(nhru, dtype=np.float64),
+                    dims=("nhru",),
+                    attrs={"long_name": "Preferential flow infiltration fraction"},
+                )
+
+        # Dimension sizes for broadcasting
+        dim_sizes: dict[str, int] = {
+            "nhru": nhru,
+            "nmonth": 12,
+        }
+
         for param_name, default_val in _DEFAULTS.items():
             if param_name in _DEFAULTS_SPECIAL:
                 continue  # handled above
-            if param_name not in ds:
-                ds[param_name] = xr.DataArray(
-                    np.float64(default_val),
-                    attrs={"long_name": param_name.replace("_", " ").title()},
-                )
+            if param_name in ds:
+                continue  # data-derived value takes precedence
+            dims = _PARAM_DIMS.get(param_name, ("nhru",))
+            shape = tuple(dim_sizes[d] for d in dims)
+            dtype = np.int32 if isinstance(default_val, int) else np.float64
+            ds[param_name] = xr.DataArray(
+                np.full(shape, default_val, dtype=dtype),
+                dims=dims,
+                attrs={"long_name": param_name.replace("_", " ").title()},
+            )
+
+        # Segment-level defaults (only when routing topology is present)
+        nseg_vars = [v for v in ds.data_vars if "nsegment" in (ds[v].dims or ())]
+        if nseg_vars:
+            nsegment = ds[nseg_vars[0]].sizes.get("nsegment", 0)
+            if nsegment > 0:
+                seg_defaults: dict[str, tuple[float | int, str]] = {
+                    "mann_n": (0.04, "Manning's roughness coefficient"),
+                    "seg_depth": (1.0, "Bankfull water depth"),
+                    "segment_flow_init": (0.0, "Initial flow in segment"),
+                    "obsout_segment": (0, "Observed streamflow segment index"),
+                }
+                for name, (val, desc) in seg_defaults.items():
+                    if name not in ds:
+                        dtype = np.int32 if isinstance(val, int) else np.float64
+                        ds[name] = xr.DataArray(
+                            np.full(nsegment, val, dtype=dtype),
+                            dims=("nsegment",),
+                            attrs={"long_name": desc},
+                        )
+
+                # tosegment_nhm: copy from tosegment if available
+                if "tosegment_nhm" not in ds and "tosegment" in ds:
+                    ds["tosegment_nhm"] = xr.DataArray(
+                        ds["tosegment"].values.copy(),
+                        dims=("nsegment",),
+                        attrs={"long_name": "NHM downstream segment ID"},
+                    )
+
         return ds
 
     # ------------------------------------------------------------------
@@ -2416,9 +2619,13 @@ class PywatershedDerivation:
                             f"Check calibration_seeds.yml entry for '{param_name}'."
                         ) from exc
 
-            # Expand scalar to array if nhru dimension exists
+            # Expand scalar to correct shape.  Monthly parameters need
+            # (nmonth, nhru); all others need (nhru,).
+            dims_for_seed = _PARAM_DIMS.get(param_name, ("nhru",))
             if nhru > 0 and np.ndim(value) == 0:
-                value = np.full(nhru, value, dtype=np.float64)
+                seed_dim_sizes = {"nhru": nhru, "nmonth": 12}
+                shape = tuple(seed_dim_sizes[d] for d in dims_for_seed)
+                value = np.full(shape, value, dtype=np.float64)
 
             # Clip to range
             if len(val_range) != 2:
@@ -2444,7 +2651,7 @@ class PywatershedDerivation:
                     )
 
             # Add to dataset
-            dims: tuple[str, ...] = ("nhru",) if np.ndim(value) >= 1 else ()
+            dims: tuple[str, ...] = dims_for_seed if np.ndim(value) >= 1 else ()
             ds[param_name] = xr.DataArray(
                 value,
                 dims=dims if dims else None,
@@ -2867,10 +3074,10 @@ class PywatershedDerivation:
         jh_coef = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
         jh_coef = np.clip(jh_coef, 0.005, 0.06)
 
-        # Transpose to (nhru, 12) for output convention
+        # Shape is already (12, nhru) = (nmonth, nhru)
         ds["jh_coef"] = xr.DataArray(
-            jh_coef.T,
-            dims=("nhru", "nmonths"),
+            jh_coef,
+            dims=("nmonth", "nhru"),
             attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient"},
         )
 
@@ -3061,6 +3268,9 @@ class PywatershedDerivation:
                 arr = np.array(value, dtype=np.float64)
 
             if param_name in ds:
+                # Broadcast scalar to match existing variable shape
+                if arr.ndim == 0 and ds[param_name].ndim > 0:
+                    arr = np.full(ds[param_name].shape, arr, dtype=arr.dtype)
                 ds[param_name].values = arr
                 logger.info("Override: %s = %s", param_name, value)
             else:

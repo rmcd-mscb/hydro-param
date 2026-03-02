@@ -722,10 +722,101 @@ class TestApplyDefaults:
     ) -> None:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
-        assert ds["tmax_allsnow"].item() == 32.0
-        assert ds["den_init"].item() == 0.10
-        assert ds["gwstor_init"].item() == 2.0
-        assert ds["radmax"].item() == 0.8
+        # All elements should be the default value (arrays, not scalars)
+        np.testing.assert_allclose(ds["tmax_allsnow"].values, 32.0)
+        np.testing.assert_allclose(ds["den_init"].values, 0.10)
+        np.testing.assert_allclose(ds["gwstor_init"].values, 2.0)
+        np.testing.assert_allclose(ds["radmax"].values, 0.8)
+
+    def test_defaults_have_correct_shapes(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        """All defaults must be correctly-dimensioned arrays, not 0-d scalars."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        nhru = 3  # sir_topography fixture has 3 HRUs
+
+        # Per-HRU defaults must be 1-D arrays of length nhru
+        per_hru = [
+            "den_init",
+            "den_max",
+            "settle_const",
+            "emis_noppt",
+            "freeh2o_cap",
+            "potet_sublim",
+            "albset_rna",
+            "albset_snm",
+            "albset_rnm",
+            "albset_sna",
+            "radj_sppt",
+            "radj_wppt",
+            "soil_moist_init_frac",
+            "soil_rechr_init_frac",
+            "ssstor_init_frac",
+            "gwstor_init",
+            "gwstor_min",
+            "dprst_depth_avg",
+            "transp_tmax",
+            "jh_coef_hru",
+        ]
+        for name in per_hru:
+            assert name in ds, f"Missing default: {name}"
+            assert ds[name].ndim == 1, f"{name}: expected 1-D (nhru,), got ndim={ds[name].ndim}"
+            assert ds[name].shape == (nhru,), (
+                f"{name}: expected shape ({nhru},), got {ds[name].shape}"
+            )
+
+        # Per-month-per-HRU defaults must be 2-D (nmonths, nhru)
+        per_month_hru = ["tmax_allsnow", "radmax"]
+        for name in per_month_hru:
+            if name in ds:
+                assert ds[name].ndim == 2, (
+                    f"{name}: expected 2-D (nmonths, nhru), got ndim={ds[name].ndim}"
+                )
+
+    def test_all_pywatershed_required_defaults(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        """All parameters required by pywatershed NHM processes must be present."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        required = {
+            # Structural (hru_in_to_cf requires hru_area, tested separately)
+            "doy",
+            "temp_units",
+            # Depression storage operational
+            "dprst_et_coef",
+            "dprst_flow_coef",
+            "dprst_frac_init",
+            "dprst_frac_open",
+            "dprst_seep_rate_clos",
+            "dprst_seep_rate_open",
+            "sro_to_dprst_imperv",
+            "sro_to_dprst_perv",
+            "op_flow_thres",
+            "va_clos_exp",
+            "va_open_exp",
+            # Snow
+            "cecn_coef",
+            "rad_trncf",
+            "melt_force",
+            "melt_look",
+            "snowinfil_max",
+            "snowpack_init",
+            "hru_deplcrv",
+            "tstorm_mo",
+            "snarea_curve",
+            # Atmosphere
+            "ppt_rad_adj",
+            "radadj_intcp",
+            "radadj_slope",
+            "tmax_index",
+            # Soilzone
+            "sat_threshold",
+            "pref_flow_infil_frac",
+        }
+        missing = required - set(ds.data_vars)
+        assert not missing, f"Missing pywatershed defaults: {sorted(missing)}"
 
     def test_defaults_not_overwritten(self, derivation: PywatershedDerivation) -> None:
         """If a default param is already derived from data, it's preserved."""
@@ -750,7 +841,7 @@ class TestParameterOverrides:
         config = {"parameter_overrides": {"values": {"tmax_allsnow": 30.0}}}
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
         ds = derivation.derive(ctx)
-        assert ds["tmax_allsnow"].item() == 30.0
+        np.testing.assert_allclose(ds["tmax_allsnow"].values, 30.0)
 
     def test_override_array(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -2402,7 +2493,7 @@ class TestDerivePetCoefficients:
         sir_topo_with_area: xr.Dataset,
         temporal_gridmet: dict[str, xr.Dataset],
     ) -> None:
-        """jh_coef should have shape (nhru, 12)."""
+        """jh_coef should have shape (nmonth, nhru) = (12, nhru)."""
         ctx = DerivationContext(
             sir=sir_topo_with_area,
             fabric_id_field="nhm_id",
@@ -2410,7 +2501,7 @@ class TestDerivePetCoefficients:
         )
         ds = derivation.derive(ctx)
         assert "jh_coef" in ds
-        assert ds["jh_coef"].shape == (3, 12)
+        assert ds["jh_coef"].shape == (12, 3)
 
     def test_jh_coef_hru_shape(
         self,
@@ -2465,8 +2556,8 @@ class TestDerivePetCoefficients:
         ds = derivation.derive(ctx)
         # Defaults set by _apply_defaults (step 13)
         assert "jh_coef" in ds
-        assert ds["jh_coef"].shape == (3, 12)
-        assert ds["jh_coef"].dims == ("nhru", "nmonths")
+        assert ds["jh_coef"].shape == (12, 3)
+        assert ds["jh_coef"].dims == ("nmonth", "nhru")
         assert "jh_coef_hru" in ds
 
 
@@ -2685,8 +2776,8 @@ class TestDeriveIntegrationPetTransp:
 
         # PET params
         assert "jh_coef" in ds
-        assert ds["jh_coef"].dims == ("nhru", "nmonths")
-        assert ds["jh_coef"].shape == (2, 12)
+        assert ds["jh_coef"].dims == ("nmonth", "nhru")
+        assert ds["jh_coef"].shape == (12, 2)
         assert "jh_coef_hru" in ds
         assert ds["jh_coef_hru"].shape == (2,)
 

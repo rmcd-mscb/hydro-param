@@ -276,7 +276,17 @@ class PywatershedFormatter:
             da.attrs["units"] = to_unit
 
             out_path = output_dir / f"{var}.nc"
-            da.to_dataset(name=var).to_netcdf(out_path)
+            forcing_ds = da.to_dataset(name=var)
+            # pywatershed NetCdfRead requires nhm_id or hru_id as a spatial
+            # identifier variable.  Add nhm_id from the nhru coordinate if
+            # the coordinate values are integer IDs (typical for NHM fabrics).
+            nhru_dim = da.dims[-1]  # spatial dim is last
+            if nhru_dim in forcing_ds.coords and "nhm_id" not in forcing_ds:
+                forcing_ds["nhm_id"] = xr.DataArray(
+                    forcing_ds.coords[nhru_dim].values,
+                    dims=(nhru_dim,),
+                )
+            forcing_ds.to_netcdf(out_path)
             written.append(out_path)
             logger.info("Wrote forcing: %s (%s → %s)", out_path, from_unit, to_unit)
 

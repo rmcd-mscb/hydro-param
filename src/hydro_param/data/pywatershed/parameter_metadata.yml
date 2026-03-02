@@ -155,7 +155,7 @@ parameters:
   sat_threshold:
     dimension: nhru
     units: inches
-    valid_range: [0.0, 999.0]
+    valid_range: [0.0, 999.9]
     required: false
     description: "Gravity + preferential reservoir storage capacity"
 
@@ -214,7 +214,7 @@ parameters:
 
   # --- PET (Step 10, future) ---
   jh_coef:
-    dimension: nmonths
+    dimension: nmonth
     units: per_degF_per_day
     valid_range: [0.0, 100.0]
     required: false
@@ -244,49 +244,49 @@ parameters:
 
   # --- Snow defaults (Step 13) ---
   den_init:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.01, 0.80]
     required: false
     description: "Initial snow density"
 
   den_max:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.10, 0.90]
     required: false
     description: "Maximum snow density"
 
   settle_const:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Snow settlement constant"
 
   emis_noppt:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.5, 1.0]
     required: false
     description: "Emissivity of air on no-precip days"
 
   freeh2o_cap:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 0.20]
     required: false
     description: "Free-water holding capacity of snowpack"
 
   potet_sublim:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Fraction of PET that can be sublimation"
 
   tmax_allsnow:
-    dimension: one
+    dimension: [nhru, 12]
     units: degF
     valid_range: [20.0, 45.0]
     required: false
@@ -294,28 +294,28 @@ parameters:
 
   # --- Albedo defaults ---
   albset_rna:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Albedo reset: rain on new snow, accumulation period"
 
   albset_snm:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Albedo reset: snowmelt in melt period"
 
   albset_rnm:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Albedo reset: rain in melt period"
 
   albset_sna:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
@@ -323,21 +323,21 @@ parameters:
 
   # --- Radiation defaults ---
   radmax:
-    dimension: one
+    dimension: [nhru, 12]
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Maximum fraction of potential solar radiation"
 
   radj_sppt:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Summer precipitation radiation adjustment"
 
   radj_wppt:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
@@ -345,53 +345,304 @@ parameters:
 
   # --- Initial conditions ---
   soil_moist_init_frac:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Initial soil moisture as fraction of max"
 
   soil_rechr_init_frac:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Initial recharge zone moisture as fraction of max"
 
   ssstor_init_frac:
-    dimension: one
+    dimension: nhru
     units: decimal_fraction
     valid_range: [0.0, 1.0]
     required: false
     description: "Initial subsurface storage as fraction"
 
   gwstor_init:
-    dimension: one
+    dimension: nhru
     units: inches
     valid_range: [0.0, 100.0]
     required: false
     description: "Initial groundwater storage"
 
   gwstor_min:
-    dimension: one
+    dimension: nhru
     units: inches
     valid_range: [0.0, 100.0]
     required: false
     description: "Minimum groundwater storage"
 
   dprst_depth_avg:
-    dimension: one
+    dimension: nhru
     units: inches
     valid_range: [0.0, 1000.0]
     required: false
     description: "Average surface depression depth"
 
   transp_tmax:
-    dimension: one
+    dimension: nhru
     units: degree_days
     valid_range: [0.0, 10000.0]
     required: false
     description: "Accumulated degree-days threshold for transpiration"
+
+  # --- Depression storage (operational defaults) ---
+  dprst_et_coef:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Fraction of unsatisfied PET applied to depression storage"
+
+  dprst_flow_coef:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Coefficient for open depression linear flow routing"
+
+  dprst_frac_init:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Initial depression storage as fraction of maximum"
+
+  dprst_frac_open:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Fraction of open depression area generating runoff"
+
+  dprst_seep_rate_clos:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Seepage rate coefficient for closed depressions"
+
+  dprst_seep_rate_open:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Seepage rate coefficient for open depressions"
+
+  sro_to_dprst_imperv:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Fraction of impervious runoff to depression storage"
+
+  sro_to_dprst_perv:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Fraction of pervious runoff to depression storage"
+
+  op_flow_thres:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Open depression outflow threshold fraction"
+
+  va_clos_exp:
+    dimension: nhru
+    units: dimensionless
+    valid_range: [0.0001, 10.0]
+    required: false
+    description: "Closed depression storage-area exponent"
+
+  va_open_exp:
+    dimension: nhru
+    units: dimensionless
+    valid_range: [0.0001, 10.0]
+    required: false
+    description: "Open depression storage-area exponent"
+
+  # --- Snow (additional defaults) ---
+  cecn_coef:
+    dimension: [nhru, 12]
+    units: calories_per_degC
+    valid_range: [0.0, 20.0]
+    required: false
+    description: "Monthly convection condensation energy coefficient"
+
+  rad_trncf:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Solar radiation transmission coefficient through canopy"
+
+  melt_force:
+    dimension: nhru
+    units: julian_day
+    valid_range: [1, 366]
+    required: false
+    description: "Julian date to force spring snowmelt stage"
+
+  melt_look:
+    dimension: nhru
+    units: julian_day
+    valid_range: [1, 366]
+    required: false
+    description: "Julian date to start looking for spring snowmelt"
+
+  snowinfil_max:
+    dimension: nhru
+    units: inches
+    valid_range: [0.0, 20.0]
+    required: false
+    description: "Maximum snow infiltration per day"
+
+  snowpack_init:
+    dimension: nhru
+    units: inches
+    valid_range: [0.0, 5000.0]
+    required: false
+    description: "Initial snowpack water equivalent"
+
+  hru_deplcrv:
+    dimension: nhru
+    units: integer
+    valid_range: [1, 10]
+    required: false
+    description: "Index of snow depletion curve"
+
+  tstorm_mo:
+    dimension: [nhru, 12]
+    units: integer
+    valid_range: [0, 1]
+    required: false
+    description: "Monthly thunderstorm prevalence flag"
+
+  snarea_curve:
+    dimension: ndeplval
+    units: decimal_fraction
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Snow area depletion curve values"
+
+  # --- Atmosphere (additional defaults) ---
+  ppt_rad_adj:
+    dimension: [nhru, 12]
+    units: inches
+    valid_range: [0.0, 0.5]
+    required: false
+    description: "Precipitation threshold for radiation adjustment"
+
+  radadj_intcp:
+    dimension: [nhru, 12]
+    units: dimensionless
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Temperature range adjustment intercept for radiation"
+
+  radadj_slope:
+    dimension: [nhru, 12]
+    units: dimensionless
+    valid_range: [0.0, 1.0]
+    required: false
+    description: "Temperature range adjustment slope for radiation"
+
+  tmax_index:
+    dimension: [nhru, 12]
+    units: degF
+    valid_range: [0.0, 120.0]
+    required: false
+    description: "Monthly maximum temperature index"
+
+  temp_units:
+    dimension: one
+    units: integer
+    valid_range: [0, 1]
+    required: false
+    description: "Temperature units (0=Fahrenheit, 1=Celsius)"
+
+  # --- Soilzone (additional defaults) ---
+  pref_flow_infil_frac:
+    dimension: nhru
+    units: decimal_fraction
+    valid_range: [-1.0, 1.0]
+    required: false
+    description: "Fraction of infiltration to preferential flow reservoir"
+
+  # --- Channel (additional defaults) ---
+  mann_n:
+    dimension: nsegment
+    units: dimensionless
+    valid_range: [0.001, 1.0]
+    required: false
+    description: "Manning's roughness coefficient"
+
+  seg_depth:
+    dimension: nsegment
+    units: feet
+    valid_range: [0.0, 1000.0]
+    required: false
+    description: "Bankfull water depth in segment"
+
+  segment_flow_init:
+    dimension: nsegment
+    units: cfs
+    valid_range: [0.0, 100000.0]
+    required: false
+    description: "Initial flow in stream segment"
+
+  obsout_segment:
+    dimension: nsegment
+    units: integer
+    valid_range: [0, 100000]
+    required: false
+    description: "Index of measured streamflow station replacing segment outflow"
+
+  tosegment_nhm:
+    dimension: nsegment
+    units: integer
+    valid_range: [0, 1000000]
+    required: false
+    description: "NHM downstream segment ID"
+
+  # --- Structural ---
+  hru_in_to_cf:
+    dimension: nhru
+    units: cubic_feet_per_inch_acre
+    valid_range: [0.0, 1000000000.0]
+    required: false
+    description: "Inches-to-cubic-feet conversion factor per HRU"
+
+  seg_slope:
+    dimension: nsegment
+    units: decimal_fraction
+    valid_range: [0.0, 10.0]
+    required: false
+    description: "Stream segment slope"
+
+  segment_type:
+    dimension: nsegment
+    units: integer
+    valid_range: [0, 3]
+    required: false
+    description: "Segment type (0=segment, 1=headwater, 2=lake, 3=replacement)"
+
+  obsin_segment:
+    dimension: nsegment
+    units: integer
+    valid_range: [0, 100000]
+    required: false
+    description: "Index of observed inflow station for segment"
 
   # --- Calibration parameters (Step 14, future — seeds only) ---
   carea_max:
