@@ -42,6 +42,7 @@ dependencies = [
     "pydantic>=2.0",
     "cyclopts",
     "gdptools>=0.3.10",
+    "pynhd>=0.19.4",
 ]
 
 [project.scripts]
@@ -119,6 +120,7 @@ exactextract = ">=0.2"
 pyarrow = ">=14.0"
 urllib3 = ">=2.6"
 distributed = ">=2024.1"
+pynhd = ">=0.19.4"
 
 # --- Features ---------------------------------------------------------------
 
@@ -129,7 +131,6 @@ ruff = "*"
 mypy = "*"
 pre-commit = "*"
 ipykernel = ">=7.2.0,<8"
-pynhd = ">=0.19.4,<0.20"
 
 [tool.pixi.feature.dev.tasks]
 test = "pytest tests/ --cov=src/hydro_param --cov-report=term-missing"
