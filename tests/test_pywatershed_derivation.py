@@ -599,9 +599,9 @@ class TestDeriveSoils:
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
-                    "sand_pct_mean": ("nhm_id", np.array([80.0])),
+                    "sand_pct_mean": ("nhm_id", np.array([82.0])),
                     "silt_pct_mean": ("nhm_id", np.array([10.0])),
-                    "clay_pct_mean": ("nhm_id", np.array([10.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([8.0])),
                     "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
                 },
                 coords={"nhm_id": [1]},
@@ -610,7 +610,7 @@ class TestDeriveSoils:
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" in ds
-        # loamy_sand(80/10/10) -> PRMS 1 (coarse)
+        # loamy_sand(82/10/8) -> PRMS 1 (coarse)
         assert ds["soil_type"].values[0] == 1
 
     def test_soil_type_fractions_preferred_over_percentages(
@@ -686,12 +686,11 @@ class TestClassifyUsdaTexture:
     def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
         """High sand but not pure sand -> loamy_sand.
 
-        Point (80/10/10) sits on the loamy_sand / sandy_loam boundary
-        where silt + 2*clay = 30.  Per the USDA polygon definitions,
-        boundary points belong to loamy_sand (the finer class).
+        The loamy_sand region requires silt + 2*clay < 30.
+        Point (82/10/8) has silt + 2*clay = 26, clearly interior.
         """
         result = derivation._classify_usda_texture(
-            np.array([80.0]), np.array([10.0]), np.array([10.0])
+            np.array([82.0]), np.array([10.0]), np.array([8.0])
         )
         assert result[0] == "loamy_sand"
 
@@ -744,6 +743,27 @@ class TestClassifyUsdaTexture:
             np.array([np.nan]), np.array([np.nan]), np.array([np.nan])
         )
         assert result[0] == "loam"
+
+    def test_exhaustive_no_false_loam_defaults(self, derivation: PywatershedDerivation) -> None:
+        """Every integer (sand, silt, clay) triple classifies into a region
+        that matches the USDA Soil Survey Manual definition — no points
+        fall through to the default loam unless they genuinely belong there.
+
+        Sweeps all 5151 valid triples at 1% resolution.
+        """
+        for sand in range(0, 101):
+            for clay in range(0, 101 - sand):
+                silt = 100 - sand - clay
+                result = derivation._classify_usda_texture(
+                    np.array([float(sand)]),
+                    np.array([float(silt)]),
+                    np.array([float(clay)]),
+                )[0]
+                if result == "loam":
+                    assert clay >= 7 and clay < 27 and silt >= 28 and silt < 50 and sand <= 52, (
+                        f"({sand}, {silt}, {clay}) classified as loam but "
+                        f"is outside the USDA loam region"
+                    )
 
 
 class TestApplyLookupTables:

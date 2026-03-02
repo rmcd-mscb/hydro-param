@@ -1684,9 +1684,14 @@ class PywatershedDerivation:
             if np.isnan(s) or np.isnan(si) or np.isnan(c):
                 continue
 
+            # Line-equation conditions matching the USDA Soil Survey
+            # Manual (Ch. 3) texture triangle boundaries.  Evaluation
+            # order proceeds from coarsest (sand) toward finest (clay)
+            # so that the diagonal boundary lines (silt+1.5*clay=15,
+            # silt+2*clay=30) partition the sandy region unambiguously.
             if si + 1.5 * c < 15:
                 result[i] = "sand"
-            elif si + 1.5 * c >= 15 and si + 2 * c <= 30:
+            elif si + 1.5 * c >= 15 and si + 2 * c < 30:
                 result[i] = "loamy_sand"
             elif (c >= 7 and c < 20 and s > 52 and si + 2 * c >= 30) or (
                 c < 7 and si < 50 and si + 2 * c >= 30
