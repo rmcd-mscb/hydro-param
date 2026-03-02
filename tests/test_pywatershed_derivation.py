@@ -637,6 +637,45 @@ class TestDeriveSoils:
         # Fractions win: sand=0.8 > clay=0.2 -> PRMS 1
         assert ds["soil_type"].values[0] == 1
 
+    def test_soil_type_continuous_with_partial_nan(self, derivation: PywatershedDerivation) -> None:
+        """Partial NaN in one HRU defaults that HRU to loam (soil_type=2)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0, np.nan])),
+                    "silt_pct_mean": ("nhm_id", np.array([5.0, 30.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0, 30.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # HRU 1: sand(90/5/5) -> PRMS 1; HRU 2: NaN -> default loam -> PRMS 2
+        np.testing.assert_array_equal(ds["soil_type"].values, [1, 2])
+
+    def test_soil_type_skipped_with_partial_continuous_vars(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Only 2 of 3 continuous vars present — should skip, not crash."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "sand_pct_mean": ("nhm_id", np.array([90.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([5.0])),
+                    # silt_pct_mean intentionally missing
+                    "awc_mm_mean": ("nhm_id", np.array([50.0])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # No texture data available — soil_type should not be derived
+        assert "soil_type" not in ds
+
 
 class TestClassifyUsdaTexture:
     """Tests for USDA soil texture triangle classification."""
@@ -686,8 +725,10 @@ class TestClassifyUsdaTexture:
     def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
         """High sand but not pure sand -> loamy_sand.
 
-        The loamy_sand region requires silt + 2*clay < 30.
-        Point (82/10/8) has silt + 2*clay = 26, clearly interior.
+        The loamy_sand region requires silt + 1.5*clay >= 15 (above the
+        sand boundary) AND silt + 2*clay < 30 (below the sandy_loam
+        boundary).  Point (82/10/8) has silt + 2*clay = 26, clearly
+        interior.
         """
         result = derivation._classify_usda_texture(
             np.array([82.0]), np.array([10.0]), np.array([8.0])

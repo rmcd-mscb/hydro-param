@@ -1522,10 +1522,10 @@ class PywatershedDerivation:
            ``soil_texture_majority`` variable containing the dominant
            USDA texture class name per HRU.
         3. **Continuous percentages** (fallback): SIR contains
-           ``sand_pct_mean``, ``silt_pct_mean``, ``clay_pct_mean``
-           from POLARIS.  Each HRU's mean percentages are classified
-           via the USDA soil texture triangle, then mapped to PRMS
-           soil_type.  This is an aggregate-then-classify approach.
+           ``sand_pct_mean``, ``silt_pct_mean``, ``clay_pct_mean``.
+           Each HRU's mean percentages are classified via the USDA
+           soil texture triangle, then mapped to PRMS soil_type.
+           This is an aggregate-then-classify approach.
 
         Parameters
         ----------
@@ -1559,7 +1559,8 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _compute_soil_type : Texture classification helper.
+        _compute_soil_type : Texture classification and PRMS mapping.
+        _classify_usda_texture : USDA texture triangle decision tree.
         """
         sir = ctx.sir
 
@@ -1665,6 +1666,14 @@ class PywatershedDerivation:
         the standard formulation used by the NRCS Soil Texture
         Calculator and Gerakis & Baer (1999).
 
+        Warnings
+        --------
+        Inputs must satisfy ``sand + silt + clay ≈ 100``.  The decision
+        tree boundaries are defined on the USDA ternary diagram where
+        this constraint holds.  A warning is logged if inputs sum
+        outside 95–105% or appear to be fractions (0–1) rather than
+        percentages.
+
         References
         ----------
         Gerakis, A. and B. Baer, 1999. A computer program for soil
@@ -1677,17 +1686,44 @@ class PywatershedDerivation:
         n = len(sand)
         result = np.full(n, "loam", dtype=object)
 
+        # Validate inputs: detect fraction-scale (0-1) vs percentage (0-100)
+        # and check that components sum to ~100%.
+        non_nan = ~(np.isnan(sand) | np.isnan(silt) | np.isnan(clay))
+        if non_nan.any():
+            valid_totals = (sand + silt + clay)[non_nan]
+            if np.all(valid_totals < 2.0):
+                logger.warning(
+                    "soil_type: sand/silt/clay values appear to be fractions "
+                    "(0-1) rather than percentages (0-100); classification "
+                    "results will be incorrect. Check source data units."
+                )
+            far_from_100 = np.abs(valid_totals - 100.0) > 5.0
+            if np.any(far_from_100):
+                logger.warning(
+                    "soil_type: %d/%d HRU(s) have sand+silt+clay summing "
+                    "outside 95-105%% range; texture classification may be "
+                    "unreliable",
+                    int(np.sum(far_from_100)),
+                    len(valid_totals),
+                )
+
+        nan_count = 0
+        fallthrough_count = 0
+
         for i in range(n):
             s, si, c = float(sand[i]), float(silt[i]), float(clay[i])
 
             # NaN guard — default to loam
             if np.isnan(s) or np.isnan(si) or np.isnan(c):
+                nan_count += 1
                 continue
 
             # Line-equation conditions matching the USDA Soil Survey
             # Manual (Ch. 3) texture triangle boundaries.  Evaluation
-            # order proceeds from coarsest (sand) toward finest (clay)
-            # so that the diagonal boundary lines (silt+1.5*clay=15,
+            # order groups classes by triangle region: sandy classes
+            # first (sand, loamy_sand, sandy_loam), then the central
+            # loam/silt region, then clay-bearing classes.  This
+            # ensures the diagonal boundary lines (silt+1.5*clay=15,
             # silt+2*clay=30) partition the sandy region unambiguously.
             if si + 1.5 * c < 15:
                 result[i] = "sand"
@@ -1715,7 +1751,24 @@ class PywatershedDerivation:
                 result[i] = "silty_clay"
             elif c >= 40:
                 result[i] = "clay"
-            # else: stays "loam" (default)
+            else:
+                fallthrough_count += 1
+
+        if nan_count > 0:
+            logger.warning(
+                "soil_type: %d/%d HRU(s) have NaN sand/silt/clay "
+                "percentages; defaulting to loam (soil_type=2)",
+                nan_count,
+                n,
+            )
+        if fallthrough_count > 0:
+            logger.warning(
+                "soil_type: %d/%d HRU(s) did not match any USDA texture "
+                "triangle region; defaulted to loam. This may indicate "
+                "invalid input data.",
+                fallthrough_count,
+                n,
+            )
 
         return result
 
@@ -1740,6 +1793,17 @@ class PywatershedDerivation:
             Array of PRMS soil type codes (1=sand, 2=loam, 3=clay) with
             shape ``(nhru,)``, or ``None`` if no soil texture data is
             found in the SIR.
+
+        Notes
+        -----
+        Requires ``soil_texture_to_prms_type.yml`` lookup table from
+        ``ctx.resolved_lookup_tables_dir``.  The table maps USDA texture
+        class names to PRMS soil_type integers (1=coarse, 2=medium,
+        3=fine).
+
+        See Also
+        --------
+        _classify_usda_texture : USDA texture triangle decision tree.
         """
         # Check data availability before loading lookup table
         prefix = "soil_texture_frac_"
@@ -1817,7 +1881,7 @@ class PywatershedDerivation:
                 "percentages via USDA texture triangle (aggregate-then-classify)",
                 len(texture_names),
             )
-            return np.array([mapping.get(name, 2) for name in texture_names])
+            return np.array([mapping[name] for name in texture_names])
 
         return None
 
