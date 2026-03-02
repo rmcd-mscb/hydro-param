@@ -730,7 +730,10 @@ def validate_sir(
     Parameters
     ----------
     sir_files : dict[str, pathlib.Path]
-        Mapping of canonical name to normalized file path (CSV or NetCDF).
+        Mapping of dataset-prefixed key to normalized file path (CSV or
+        NetCDF).  Keys use the format ``"{dataset_name}__{canonical_name}"``
+        (e.g., ``"dem_3dep_10m__elevation_m_mean"``), matching the output
+        of ``normalize_sir()``.
     schema : list[SIRVariableSchema]
         Expected SIR variable schema entries from ``build_sir_schema()``.
     strict : bool
