@@ -1621,6 +1621,93 @@ class PywatershedDerivation:
 
         return ds
 
+    def _classify_usda_texture(
+        self,
+        sand: np.ndarray,
+        silt: np.ndarray,
+        clay: np.ndarray,
+    ) -> np.ndarray:
+        """Classify sand/silt/clay percentages into USDA texture class names.
+
+        Apply the standard USDA soil texture triangle decision tree to
+        assign one of 12 texture classes to each element.  Boundaries
+        follow the USDA Natural Resources Conservation Service (NRCS)
+        soil texture calculator definitions.
+
+        Parameters
+        ----------
+        sand : np.ndarray
+            Sand content as percentage (0–100), shape ``(n,)``.
+        silt : np.ndarray
+            Silt content as percentage (0–100), shape ``(n,)``.
+        clay : np.ndarray
+            Clay content as percentage (0–100), shape ``(n,)``.
+
+        Returns
+        -------
+        np.ndarray
+            Array of USDA texture class name strings, shape ``(n,)``.
+            Valid classes: ``sand``, ``loamy_sand``, ``sandy_loam``,
+            ``loam``, ``silt_loam``, ``silt``, ``sandy_clay_loam``,
+            ``clay_loam``, ``silty_clay_loam``, ``sandy_clay``,
+            ``silty_clay``, ``clay``.  NaN inputs default to ``loam``.
+
+        Notes
+        -----
+        The decision tree evaluates conditions in a specific order to
+        handle overlapping boundary regions correctly.  This follows
+        the standard formulation used by the NRCS Soil Texture
+        Calculator and Gerakis & Baer (1999).
+
+        References
+        ----------
+        Gerakis, A. and B. Baer, 1999. A computer program for soil
+        textural classification. Soil Science Society of America
+        Journal, 63:807-808.
+
+        USDA-NRCS Soil Texture Calculator:
+        https://www.nrcs.usda.gov/resources/education-and-teaching-materials/soil-texture-calculator
+        """
+        n = len(sand)
+        result = np.full(n, "loam", dtype=object)
+
+        for i in range(n):
+            s, si, c = float(sand[i]), float(silt[i]), float(clay[i])
+
+            # NaN guard — default to loam
+            if np.isnan(s) or np.isnan(si) or np.isnan(c):
+                continue
+
+            if si + 1.5 * c < 15:
+                result[i] = "sand"
+            elif si + 1.5 * c >= 15 and si + 2 * c < 30:
+                result[i] = "loamy_sand"
+            elif (c >= 7 and c < 20 and s > 52 and si + 2 * c >= 30) or (
+                c < 7 and si < 50 and si + 2 * c >= 30
+            ):
+                result[i] = "sandy_loam"
+            elif c >= 7 and c < 27 and si >= 28 and si < 50 and s <= 52:
+                result[i] = "loam"
+            elif (si >= 50 and c >= 12 and c < 27) or (si >= 50 and si < 80 and c < 12):
+                result[i] = "silt_loam"
+            elif si >= 80 and c < 12:
+                result[i] = "silt"
+            elif c >= 20 and c < 35 and si < 28 and s > 45:
+                result[i] = "sandy_clay_loam"
+            elif c >= 27 and c < 40 and s > 20 and s <= 45:
+                result[i] = "clay_loam"
+            elif c >= 27 and c < 40 and s <= 20:
+                result[i] = "silty_clay_loam"
+            elif c >= 35 and s > 45:
+                result[i] = "sandy_clay"
+            elif c >= 40 and si >= 40:
+                result[i] = "silty_clay"
+            elif c >= 40:
+                result[i] = "clay"
+            # else: stays "loam" (default)
+
+        return result
+
     def _compute_soil_type(self, sir: SIRAccessor, ctx: DerivationContext) -> np.ndarray | None:
         """Compute PRMS soil_type from SIR soil texture data.
 

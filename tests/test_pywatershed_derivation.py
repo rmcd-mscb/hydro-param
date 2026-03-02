@@ -622,7 +622,7 @@ class TestClassifyUsdaTexture:
     def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
         """High sand but not pure sand -> loamy_sand."""
         result = derivation._classify_usda_texture(
-            np.array([80.0]), np.array([10.0]), np.array([10.0])
+            np.array([82.0]), np.array([10.0]), np.array([8.0])
         )
         assert result[0] == "loamy_sand"
 
