@@ -599,9 +599,9 @@ class TestDeriveSoils:
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
-                    "sand_pct_mean": ("nhm_id", np.array([82.0])),
+                    "sand_pct_mean": ("nhm_id", np.array([80.0])),
                     "silt_pct_mean": ("nhm_id", np.array([10.0])),
-                    "clay_pct_mean": ("nhm_id", np.array([8.0])),
+                    "clay_pct_mean": ("nhm_id", np.array([10.0])),
                     "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
                 },
                 coords={"nhm_id": [1]},
@@ -610,7 +610,7 @@ class TestDeriveSoils:
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_type" in ds
-        # loamy_sand(82/10/8) -> PRMS 1 (coarse)
+        # loamy_sand(80/10/10) -> PRMS 1 (coarse)
         assert ds["soil_type"].values[0] == 1
 
     def test_soil_type_fractions_preferred_over_percentages(
@@ -684,9 +684,14 @@ class TestClassifyUsdaTexture:
         assert result[0] == "sandy_loam"
 
     def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
-        """High sand but not pure sand -> loamy_sand."""
+        """High sand but not pure sand -> loamy_sand.
+
+        Point (80/10/10) sits on the loamy_sand / sandy_loam boundary
+        where silt + 2*clay = 30.  Per the USDA polygon definitions,
+        boundary points belong to loamy_sand (the finer class).
+        """
         result = derivation._classify_usda_texture(
-            np.array([82.0]), np.array([10.0]), np.array([8.0])
+            np.array([80.0]), np.array([10.0]), np.array([10.0])
         )
         assert result[0] == "loamy_sand"
 

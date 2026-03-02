@@ -1686,7 +1686,7 @@ class PywatershedDerivation:
 
             if si + 1.5 * c < 15:
                 result[i] = "sand"
-            elif si + 1.5 * c >= 15 and si + 2 * c < 30:
+            elif si + 1.5 * c >= 15 and si + 2 * c <= 30:
                 result[i] = "loamy_sand"
             elif (c >= 7 and c < 20 and s > 52 and si + 2 * c >= 30) or (
                 c < 7 and si < 50 and si + 2 * c >= 30
