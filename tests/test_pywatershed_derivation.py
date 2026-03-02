@@ -574,6 +574,109 @@ class TestDeriveSoils:
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
 
+class TestClassifyUsdaTexture:
+    """Tests for USDA soil texture triangle classification."""
+
+    def test_pure_sand(self, derivation: PywatershedDerivation) -> None:
+        """High sand, low clay -> sand."""
+        result = derivation._classify_usda_texture(
+            np.array([90.0]), np.array([5.0]), np.array([5.0])
+        )
+        assert result[0] == "sand"
+
+    def test_pure_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay -> clay."""
+        result = derivation._classify_usda_texture(
+            np.array([20.0]), np.array([20.0]), np.array([60.0])
+        )
+        assert result[0] == "clay"
+
+    def test_loam_center(self, derivation: PywatershedDerivation) -> None:
+        """Classic loam composition."""
+        result = derivation._classify_usda_texture(
+            np.array([40.0]), np.array([40.0]), np.array([20.0])
+        )
+        assert result[0] == "loam"
+
+    def test_silt(self, derivation: PywatershedDerivation) -> None:
+        """Very high silt, low clay -> silt."""
+        result = derivation._classify_usda_texture(
+            np.array([5.0]), np.array([90.0]), np.array([5.0])
+        )
+        assert result[0] == "silt"
+
+    def test_silt_loam(self, derivation: PywatershedDerivation) -> None:
+        """High silt, moderate clay -> silt_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([20.0]), np.array([60.0]), np.array([20.0])
+        )
+        assert result[0] == "silt_loam"
+
+    def test_sandy_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate sand, low clay -> sandy_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([65.0]), np.array([25.0]), np.array([10.0])
+        )
+        assert result[0] == "sandy_loam"
+
+    def test_loamy_sand(self, derivation: PywatershedDerivation) -> None:
+        """High sand but not pure sand -> loamy_sand."""
+        result = derivation._classify_usda_texture(
+            np.array([80.0]), np.array([10.0]), np.array([10.0])
+        )
+        assert result[0] == "loamy_sand"
+
+    def test_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, moderate sand -> clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([30.0]), np.array([35.0]), np.array([35.0])
+        )
+        assert result[0] == "clay_loam"
+
+    def test_silty_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, high silt, low sand -> silty_clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([10.0]), np.array([55.0]), np.array([35.0])
+        )
+        assert result[0] == "silty_clay_loam"
+
+    def test_sandy_clay_loam(self, derivation: PywatershedDerivation) -> None:
+        """Moderate clay, high sand, low silt -> sandy_clay_loam."""
+        result = derivation._classify_usda_texture(
+            np.array([60.0]), np.array([15.0]), np.array([25.0])
+        )
+        assert result[0] == "sandy_clay_loam"
+
+    def test_sandy_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay + high sand -> sandy_clay."""
+        result = derivation._classify_usda_texture(
+            np.array([50.0]), np.array([10.0]), np.array([40.0])
+        )
+        assert result[0] == "sandy_clay"
+
+    def test_silty_clay(self, derivation: PywatershedDerivation) -> None:
+        """High clay + high silt -> silty_clay."""
+        result = derivation._classify_usda_texture(
+            np.array([5.0]), np.array([50.0]), np.array([45.0])
+        )
+        assert result[0] == "silty_clay"
+
+    def test_vectorized_multiple_hrus(self, derivation: PywatershedDerivation) -> None:
+        """Classifies multiple HRUs at once."""
+        sand = np.array([90.0, 20.0, 40.0])
+        silt = np.array([5.0, 20.0, 40.0])
+        clay = np.array([5.0, 60.0, 20.0])
+        result = derivation._classify_usda_texture(sand, silt, clay)
+        assert list(result) == ["sand", "clay", "loam"]
+
+    def test_nan_values_default_to_loam(self, derivation: PywatershedDerivation) -> None:
+        """NaN inputs classify as loam (safe default)."""
+        result = derivation._classify_usda_texture(
+            np.array([np.nan]), np.array([np.nan]), np.array([np.nan])
+        )
+        assert result[0] == "loam"
+
+
 class TestApplyLookupTables:
     """Tests for step 8: lookup table application."""
 
