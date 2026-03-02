@@ -119,6 +119,7 @@ _DEFAULT_X_COEF = 0.2  # standard Muskingum weighting
 _LAKE_K_COEF = 24.0  # travel time for lake segments
 _LAKE_SEGMENT_TYPE = 1  # segment_type value for lake
 _CHANNEL_SEGMENT_TYPE = 0  # segment_type value for channel
+_SPATIAL_JOIN_BUFFER_M = 100.0  # metres — buffer around segments for NHD flowline clipping
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -730,8 +731,9 @@ class PywatershedDerivation:
         """Get slopes via spatial join to NHDPlus flowlines (length-weighted).
 
         For each segment, find all NHDPlus flowlines that intersect it,
-        compute the intersection length, and return a length-weighted
-        mean slope.  This handles GF/PRMS segments that have been
+        clip each flowline to a buffer around the segment, and return
+        a length-weighted mean slope using the clipped flowline lengths
+        as weights.  This handles GF/PRMS segments that have been
         post-processed from NHD (split at POIs, trimmed to catchment
         boundaries) and therefore lack COMIDs for a direct VAA join.
 
@@ -739,7 +741,7 @@ class PywatershedDerivation:
         ----------
         segments : gpd.GeoDataFrame
             Segment GeoDataFrame (no COMID column).  Must have line
-            geometries and a CRS set.
+            geometries and a projected CRS (units in metres).
         nhd_flowlines : gpd.GeoDataFrame
             NHDPlus flowlines with ``slope`` column (dimensionless
             rise/run, decimal fraction) and line geometries.
@@ -752,10 +754,14 @@ class PywatershedDerivation:
 
         Notes
         -----
-        The weighting uses actual intersection geometry length rather
-        than total flowline length.  This correctly handles partial
-        overlaps where a segment only intersects part of a longer NHD
-        reach.
+        GF/PRMS segments and NHD flowlines are independently digitized
+        representations of the same river network.  Direct line-on-line
+        intersection produces only Point geometries (zero length) because
+        the vertices never coincide exactly.  Buffering the segment by
+        ``_SPATIAL_JOIN_BUFFER_M`` (100 m) converts it to a polygon
+        corridor, then clipping each NHD flowline to that corridor yields
+        the flowline length that runs along the segment — a meaningful
+        weight for slope averaging.
 
         CRS alignment is enforced: if the two GeoDataFrames differ in
         CRS, the NHD flowlines are reprojected to match the segments.
@@ -764,6 +770,7 @@ class PywatershedDerivation:
         --------
         _get_slopes_from_comid : Primary slope lookup via COMID join.
         _FALLBACK_SLOPE : Default slope for unmatched segments.
+        _SPATIAL_JOIN_BUFFER_M : Buffer distance for flowline clipping.
         """
         # Ensure same CRS
         if segments.crs != nhd_flowlines.crs:
@@ -794,15 +801,22 @@ class PywatershedDerivation:
             if matches.empty:
                 continue
 
-            # Compute intersection lengths for weighting
+            # Compute intersection lengths for weighting.
+            # GF/PRMS segments and NHD flowlines are independently digitized
+            # representations of the same rivers, so line-on-line intersection
+            # typically produces only Point geometries (zero length).  Buffer
+            # the segment to capture NHD flowline sections running along it,
+            # then clip flowlines to the buffer and use clipped length as
+            # the weight.
             seg_geom = segs.geometry.iloc[seg_idx]
+            seg_buffer = seg_geom.buffer(_SPATIAL_JOIN_BUFFER_M)
             weights: list[float] = []
             match_slopes: list[float] = []
             for _, row in matches.iterrows():
                 nhd_idx = int(row["index_right"])
                 nhd_geom = nhd.geometry.iloc[nhd_idx]
                 try:
-                    intersection = seg_geom.intersection(nhd_geom)
+                    clipped = nhd_geom.intersection(seg_buffer)
                 except Exception:
                     logger.warning(
                         "Geometry intersection failed for segment %d with NHD index %d; skipping",
@@ -810,18 +824,18 @@ class PywatershedDerivation:
                         nhd_idx,
                     )
                     continue
-                if intersection.is_empty:
+                if clipped.is_empty:
                     continue
-                weights.append(intersection.length)
-                match_slopes.append(row["slope"])
+                weight = clipped.length
+                if weight > 0:
+                    weights.append(weight)
+                    match_slopes.append(row["slope"])
 
             if weights:
                 weights_arr = np.array(weights)
                 match_slopes_arr = np.array(match_slopes)
-                total_weight = weights_arr.sum()
-                if total_weight > 0:
-                    slopes[seg_idx] = np.average(match_slopes_arr, weights=weights_arr)
-                    matched[seg_idx] = True
+                slopes[seg_idx] = np.average(match_slopes_arr, weights=weights_arr)
+                matched[seg_idx] = True
 
         n_fallback = int(np.sum(~matched))
         if n_fallback > 0:
@@ -947,8 +961,8 @@ class PywatershedDerivation:
         -------
         pd.DataFrame or None
             VAA table with ``comid`` and ``slope`` columns (NaN slopes
-            removed), or ``None`` if pynhd is not installed or the
-            download fails.
+            and -9998 sentinel values removed), or ``None`` if pynhd
+            is not installed or the download fails.
 
         Notes
         -----
@@ -969,7 +983,10 @@ class PywatershedDerivation:
 
         try:
             vaa = nhd.nhdplus_vaa()
-            return vaa[["comid", "slope"]].dropna(subset=["slope"])
+            result = vaa[["comid", "slope"]].dropna(subset=["slope"])
+            # NHDPlus uses -9998 as a sentinel for missing slope values.
+            result = result[result["slope"] >= 0]
+            return result
         except (OSError, KeyError) as exc:
             logger.error(
                 "Failed to fetch or parse NHDPlus VAA table: %s",

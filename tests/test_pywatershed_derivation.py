@@ -3377,28 +3377,39 @@ class TestDeriveRouting:
     def test_routing_gf_segments_spatial_join(
         self, derivation: PywatershedDerivation, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GF segments without COMID use spatial join for slopes."""
+        """GF segments without COMID use spatial join for slopes.
+
+        Uses EPSG:5070 (projected, metres) so the 100 m buffer in
+        ``_get_slopes_spatial_join`` is meaningful.  Segments are spaced
+        500 m apart to avoid cross-matching within the buffer.
+        """
+        # Two segments 500 m apart in EPSG:5070.  NHD flowlines cross
+        # each segment at a slight angle so sjoin(predicate="intersects")
+        # finds them, and the 100 m buffer captures the clipped length.
         segments = gpd.GeoDataFrame(
             {
                 "nhm_seg": [1, 2],
                 "tosegment": [2, 0],
             },
             geometry=[
-                LineString([(0, 0), (1, 0)]),
-                LineString([(1, 0), (2, 0)]),
+                LineString([(1_700_000, 2_000_000), (1_700_500, 2_000_000)]),
+                LineString([(1_700_000, 2_000_500), (1_700_500, 2_000_500)]),
             ],
-            crs="EPSG:4326",
+            crs="EPSG:5070",
         )
+        # Flowlines cross each segment at a slight angle (±50 m Y offset
+        # over 500 m X).  They stay within the 100 m buffer so the
+        # clipped flowline length is the full crossing length.
         nhd_flowlines = gpd.GeoDataFrame(
             {
                 "comid": [101, 102],
                 "slope": [0.01, 0.005],
             },
             geometry=[
-                LineString([(0, 0), (1, 0)]),
-                LineString([(1, 0), (2, 0)]),
+                LineString([(1_700_000, 1_999_950), (1_700_500, 2_000_050)]),
+                LineString([(1_700_000, 2_000_450), (1_700_500, 2_000_550)]),
             ],
-            crs="EPSG:4326",
+            crs="EPSG:5070",
         )
         vaa = pd.DataFrame({"comid": [101, 102], "slope": [0.01, 0.005]})
 
@@ -3417,10 +3428,24 @@ class TestDeriveRouting:
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2], "hru_segment": [1, 2]},
             geometry=[
-                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+                Polygon(
+                    [
+                        (1_699_900, 1_999_900),
+                        (1_700_600, 1_999_900),
+                        (1_700_600, 2_000_100),
+                        (1_699_900, 2_000_100),
+                    ]
+                ),
+                Polygon(
+                    [
+                        (1_699_900, 2_000_400),
+                        (1_700_600, 2_000_400),
+                        (1_700_600, 2_000_600),
+                        (1_699_900, 2_000_600),
+                    ]
+                ),
             ],
-            crs="EPSG:4326",
+            crs="EPSG:5070",
         )
         ctx = DerivationContext(
             sir=sir,
