@@ -287,17 +287,25 @@ def classify_usda_texture_raster(
 ) -> xr.DataArray:
     """Classify sand/silt/clay percentage rasters into USDA texture classes.
 
-    Thin wrapper around ``classify_usda_texture()`` that handles
-    xarray DataArray I/O.  Returns a float64 raster with class codes
-    (1--12) suitable for categorical zonal statistics.
+    Wrapper around ``classify_usda_texture()`` that normalizes inputs
+    and handles xarray DataArray I/O.  Returns a float64 raster with
+    class codes (1--12) suitable for categorical zonal statistics.
 
-    Before classification, sand/silt/clay values are normalized to sum
-    to 100% at each pixel.  This is necessary because POLARIS (and
-    similar ML-derived soil products) estimate each fraction
-    independently, so pixel-level sums can deviate significantly from
-    100%.  Normalization preserves the relative proportions — which
-    correctly indicate the texture triangle region — while ensuring
-    each pixel represents a valid soil composition.
+    Before classification, three data-cleaning steps are applied:
+
+    1. **Negative clamping** — ML-derived products (e.g. POLARIS) can
+       produce negative regression artifacts.  Negative values are
+       clamped to zero with a WARNING log.
+    2. **Near-zero guard** — Pixels where sand+silt+clay < 0.1% are
+       treated as no-data (set to NaN) since they cannot be
+       meaningfully normalized.
+    3. **Sum normalization** — Remaining pixels are rescaled so that
+       sand+silt+clay = 100%.  This is necessary because POLARIS (and
+       similar products) estimate each fraction independently, so
+       pixel-level sums can deviate significantly from 100%.
+       Normalization preserves the relative proportions — which
+       correctly indicate the texture triangle region — while ensuring
+       each pixel represents a valid soil composition.
 
     Parameters
     ----------
@@ -314,6 +322,13 @@ def classify_usda_texture_raster(
         Float64 raster with USDA texture class codes (1--12).
         Elements where any input is NaN remain NaN.
 
+    Notes
+    -----
+    The normalization tolerance (0.01%) is tighter than the downstream
+    ``classify_usda_texture()`` warning threshold (5%), so all pixels
+    reaching the classifier will have sums within floating-point
+    precision of 100%.
+
     See Also
     --------
     hydro_param.classification.classify_usda_texture : Core classifier.
@@ -323,23 +338,54 @@ def classify_usda_texture_raster(
     si = silt.values.astype(np.float64).ravel()
     c = clay.values.astype(np.float64).ravel()
 
-    # Normalize to sum=100 where all three values are valid.
-    # This corrects for independently-estimated fractions (e.g. POLARIS)
-    # that don't sum to 100%.
+    # Step 1: Clamp negative values (ML regression artifacts) to zero.
+    for arr, name in [(s, "sand"), (si, "silt"), (c, "clay")]:
+        neg_mask = (arr < 0) & ~np.isnan(arr)
+        n_neg = int(np.sum(neg_mask))
+        if n_neg > 0:
+            logger.warning(
+                "classify_usda_texture_raster: %d pixel(s) have negative "
+                "%s values (min=%.2f%%) — clamping to 0",
+                n_neg,
+                name,
+                float(np.nanmin(arr)),
+            )
+            arr[neg_mask] = 0.0
+
+    # Step 2: Mark zero/near-zero totals as no-data (cannot normalize).
     total = s + si + c
     valid = ~(np.isnan(s) | np.isnan(si) | np.isnan(c))
+    zero_total = valid & (total < 0.1)
+    n_zero = int(np.sum(zero_total))
+    if n_zero > 0:
+        logger.warning(
+            "classify_usda_texture_raster: %d pixel(s) have "
+            "sand+silt+clay sum < 0.1%% — treating as no-data",
+            n_zero,
+        )
+        s[zero_total] = np.nan
+        si[zero_total] = np.nan
+        c[zero_total] = np.nan
+        valid = valid & ~zero_total
+
+    # Step 3: Normalize to sum=100 (see docstring for rationale).
+    # Tolerance 0.01% avoids floating-point noise; tighter than the
+    # downstream classify_usda_texture() 5% warning threshold.
     need_norm = valid & (np.abs(total - 100.0) > 0.01)
     n_normalized = int(np.sum(need_norm))
     if n_normalized > 0:
         deviations = np.abs(total[need_norm] - 100.0)
-        logger.info(
+        mean_dev = float(np.mean(deviations))
+        max_dev = float(np.max(deviations))
+        msg = (
             "classify_usda_texture_raster: normalized %d/%d pixel(s) "
-            "to sum=100%% (mean deviation: %.1f%%, max: %.1f%%)",
-            n_normalized,
-            int(np.sum(valid)),
-            float(np.mean(deviations)),
-            float(np.max(deviations)),
+            "to sum=100%% (mean deviation: %.1f%%, max: %.1f%%)"
         )
+        args = (n_normalized, int(np.sum(valid)), mean_dev, max_dev)
+        if max_dev > 20.0:
+            logger.warning(msg, *args)
+        else:
+            logger.info(msg, *args)
         scale = 100.0 / total[need_norm]
         s[need_norm] *= scale
         si[need_norm] *= scale
