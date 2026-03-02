@@ -65,6 +65,7 @@ from hydro_param.data_access import (
 from hydro_param.dataset_registry import (
     DatasetEntry,
     DatasetRegistry,
+    DerivedCategoricalSpec,
     DerivedVariableSpec,
     VariableSpec,
     load_registry,
@@ -376,7 +377,13 @@ def _validate_time_range(
 def stage2_resolve_datasets(
     config: PipelineConfig,
     registry: DatasetRegistry,
-) -> list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]:
+) -> list[
+    tuple[
+        DatasetEntry,
+        DatasetRequest,
+        list[VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec],
+    ]
+]:
     """Stage 2: Resolve dataset names to registry entries and variable specs.
 
     For each :class:`~hydro_param.config.DatasetRequest` in the pipeline
@@ -426,7 +433,8 @@ def stage2_resolve_datasets(
                 registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
             ]
             all_vars_have_source = all(
-                isinstance(vs, VariableSpec) and vs.source_override is not None
+                isinstance(vs, DerivedCategoricalSpec)
+                or (isinstance(vs, VariableSpec) and vs.source_override is not None)
                 for vs in requested_var_specs
             )
             if not all_vars_have_source:
@@ -475,7 +483,23 @@ def stage2_resolve_datasets(
         # Validate time range against dataset availability
         _validate_time_range(ds_req, entry)
 
-        var_specs = [registry.resolve_variable(ds_req.name, v) for v in ds_req.variables]
+        # Auto-include source variables needed by derived categorical specs
+        requested = set(ds_req.variables)
+        extra_sources: list[str] = []
+        for vname in ds_req.variables:
+            spec = registry.resolve_variable(ds_req.name, vname)
+            if isinstance(spec, DerivedCategoricalSpec):
+                for src in spec.sources:
+                    if src not in requested and src not in extra_sources:
+                        extra_sources.append(src)
+        if extra_sources:
+            logger.info(
+                "  Auto-including source variables for derived categorical: %s",
+                extra_sources,
+            )
+
+        all_var_names = extra_sources + list(ds_req.variables)
+        var_specs = [registry.resolve_variable(ds_req.name, v) for v in all_var_names]
         resolved.append((entry, ds_req, var_specs))
         logger.info(
             "  %s (%s): %d variables — %s",

@@ -2512,3 +2512,57 @@ def test_run_pipeline_sets_gdal_http_timeout(tmp_path: Path, fake_gpkg: Path) ->
             os.environ["GDAL_HTTP_TIMEOUT"] = prev_timeout
         if prev_connect is not None:
             os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = prev_connect
+
+
+def test_stage2_auto_includes_derived_categorical_sources() -> None:
+    """When user requests a DerivedCategoricalSpec, its sources are auto-included."""
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import (
+        DatasetEntry,
+        DatasetRegistry,
+        DerivedCategoricalSpec,
+        VariableSpec,
+    )
+    from hydro_param.pipeline import stage2_resolve_datasets
+
+    entry = DatasetEntry(
+        strategy="local_tiff",
+        variables=[
+            VariableSpec(name="sand", source_override="http://example.com/sand.vrt"),
+            VariableSpec(name="silt", source_override="http://example.com/silt.vrt"),
+            VariableSpec(name="clay", source_override="http://example.com/clay.vrt"),
+            VariableSpec(name="ksat", source_override="http://example.com/ksat.vrt"),
+        ],
+        derived_categorical_variables=[
+            DerivedCategoricalSpec(
+                name="soil_texture",
+                sources=["sand", "silt", "clay"],
+                method="usda_texture_triangle",
+            )
+        ],
+    )
+    registry = DatasetRegistry(datasets={"test_ds": entry})
+
+    # User requests only soil_texture and ksat — sand/silt/clay should be auto-included
+    config = PipelineConfig(
+        target_fabric={"path": "/tmp/test.gpkg", "id_field": "nhm_id"},
+        datasets=[
+            DatasetRequest(
+                name="test_ds",
+                variables=["soil_texture", "ksat"],
+                statistics=["mean"],
+            )
+        ],
+        output={"path": "/tmp/out"},
+    )
+
+    resolved = stage2_resolve_datasets(config, registry)
+    _, _, var_specs = resolved[0]
+    var_names = [v.name for v in var_specs]
+
+    # Sources auto-included before the derived categorical spec
+    assert "sand" in var_names
+    assert "silt" in var_names
+    assert "clay" in var_names
+    assert "soil_texture" in var_names
+    assert "ksat" in var_names
