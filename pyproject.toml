@@ -152,6 +152,19 @@ mkdocstrings = { version = ">=0.27", extras = ["python"] }
 docs-serve = "mkdocs serve"
 docs-build = "mkdocs build --strict"
 
+[tool.pixi.feature.pws-test.dependencies]
+pywatershed = ">=2.0.4"
+jupyterlab = ">=4.0"
+ipykernel = ">=7.2.0,<8"
+matplotlib = ">=3.8"
+hvplot = ">=0.10"
+holoviews = ">=1.18"
+bokeh = ">=3.3"
+
+[tool.pixi.feature.pws-test.tasks]
+lab = "jupyter lab"
+pws-notebook = "jupyter lab notebooks/run_pywatershed.ipynb"
+
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
 
@@ -160,3 +173,4 @@ python = "3.11.*"
 default = { features = ["py311"], solve-group = "default" }
 dev = { features = ["dev", "py311"], solve-group = "default" }
 docs = { features = ["docs", "py311"], solve-group = "default" }
+pws-test = { features = ["dev", "pws-test", "py311"], solve-group = "default" }
