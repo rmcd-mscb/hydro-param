@@ -1759,6 +1759,28 @@ class PywatershedDerivation:
             sand = sir["sand_pct_mean"].values.astype(np.float64)
             silt = sir["silt_pct_mean"].values.astype(np.float64)
             clay = sir["clay_pct_mean"].values.astype(np.float64)
+
+            # Normalize HRU-mean percentages to sum=100%.  POLARIS
+            # estimates each fraction independently so HRU-level means
+            # (from zonal aggregation of independently-estimated rasters)
+            # rarely sum to exactly 100%.  Same rationale as the pixel-
+            # level normalization in classify_usda_texture_raster().
+            total = sand + silt + clay
+            valid = ~(np.isnan(sand) | np.isnan(silt) | np.isnan(clay)) & (total > 0.1)
+            need_norm = valid & (np.abs(total - 100.0) > 0.01)
+            n_norm = int(np.sum(need_norm))
+            if n_norm > 0:
+                logger.info(
+                    "soil_type: normalizing %d/%d HRU(s) sand+silt+clay "
+                    "to sum=100%% before texture classification",
+                    n_norm,
+                    int(np.sum(valid)),
+                )
+                scale = 100.0 / total[need_norm]
+                sand[need_norm] *= scale
+                silt[need_norm] *= scale
+                clay[need_norm] *= scale
+
             codes = classify_usda_texture(sand, silt, clay)
             nan_mask = np.isnan(codes)
             nan_count = int(np.sum(nan_mask))
