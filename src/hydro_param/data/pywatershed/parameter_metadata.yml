@@ -5,7 +5,7 @@
 # Used by PywatershedFormatter.validate() and derivation plugin.
 #
 # Each parameter entry defines:
-#   dimension   — nhru, nsegment, [nhru,12], [nhru,366], nmonths, one
+#   dimension   — nhru, nsegment, [nhru,12], [nhru,366], nmonth, one
 #   units       — target units in PRMS convention
 #   valid_range — [min, max] for value validation
 #   required    — whether the parameter must be present for a valid model

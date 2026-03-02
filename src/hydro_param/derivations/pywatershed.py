@@ -147,7 +147,9 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
 )
 
 # Dimension mapping for default parameters.  Every entry in _DEFAULTS
-# that is NOT in _DEFAULTS_SPECIAL must appear here.  pywatershed v2.0
+# that is NOT in _DEFAULTS_SPECIAL must appear here.  Additionally,
+# calibration seed parameters from step 14 are included for correct
+# shape broadcasting in _derive_calibration_seeds.  pywatershed v2.0
 # requires all parameters as correctly-dimensioned arrays.
 _PARAM_DIMS: dict[str, tuple[str, ...]] = {
     # Per-HRU (nhru,)
@@ -192,7 +194,7 @@ _PARAM_DIMS: dict[str, tuple[str, ...]] = {
     "hru_deplcrv": ("nhru",),
     # Soilzone
     "sat_threshold": ("nhru",),
-    # Per-month-per-HRU (nmonths, nhru)
+    # Per-month-per-HRU (nmonth, nhru)
     "tmax_allsnow": ("nmonth", "nhru"),
     "radmax": ("nmonth", "nhru"),
     "cecn_coef": ("nmonth", "nhru"),
@@ -211,6 +213,29 @@ _PARAM_DIMS: dict[str, tuple[str, ...]] = {
     "dday_slope": ("nmonth", "nhru"),
     "dday_intcp": ("nmonth", "nhru"),
 }
+
+# Validate _PARAM_DIMS covers all non-special defaults at import time.
+_DEFAULTS_NEEDING_DIMS = set(_DEFAULTS) - _DEFAULTS_SPECIAL
+_MISSING_DIMS = _DEFAULTS_NEEDING_DIMS - set(_PARAM_DIMS)
+if _MISSING_DIMS:
+    raise ImportError(
+        f"Parameters in _DEFAULTS missing from _PARAM_DIMS "
+        f"(would silently default to (nhru,)): {sorted(_MISSING_DIMS)}. "
+        f"Add explicit dimension mappings."
+    )
+
+# Known dimension names referenced by _PARAM_DIMS.
+_KNOWN_DIMS = frozenset({"nhru", "nmonth"})
+_BAD_DIMS = {
+    p: [d for d in dims if d not in _KNOWN_DIMS]
+    for p, dims in _PARAM_DIMS.items()
+    if any(d not in _KNOWN_DIMS for d in dims)
+}
+if _BAD_DIMS:
+    raise ImportError(
+        f"_PARAM_DIMS contains unknown dimension names: {_BAD_DIMS}. "
+        f"Known dimensions: {sorted(_KNOWN_DIMS)}."
+    )
 
 # Default imperv_stor_max by cov_type (inches)
 _IMPERV_STOR_MAX_DEFAULT = 0.03
@@ -347,7 +372,7 @@ class PywatershedDerivation:
         xr.Dataset
             Parameter dataset with PRMS-convention variable names and units.
             Dimensions are ``nhru`` (and ``nsegment`` for routing, ``ndoy``
-            for soltab, ``nmonths`` for monthly parameters, ``time`` for
+            for soltab, ``nmonth`` for monthly parameters, ``time`` for
             forcing).
 
         Notes
@@ -2359,15 +2384,17 @@ class PywatershedDerivation:
         -----
         Special-case parameters that require unique shapes or derivations:
 
-        - ``jh_coef``: shape ``(nhru, 12)`` --- per_degF_per_day
+        - ``jh_coef``: shape ``(nmonth, nhru)`` i.e. ``(12, nhru)`` --- per_degF_per_day
         - ``transp_beg``, ``transp_end``: shape ``(nhru,)`` --- integer month
         - ``hru_type``: shape ``(nhru,)`` --- integer (1=land, 2=lake)
         - ``doy``: shape ``(366,)`` --- day-of-year coordinate
         - ``hru_in_to_cf``: shape ``(nhru,)`` --- derived from ``hru_area``
         - ``temp_units``: scalar --- 0 for Fahrenheit
         - ``snarea_curve``: shape ``(11,)`` --- snow depletion curve
+        - ``pref_flow_infil_frac``: shape ``(nhru,)`` --- derived from
+          ``pref_flow_den`` or defaults to 0.0
 
-        All other defaults are broadcast to ``(nhru,)`` or ``(nmonths, nhru)``
+        All other defaults are broadcast to ``(nhru,)`` or ``(nmonth, nhru)``
         using the ``_PARAM_DIMS`` mapping.  Default units match PRMS
         conventions: inches for storage depths, degree-days for
         ``transp_tmax``, etc.  Segment-level defaults are added only when
@@ -2416,15 +2443,22 @@ class PywatershedDerivation:
 
         # hru_in_to_cf: unit conversion factor (inches*acres → cubic feet)
         # 1 inch over 1 acre = 43560/12 = 3630 ft³
-        if "hru_in_to_cf" not in ds and "hru_area" in ds:
-            ds["hru_in_to_cf"] = xr.DataArray(
-                ds["hru_area"].values * (43560.0 / 12.0),
-                dims=("nhru",),
-                attrs={
-                    "units": "cubic_feet_per_inch_acre",
-                    "long_name": "Inches to cubic feet conversion factor",
-                },
-            )
+        if "hru_in_to_cf" not in ds:
+            if "hru_area" in ds:
+                ds["hru_in_to_cf"] = xr.DataArray(
+                    ds["hru_area"].values * (43560.0 / 12.0),
+                    dims=("nhru",),
+                    attrs={
+                        "units": "cubic_feet_per_inch_acre",
+                        "long_name": "Inches to cubic feet conversion factor",
+                    },
+                )
+            else:
+                logger.warning(
+                    "Cannot compute 'hru_in_to_cf': 'hru_area' not in dataset. "
+                    "Ensure geometry derivation (step 1) runs before defaults. "
+                    "pywatershed may fail at runtime without this parameter."
+                )
 
         # temp_units: 0 = Fahrenheit (PRMS convention)
         if "temp_units" not in ds:
@@ -2468,7 +2502,7 @@ class PywatershedDerivation:
                 continue  # handled above
             if param_name in ds:
                 continue  # data-derived value takes precedence
-            dims = _PARAM_DIMS.get(param_name, ("nhru",))
+            dims = _PARAM_DIMS[param_name]
             shape = tuple(dim_sizes[d] for d in dims)
             dtype = np.int32 if isinstance(default_val, int) else np.float64
             ds[param_name] = xr.DataArray(
@@ -2622,9 +2656,9 @@ class PywatershedDerivation:
             # Expand scalar to correct shape.  Monthly parameters need
             # (nmonth, nhru); all others need (nhru,).
             dims_for_seed = _PARAM_DIMS.get(param_name, ("nhru",))
+            dim_sizes_seed: dict[str, int] = {"nhru": nhru, "nmonth": 12}
             if nhru > 0 and np.ndim(value) == 0:
-                seed_dim_sizes = {"nhru": nhru, "nmonth": 12}
-                shape = tuple(seed_dim_sizes[d] for d in dims_for_seed)
+                shape = tuple(dim_sizes_seed[d] for d in dims_for_seed)
                 value = np.full(shape, value, dtype=np.float64)
 
             # Clip to range
@@ -3257,9 +3291,11 @@ class PywatershedDerivation:
 
         Notes
         -----
-        Existing parameters are updated in-place; new parameters are
-        created with an ``nhru`` dimension if the value is a list, or
-        as a scalar otherwise.
+        Existing parameters are updated in-place; scalar overrides are
+        broadcast to match the target variable's shape (e.g., a scalar
+        override for a ``(nmonth, nhru)`` parameter fills all elements).
+        New parameters are created with an ``nhru`` dimension if the
+        value is a list, or as a scalar otherwise.
         """
         for param_name, value in overrides.items():
             if isinstance(value, list):
@@ -3271,7 +3307,15 @@ class PywatershedDerivation:
                 # Broadcast scalar to match existing variable shape
                 if arr.ndim == 0 and ds[param_name].ndim > 0:
                     arr = np.full(ds[param_name].shape, arr, dtype=arr.dtype)
-                ds[param_name].values = arr
+                try:
+                    ds[param_name].values = arr
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Override for '{param_name}': array shape {arr.shape} "
+                        f"does not match existing parameter shape "
+                        f"{ds[param_name].shape}. Provide either a scalar or "
+                        f"an array with the correct shape."
+                    ) from exc
                 logger.info("Override: %s = %s", param_name, value)
             else:
                 dims = ("nhru",) if arr.ndim == 1 else ()

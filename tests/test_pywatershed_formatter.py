@@ -153,6 +153,17 @@ class TestWriteForcingNetcdf:
         np.testing.assert_allclose(ds["tmin"].values, 14.0)
         ds.close()
 
+    def test_forcing_contains_nhm_id(
+        self, formatter: PywatershedFormatter, forcing_dataset: xr.Dataset, tmp_path: Path
+    ) -> None:
+        """Forcing NetCDF must include nhm_id for pywatershed NetCdfRead."""
+        paths = formatter.write_forcing_netcdf(forcing_dataset, tmp_path / "forcing")
+        for path in paths:
+            ds = xr.open_dataset(path)
+            assert "nhm_id" in ds, f"nhm_id missing from {path.name}"
+            np.testing.assert_array_equal(ds["nhm_id"].values, [1, 2, 3])
+            ds.close()
+
     def test_skips_when_no_forcing(
         self, formatter: PywatershedFormatter, param_dataset: xr.Dataset, tmp_path: Path
     ) -> None:

@@ -766,13 +766,25 @@ class TestApplyDefaults:
                 f"{name}: expected shape ({nhru},), got {ds[name].shape}"
             )
 
-        # Per-month-per-HRU defaults must be 2-D (nmonths, nhru)
-        per_month_hru = ["tmax_allsnow", "radmax"]
+        # Per-month-per-HRU defaults must be 2-D (nmonth, nhru)
+        per_month_hru = [
+            "tmax_allsnow",
+            "radmax",
+            "cecn_coef",
+            "tstorm_mo",
+            "ppt_rad_adj",
+            "radadj_intcp",
+            "radadj_slope",
+            "tmax_index",
+        ]
         for name in per_month_hru:
-            if name in ds:
-                assert ds[name].ndim == 2, (
-                    f"{name}: expected 2-D (nmonths, nhru), got ndim={ds[name].ndim}"
-                )
+            assert name in ds, f"Missing monthly default: {name}"
+            assert ds[name].ndim == 2, (
+                f"{name}: expected 2-D (nmonth, nhru), got ndim={ds[name].ndim}"
+            )
+            assert ds[name].shape == (12, nhru), (
+                f"{name}: expected shape (12, {nhru}), got {ds[name].shape}"
+            )
 
     def test_all_pywatershed_required_defaults(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -842,6 +854,8 @@ class TestParameterOverrides:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id", config=config)
         ds = derivation.derive(ctx)
         np.testing.assert_allclose(ds["tmax_allsnow"].values, 30.0)
+        # Verify the override preserved the 2D shape, not collapsed to scalar
+        assert ds["tmax_allsnow"].shape == (12, 3)
 
     def test_override_array(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -3759,3 +3773,151 @@ class TestDeriveNhruFallback:
         )
         with pytest.raises(ValueError, match="Cannot determine HRU count"):
             derivation.derive(ctx)
+
+
+class TestSegmentDefaults:
+    """Tests for segment-level defaults in _apply_defaults."""
+
+    def test_segment_defaults_present_when_nsegment_exists(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """Segment defaults appear when nsegment dimension is in the dataset.
+
+        Call ``_apply_defaults`` directly with a dataset that already has
+        an ``nsegment`` dimension, simulating what topology + routing steps
+        would produce before defaults run.
+        """
+        ds = xr.Dataset(
+            {
+                "hru_elev": ("nhru", np.array([100.0, 200.0])),
+                "tosegment": ("nsegment", np.array([2, 0], dtype=np.int32)),
+            },
+            coords={"nhru": [1, 2]},
+        )
+        ds = derivation._apply_defaults(ds, nhru=2)
+        for name in ("mann_n", "seg_depth", "segment_flow_init", "obsout_segment"):
+            assert name in ds, f"Missing segment default: {name}"
+            assert ds[name].shape == (2,), f"{name}: expected (2,), got {ds[name].shape}"
+        # tosegment_nhm should be a copy of tosegment
+        assert "tosegment_nhm" in ds
+        np.testing.assert_array_equal(ds["tosegment_nhm"].values, [2, 0])
+
+    def test_segment_defaults_absent_without_nsegment(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """Segment defaults must NOT appear when no nsegment dimension."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "mann_n" not in ds
+        assert "tosegment_nhm" not in ds
+
+
+class TestHruInToCf:
+    """Tests for hru_in_to_cf conversion factor."""
+
+    def test_hru_in_to_cf_from_hru_area(
+        self, derivation: PywatershedDerivation, sir_geometry: _MockSIRAccessor
+    ) -> None:
+        """hru_in_to_cf = hru_area * 43560/12 (inches*acres to cubic feet)."""
+        ctx = DerivationContext(sir=sir_geometry, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_in_to_cf" in ds
+        expected = ds["hru_area"].values * (43560.0 / 12.0)
+        np.testing.assert_allclose(ds["hru_in_to_cf"].values, expected)
+
+    def test_hru_in_to_cf_missing_without_hru_area(self, derivation: PywatershedDerivation) -> None:
+        """hru_in_to_cf not created when hru_area is missing (warning logged)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"elevation_m_mean": ("nhm_id", np.array([100.0]))},
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_in_to_cf" not in ds
+
+
+class TestPrefFlowInfilFrac:
+    """Tests for pref_flow_infil_frac conditional logic."""
+
+    def test_defaults_to_zero_without_pref_flow_den(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """Without pref_flow_den, pref_flow_infil_frac defaults to 0.0."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "pref_flow_infil_frac" in ds
+        np.testing.assert_array_equal(ds["pref_flow_infil_frac"].values, [0.0, 0.0, 0.0])
+
+
+class TestSpecialDefaultShapes:
+    """Tests for special-case default parameter shapes."""
+
+    def test_doy_shape_and_dims(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """doy must be (366,) with ndoy dimension."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert ds["doy"].shape == (366,)
+        assert ds["doy"].dims == ("ndoy",)
+
+    def test_snarea_curve_shape_and_dims(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """snarea_curve must be (11,) with ndeplval dimension."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert ds["snarea_curve"].shape == (11,)
+        assert ds["snarea_curve"].dims == ("ndeplval",)
+
+    def test_temp_units_is_zero(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """temp_units must be 0 (Fahrenheit)."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert ds["temp_units"].item() == 0
+
+
+class TestMonthlyCaliSeedShapes:
+    """Tests for monthly calibration seed shapes."""
+
+    def test_monthly_calibration_seeds_shape(
+        self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
+    ) -> None:
+        """Monthly calibration seeds must have shape (12, nhru)."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        nhru = 3
+        monthly_seeds = [
+            "rain_cbh_adj",
+            "snow_cbh_adj",
+            "tmax_cbh_adj",
+            "tmin_cbh_adj",
+            "tmax_allrain_offset",
+            "adjmix_rain",
+            "dday_slope",
+            "dday_intcp",
+        ]
+        for name in monthly_seeds:
+            assert name in ds, f"Missing calibration seed: {name}"
+            assert ds[name].shape == (12, nhru), (
+                f"{name}: expected (12, {nhru}), got {ds[name].shape}"
+            )
+
+
+class TestParamDimsConsistency:
+    """Tests for _PARAM_DIMS / _DEFAULTS structural invariants."""
+
+    def test_param_dims_covers_all_non_special_defaults(self) -> None:
+        """Every non-special default must have a _PARAM_DIMS entry."""
+        from hydro_param.derivations.pywatershed import (
+            _DEFAULTS,
+            _DEFAULTS_SPECIAL,
+            _PARAM_DIMS,
+        )
+
+        missing = (set(_DEFAULTS) - _DEFAULTS_SPECIAL) - set(_PARAM_DIMS)
+        assert not missing, f"_DEFAULTS keys missing from _PARAM_DIMS: {sorted(missing)}"
