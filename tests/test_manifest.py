@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from hydro_param.config import PipelineConfig, ProcessingConfig
-from hydro_param.dataset_registry import DatasetEntry, DerivedVariableSpec, VariableSpec
+from hydro_param.dataset_registry import (
+    DatasetEntry,
+    DerivedVariableSpec,
+    VariableSpec,
+)
 from hydro_param.manifest import (
     ManifestEntry,
     PipelineManifest,
@@ -163,6 +167,36 @@ def test_dataset_fingerprint_changes_on_gsd():
     fp1 = dataset_fingerprint(ds_req, entry1, var_specs, processing)
     fp2 = dataset_fingerprint(ds_req, entry2, var_specs, processing)
     assert fp1 != fp2
+
+
+def test_dataset_fingerprint_with_derived_categorical():
+    """DerivedCategoricalSpec is correctly serialized in fingerprint."""
+    from hydro_param.config import DatasetRequest
+    from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+    ds_req = DatasetRequest(name="polaris", variables=["soil_texture"])
+    entry = DatasetEntry(strategy="local_tiff")
+    var_specs_a = [
+        DerivedCategoricalSpec(
+            name="soil_texture",
+            sources=["sand", "silt", "clay"],
+            method="usda_texture_triangle",
+        )
+    ]
+    var_specs_b = [
+        DerivedCategoricalSpec(
+            name="soil_texture",
+            sources=["sand", "clay"],
+            method="usda_texture_triangle",
+        )
+    ]
+    processing = ProcessingConfig()
+
+    fp_a = dataset_fingerprint(ds_req, entry, var_specs_a, processing)
+    fp_b = dataset_fingerprint(ds_req, entry, var_specs_b, processing)
+    assert fp_a.startswith("sha256:")
+    # Different sources -> different fingerprint
+    assert fp_a != fp_b
 
 
 # ---------------------------------------------------------------------------

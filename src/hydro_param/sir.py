@@ -36,7 +36,8 @@ from numpy.typing import NDArray
 
 from hydro_param.config import DatasetRequest
 from hydro_param.dataset_registry import (
-    DerivedVariableSpec,
+    AnyVariableSpec,
+    DerivedCategoricalSpec,
     VariableSpec,
 )
 
@@ -218,7 +219,13 @@ class SIRVariableSchema:
 
 
 def build_sir_schema(
-    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: Sequence[
+        tuple[
+            object,
+            DatasetRequest,
+            list[AnyVariableSpec],
+        ]
+    ],
 ) -> list[SIRVariableSchema]:
     """Auto-generate the SIR schema from stage 2 resolved datasets.
 
@@ -232,12 +239,12 @@ def build_sir_schema(
 
     Parameters
     ----------
-    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : Sequence[tuple[object, DatasetRequest, list[...]]]
         Output of ``stage2_resolve_datasets()``.  Each tuple contains:
 
         - ``DatasetEntry`` -- dataset metadata from the registry.
         - ``DatasetRequest`` -- user-specified request (statistics, year).
-        - ``list[VariableSpec | DerivedVariableSpec]`` -- resolved variables.
+        - ``list[AnyVariableSpec]`` -- resolved variable specifications.
 
     Returns
     -------
@@ -264,6 +271,28 @@ def build_sir_schema(
             years = [None]
 
         for var_spec in var_specs:
+            # DerivedCategoricalSpec: always categorical fraction columns
+            if isinstance(var_spec, DerivedCategoricalSpec):
+                for year in years:
+                    cname = canonical_name(var_spec.name, "", "frac")
+                    if year is not None:
+                        cname = f"{cname}_{year}"
+                    schema.append(
+                        SIRVariableSchema(
+                            canonical_name=cname,
+                            source_name=var_spec.name,
+                            source_units=var_spec.units,
+                            canonical_units="",
+                            long_name=var_spec.long_name or var_spec.name,
+                            categorical=True,
+                            valid_range=(0.0, 1.0),
+                            conversion=None,
+                            temporal=is_temporal,
+                            dataset_name=ds_req.name,
+                        )
+                    )
+                continue
+
             units = var_spec.units
             long_name = var_spec.long_name or var_spec.name
 
@@ -548,7 +577,13 @@ def normalize_sir(
 def normalize_sir_temporal(
     temporal_files: dict[str, Path],
     schema: list[SIRVariableSchema],
-    resolved: Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: Sequence[
+        tuple[
+            object,
+            DatasetRequest,
+            list[AnyVariableSpec],
+        ]
+    ],
     output_dir: Path,
 ) -> dict[str, Path]:
     """Normalize temporal NetCDF files to canonical SIR format.
@@ -570,7 +605,7 @@ def normalize_sir_temporal(
         file path produced by stage 4.
     schema : list[SIRVariableSchema]
         SIR variable schema entries from ``build_sir_schema()``.
-    resolved : Sequence[tuple[object, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : Sequence[tuple[object, DatasetRequest, list[...]]]
         Resolved dataset entries from stage 2.  Used to build the native
         name reverse lookup.
     output_dir : pathlib.Path

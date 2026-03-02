@@ -1273,3 +1273,51 @@ class TestNormalizeSIRTemporal:
         # Lookup is by native_name ("precipitation_amount"), NOT long_name
         # ("Daily precipitation"). NetCDF var is "Daily precipitation" — no match.
         assert len(result) == 0
+
+
+class TestBuildSIRSchemaDerivedCategorical:
+    """Tests for derived categorical variables in SIR schema."""
+
+    def test_derived_categorical_produces_frac_schema(self) -> None:
+        from hydro_param.config import DatasetRequest
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+        from hydro_param.sir import build_sir_schema
+
+        entry = DatasetEntry(
+            strategy="local_tiff",
+            variables=[
+                VariableSpec(name="sand"),
+                VariableSpec(name="silt"),
+                VariableSpec(name="clay"),
+            ],
+            derived_categorical_variables=[
+                DerivedCategoricalSpec(
+                    name="soil_texture",
+                    sources=["sand", "silt", "clay"],
+                    method="usda_texture_triangle",
+                    units="class",
+                    long_name="USDA soil texture classification",
+                )
+            ],
+        )
+        ds_req = DatasetRequest(
+            name="polaris_30m",
+            variables=["sand", "silt", "clay", "soil_texture"],
+            statistics=["mean"],
+        )
+        var_specs = [
+            VariableSpec(name="sand", units="%"),
+            VariableSpec(name="silt", units="%"),
+            VariableSpec(name="clay", units="%"),
+            DerivedCategoricalSpec(
+                name="soil_texture",
+                sources=["sand", "silt", "clay"],
+                method="usda_texture_triangle",
+                units="class",
+            ),
+        ]
+
+        schema = build_sir_schema([(entry, ds_req, var_specs)])
+        categorical_entries = [s for s in schema if s.categorical]
+        assert len(categorical_entries) == 1
+        assert categorical_entries[0].canonical_name == "soil_texture_frac"

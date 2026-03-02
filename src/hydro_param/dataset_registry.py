@@ -7,9 +7,10 @@ stage 2 (``stage2_resolve_datasets``) consults the registry to resolve
 user-requested datasets and variables into concrete access instructions.
 
 The registry supports five access strategies (``stac_cog``, ``local_tiff``,
-``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and two
-variable types (direct ``VariableSpec`` and terrain-derived
-``DerivedVariableSpec``).
+``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and three
+variable types (direct ``VariableSpec``, terrain-derived
+``DerivedVariableSpec``, and multi-source categorical
+``DerivedCategoricalSpec``).
 
 References
 ----------
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class VariableSpec(BaseModel):
@@ -109,6 +110,56 @@ class DerivedVariableSpec(BaseModel):
     method: str
     units: str = ""
     long_name: str = ""
+
+
+class DerivedCategoricalSpec(BaseModel):
+    """Describe a categorical variable derived from multiple source variables.
+
+    Multi-source categorical derivations classify pixels by combining
+    two or more source bands (e.g., USDA texture triangle from
+    sand/silt/clay percentages).  The result is a single-band
+    categorical raster processed with categorical zonal statistics to
+    produce per-class fraction columns.
+
+    Unlike ``DerivedVariableSpec`` (single source, continuous output),
+    this always produces categorical output with per-class fractions.
+
+    Attributes
+    ----------
+    name : str
+        Logical name for the derived variable (e.g.,
+        ``"soil_texture"``).
+    sources : list[str]
+        Names of the source ``VariableSpec`` entries this is derived
+        from (e.g., ``["sand", "silt", "clay"]``).  Must contain at
+        least 2 entries.
+    method : str
+        Classification method key used to look up the derivation
+        function via
+        ``hydro_param.data_access.CATEGORICAL_DERIVATION_FUNCTIONS``.
+    units : str
+        Units of the derived variable (typically ``"class"``).
+    long_name : str
+        Human-readable description for metadata.
+    """
+
+    name: str
+    sources: list[str]
+    method: str
+    units: str = ""
+    long_name: str = ""
+
+    @field_validator("sources")
+    @classmethod
+    def _check_min_sources(cls, v: list[str]) -> list[str]:
+        if len(v) < 2:
+            msg = "DerivedCategoricalSpec requires at least 2 sources"
+            raise ValueError(msg)
+        return v
+
+
+#: Union of all variable specification types used throughout the pipeline.
+AnyVariableSpec = VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec
 
 
 class DownloadFile(BaseModel):
@@ -342,6 +393,7 @@ class DatasetEntry(BaseModel):
     t_coord: str | None = None
     variables: list[VariableSpec] = []
     derived_variables: list[DerivedVariableSpec] = []
+    derived_categorical_variables: list[DerivedCategoricalSpec] = []
     category: str = ""
     temporal: bool = False
     time_step: Literal["daily", "monthly"] | None = None
@@ -430,11 +482,11 @@ class DatasetRegistry(BaseModel):
 
     def resolve_variable(
         self, dataset_name: str, variable_name: str
-    ) -> VariableSpec | DerivedVariableSpec:
+    ) -> VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec:
         """Resolve a variable name to its specification within a dataset.
 
-        Search both direct variables and derived variables in the named
-        dataset.  Direct variables are checked first.
+        Search direct variables, derived variables, and derived categorical
+        variables in the named dataset.  Direct variables are checked first.
 
         Parameters
         ----------
@@ -445,8 +497,9 @@ class DatasetRegistry(BaseModel):
 
         Returns
         -------
-        VariableSpec or DerivedVariableSpec
-            The matching variable specification.
+        VariableSpec or DerivedVariableSpec or DerivedCategoricalSpec
+            The matching variable specification.  Direct variables are
+            checked first, then derived, then derived categorical.
 
         Raises
         ------
@@ -462,7 +515,14 @@ class DatasetRegistry(BaseModel):
         for dv in entry.derived_variables:
             if dv.name == variable_name:
                 return dv
-        available = [v.name for v in entry.variables] + [dv.name for dv in entry.derived_variables]
+        for dcv in entry.derived_categorical_variables:
+            if dcv.name == variable_name:
+                return dcv
+        available = (
+            [v.name for v in entry.variables]
+            + [dv.name for dv in entry.derived_variables]
+            + [dcv.name for dcv in entry.derived_categorical_variables]
+        )
         raise KeyError(
             f"Variable '{variable_name}' not found in dataset '{dataset_name}'. "
             f"Available: {', '.join(available)}"

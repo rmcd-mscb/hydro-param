@@ -30,12 +30,15 @@ References
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+from hydro_param.classification import classify_usda_texture
 
 if TYPE_CHECKING:
     from hydro_param.dataset_registry import DatasetEntry
@@ -269,6 +272,58 @@ def derive_aspect(
 DERIVATION_FUNCTIONS = {
     "slope": derive_slope,
     "aspect": derive_aspect,
+}
+
+
+# ---------------------------------------------------------------------------
+# Categorical derivation functions
+# ---------------------------------------------------------------------------
+
+
+def classify_usda_texture_raster(
+    sand: xr.DataArray,
+    silt: xr.DataArray,
+    clay: xr.DataArray,
+) -> xr.DataArray:
+    """Classify sand/silt/clay percentage rasters into USDA texture classes.
+
+    Thin wrapper around ``classify_usda_texture()`` that handles
+    xarray DataArray I/O.  Returns a float64 raster with class codes
+    (1--12) suitable for categorical zonal statistics.
+
+    Parameters
+    ----------
+    sand : xr.DataArray
+        Sand content as percentage (0--100), 2-D raster.
+    silt : xr.DataArray
+        Silt content as percentage (0--100), 2-D raster.
+    clay : xr.DataArray
+        Clay content as percentage (0--100), 2-D raster.
+
+    Returns
+    -------
+    xr.DataArray
+        Float64 raster with USDA texture class codes (1--12).
+        Elements where any input is NaN remain NaN.
+
+    See Also
+    --------
+    hydro_param.classification.classify_usda_texture : Core classifier.
+    hydro_param.classification.USDA_TEXTURE_CLASSES : Code-to-name mapping.
+    """
+    codes = classify_usda_texture(
+        sand.values.astype(np.float64).ravel(),
+        silt.values.astype(np.float64).ravel(),
+        clay.values.astype(np.float64).ravel(),
+    )
+    out = sand.copy(data=codes.reshape(sand.shape))
+    out.name = "soil_texture"
+    out.attrs = {"units": "class", "long_name": "USDA soil texture classification"}
+    return out
+
+
+CATEGORICAL_DERIVATION_FUNCTIONS: dict[str, Callable[..., xr.DataArray]] = {
+    "usda_texture_triangle": classify_usda_texture_raster,
 }
 
 

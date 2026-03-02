@@ -455,3 +455,38 @@ def test_save_to_geotiff_does_not_copy_array(tmp_path: Path):
     assert da.attrs["_FillValue"] == -9999.0
     assert da.attrs["units"] == "meters"
     assert out_path.exists()
+
+
+class TestClassifyUsdaTextureRaster:
+    """Tests for the xarray raster wrapper around USDA texture classification."""
+
+    def test_basic_classification(self) -> None:
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[90.0, 40.0], [20.0, 5.0]], dims=["y", "x"])
+        silt = xr.DataArray([[5.0, 40.0], [20.0, 90.0]], dims=["y", "x"])
+        clay = xr.DataArray([[5.0, 20.0], [60.0, 5.0]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert result.values[0, 0] == 1  # sand
+        assert result.values[0, 1] == 5  # loam
+        assert result.values[1, 0] == 12  # clay
+        assert result.values[1, 1] == 8  # silt
+
+    def test_nan_produces_nan(self) -> None:
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[np.nan]], dims=["y", "x"])
+        silt = xr.DataArray([[np.nan]], dims=["y", "x"])
+        clay = xr.DataArray([[np.nan]], dims=["y", "x"])
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert np.isnan(result.values[0, 0])
+
+    def test_output_preserves_coordinates(self) -> None:
+        from hydro_param.data_access import classify_usda_texture_raster
+
+        sand = xr.DataArray([[90.0]], dims=["y", "x"], coords={"y": [1.0], "x": [2.0]})
+        silt = xr.DataArray([[5.0]], dims=["y", "x"], coords={"y": [1.0], "x": [2.0]})
+        clay = xr.DataArray([[5.0]], dims=["y", "x"], coords={"y": [1.0], "x": [2.0]})
+        result = classify_usda_texture_raster(sand, silt, clay)
+        assert list(result.coords["y"].values) == [1.0]
+        assert list(result.coords["x"].values) == [2.0]

@@ -173,6 +173,13 @@ datasets:
         native_name: "alpha"
         categorical: false
 
+    derived_categorical_variables:
+      - name: soil_texture
+        sources: [sand, silt, clay]
+        method: usda_texture_triangle
+        units: "class"
+        long_name: "USDA soil texture classification"
+
   gnatsgo_rasters:
     description: "gNATSGO pre-summarized soil properties, 30m (Planetary Computer)"
     strategy: stac_cog

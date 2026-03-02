@@ -27,7 +27,7 @@ datasets:
 
   # POLARIS soil texture properties, 30m (remote VRT, no download needed)
   - name: polaris_30m
-    variables: [sand, silt, clay, theta_s, ksat]
+    variables: [sand, silt, clay, theta_s, ksat, soil_texture]
     statistics: [mean]
 
   # --- Land Cover ---

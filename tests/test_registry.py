@@ -916,3 +916,79 @@ def test_bundled_temporal_datasets_have_year_range_and_time_step():
         if entry.temporal:
             assert entry.year_range is not None, f"Temporal dataset '{name}' missing year_range"
             assert entry.time_step is not None, f"Temporal dataset '{name}' missing time_step"
+
+
+class TestDerivedCategoricalSpec:
+    """Tests for DerivedCategoricalSpec model."""
+
+    def test_basic_creation(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        spec = DerivedCategoricalSpec(
+            name="soil_texture",
+            sources=["sand", "silt", "clay"],
+            method="usda_texture_triangle",
+            units="class",
+            long_name="USDA soil texture classification",
+        )
+        assert spec.name == "soil_texture"
+        assert spec.sources == ["sand", "silt", "clay"]
+        assert spec.method == "usda_texture_triangle"
+
+    def test_sources_must_have_at_least_two(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        with pytest.raises(ValidationError):
+            DerivedCategoricalSpec(
+                name="bad",
+                sources=["single"],
+                method="test",
+            )
+
+
+class TestDerivedCategoricalParsing:
+    """Tests for parsing derived_categorical_variables from YAML."""
+
+    def test_dataset_entry_has_derived_categorical(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        entry = DatasetEntry(
+            strategy="local_tiff",
+            variables=[],
+            derived_categorical_variables=[
+                DerivedCategoricalSpec(
+                    name="soil_texture",
+                    sources=["sand", "silt", "clay"],
+                    method="usda_texture_triangle",
+                )
+            ],
+        )
+        assert len(entry.derived_categorical_variables) == 1
+        assert entry.derived_categorical_variables[0].name == "soil_texture"
+
+    def test_defaults_to_empty_list(self) -> None:
+        entry = DatasetEntry(strategy="local_tiff", variables=[])
+        assert entry.derived_categorical_variables == []
+
+    def test_resolve_derived_categorical_variable(self) -> None:
+        from hydro_param.dataset_registry import DerivedCategoricalSpec
+
+        entry = DatasetEntry(
+            strategy="local_tiff",
+            variables=[
+                VariableSpec(name="sand"),
+                VariableSpec(name="silt"),
+                VariableSpec(name="clay"),
+            ],
+            derived_categorical_variables=[
+                DerivedCategoricalSpec(
+                    name="soil_texture",
+                    sources=["sand", "silt", "clay"],
+                    method="usda_texture_triangle",
+                )
+            ],
+        )
+        registry = DatasetRegistry(datasets={"test": entry})
+        spec = registry.resolve_variable("test", "soil_texture")
+        assert isinstance(spec, DerivedCategoricalSpec)
+        assert spec.sources == ["sand", "silt", "clay"]

@@ -63,8 +63,10 @@ from hydro_param.data_access import (
     save_to_geotiff,
 )
 from hydro_param.dataset_registry import (
+    AnyVariableSpec,
     DatasetEntry,
     DatasetRegistry,
+    DerivedCategoricalSpec,
     DerivedVariableSpec,
     VariableSpec,
     load_registry,
@@ -376,7 +378,13 @@ def _validate_time_range(
 def stage2_resolve_datasets(
     config: PipelineConfig,
     registry: DatasetRegistry,
-) -> list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]:
+) -> list[
+    tuple[
+        DatasetEntry,
+        DatasetRequest,
+        list[AnyVariableSpec],
+    ]
+]:
     """Stage 2: Resolve dataset names to registry entries and variable specs.
 
     For each :class:`~hydro_param.config.DatasetRequest` in the pipeline
@@ -395,9 +403,10 @@ def stage2_resolve_datasets(
 
     Returns
     -------
-    list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         One tuple per dataset: the registry entry, the pipeline request,
-        and the resolved variable specifications.
+        and the resolved variable specifications (VariableSpec,
+        DerivedVariableSpec, or DerivedCategoricalSpec).
 
     Raises
     ------
@@ -426,7 +435,8 @@ def stage2_resolve_datasets(
                 registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
             ]
             all_vars_have_source = all(
-                isinstance(vs, VariableSpec) and vs.source_override is not None
+                isinstance(vs, DerivedCategoricalSpec)
+                or (isinstance(vs, VariableSpec) and vs.source_override is not None)
                 for vs in requested_var_specs
             )
             if not all_vars_have_source:
@@ -475,7 +485,23 @@ def stage2_resolve_datasets(
         # Validate time range against dataset availability
         _validate_time_range(ds_req, entry)
 
-        var_specs = [registry.resolve_variable(ds_req.name, v) for v in ds_req.variables]
+        # Auto-include source variables needed by derived categorical specs
+        requested = set(ds_req.variables)
+        extra_sources: list[str] = []
+        for vname in ds_req.variables:
+            spec = registry.resolve_variable(ds_req.name, vname)
+            if isinstance(spec, DerivedCategoricalSpec):
+                for src in spec.sources:
+                    if src not in requested and src not in extra_sources:
+                        extra_sources.append(src)
+        if extra_sources:
+            logger.info(
+                "  Auto-including source variables for derived categorical: %s",
+                extra_sources,
+            )
+
+        all_var_names = extra_sources + list(ds_req.variables)
+        var_specs = [registry.resolve_variable(ds_req.name, v) for v in all_var_names]
         resolved.append((entry, ds_req, var_specs))
         logger.info(
             "  %s (%s): %d variables — %s",
@@ -523,15 +549,16 @@ def _process_batch(
     batch_fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
     ds_req: DatasetRequest,
-    var_specs: list[VariableSpec | DerivedVariableSpec],
+    var_specs: list[AnyVariableSpec],
     config: PipelineConfig,
     work_dir: Path,
 ) -> dict[str, pd.DataFrame]:
     """Process all variables for a single spatial batch.
 
     Fetch source raster data clipped to the batch bounding box, derive
-    any terrain variables (slope, aspect) from their source, save
-    intermediate GeoTIFFs, and run zonal statistics via gdptools.
+    any terrain variables (slope, aspect) from their source, classify
+    derived categorical variables (e.g., USDA texture from sand/silt/clay),
+    save intermediate GeoTIFFs, and run zonal statistics via gdptools.
 
     Memory management is critical here because gNATSGO variables can
     each consume ~1.25 GB.  The ``source_cache`` is eagerly pruned:
@@ -546,8 +573,10 @@ def _process_batch(
         Registry entry describing the source dataset (strategy, CRS, etc.).
     ds_req : DatasetRequest
         Pipeline config request (variables, statistics, year).
-    var_specs : list[VariableSpec | DerivedVariableSpec]
+    var_specs : list[AnyVariableSpec]
         Resolved variable specifications from the registry.
+        ``DerivedCategoricalSpec`` entries are processed in a second
+        pass after all source variables.
     config : PipelineConfig
         Pipeline configuration (engine, id_field, etc.).
     work_dir : Path
@@ -566,7 +595,12 @@ def _process_batch(
         If derived variables are requested for ``nhgf_stac`` strategy, or
         if temporal ``nhgf_stac`` is used (not yet supported in batch loop).
     ValueError
-        If a derived variable has no registered derivation function.
+        If a derived variable has no registered derivation function,
+        or if a derived categorical variable has no registered
+        classification function in ``CATEGORICAL_DERIVATION_FUNCTIONS``.
+    FileNotFoundError
+        If source GeoTIFFs required by a derived categorical variable
+        are missing from the work directory.
 
     Notes
     -----
@@ -588,7 +622,7 @@ def _process_batch(
     if entry.strategy == "nhgf_stac" and not entry.temporal:
         zonal_proc = cast(ZonalProcessor, processor)
         for var_spec in var_specs:
-            if isinstance(var_spec, DerivedVariableSpec):
+            if isinstance(var_spec, DerivedVariableSpec | DerivedCategoricalSpec):
                 raise NotImplementedError("Derived variables not supported for nhgf_stac strategy")
             df = zonal_proc.process_nhgf_stac(
                 fabric=batch_fabric,
@@ -651,6 +685,9 @@ def _process_batch(
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for i, var_spec in enumerate(var_specs):
+        if isinstance(var_spec, DerivedCategoricalSpec):
+            continue  # Processed after all source variables
+
         if isinstance(var_spec, DerivedVariableSpec):
             # Load source once, then derive.
             # Note: asset_key is not passed here — derived variables currently
@@ -709,8 +746,13 @@ def _process_batch(
         )
         results[var_spec.name] = df
 
-        # Clean up GeoTIFF after zonal stats
-        tiff_path.unlink(missing_ok=True)
+        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical
+        needed_by_dc = any(
+            isinstance(dc, DerivedCategoricalSpec) and var_spec.name in dc.sources
+            for dc in var_specs
+        )
+        if not needed_by_dc:
+            tiff_path.unlink(missing_ok=True)
 
         # Release source_cache entries no longer needed
         if isinstance(var_spec, DerivedVariableSpec):
@@ -732,6 +774,83 @@ def _process_batch(
 
         gc.collect()
 
+    # Process derived categorical specs last — re-read source GeoTIFFs
+    # from disk rather than holding all sources in memory.
+    from hydro_param.data_access import CATEGORICAL_DERIVATION_FUNCTIONS
+
+    dc_specs = [v for v in var_specs if isinstance(v, DerivedCategoricalSpec)]
+    if dc_specs:
+        import rioxarray  # noqa: F401
+
+    for dc_spec in dc_specs:
+        derive_fn = CATEGORICAL_DERIVATION_FUNCTIONS.get(dc_spec.method)
+        if derive_fn is None:
+            raise ValueError(f"No categorical derivation function for method '{dc_spec.method}'")
+
+        # Re-read source GeoTIFFs from disk
+
+        source_das = []
+        missing = []
+        for src_name in dc_spec.sources:
+            src_tiff = work_dir / f"{src_name}.tif"
+            if not src_tiff.exists():
+                missing.append(src_name)
+                continue
+            da = cast("xr.DataArray", rioxarray.open_rasterio(src_tiff))
+            source_das.append(da.squeeze("band", drop=True))
+
+        if missing:
+            msg = (
+                f"Cannot derive categorical variable '{dc_spec.name}': "
+                f"missing source GeoTIFFs {missing} in {work_dir}. "
+                f"This usually means the source variables failed to process "
+                f"or were cleaned up prematurely."
+            )
+            raise FileNotFoundError(msg)
+
+        # Classify pixels
+        try:
+            classified_da = derive_fn(*source_das)
+        except TypeError as exc:
+            raise ValueError(
+                f"Derivation function '{dc_spec.method}' for '{dc_spec.name}' "
+                f"received {len(source_das)} source arrays (from {dc_spec.sources}), "
+                f"but the function signature does not match: {exc}"
+            ) from exc
+
+        # Free source arrays immediately
+        del source_das
+        gc.collect()
+
+        # Save classified raster and run categorical zonal stats
+        classified_tiff = work_dir / f"{dc_spec.name}.tif"
+        save_to_geotiff(classified_da, classified_tiff)
+        del classified_da
+
+        df = processor.process(
+            fabric=batch_fabric,
+            tiff_path=classified_tiff,
+            variable_name=dc_spec.name,
+            id_field=config.target_fabric.id_field,
+            engine=config.processing.engine,
+            statistics=ds_req.statistics,
+            categorical=True,
+            source_crs=entry.crs,
+            x_coord=entry.x_coord,
+            y_coord=entry.y_coord,
+        )
+        results[dc_spec.name] = df
+
+        # Clean up classified GeoTIFF; only delete source GeoTIFFs if no
+        # remaining dc_specs still need them.
+        classified_tiff.unlink(missing_ok=True)
+        remaining_dc = dc_specs[dc_specs.index(dc_spec) + 1 :]
+        for src_name in dc_spec.sources:
+            still_needed = any(src_name in other.sources for other in remaining_dc)
+            if not still_needed:
+                (work_dir / f"{src_name}.tif").unlink(missing_ok=True)
+        gc.collect()
+
     return results
 
 
@@ -739,7 +858,7 @@ def _process_temporal(
     fabric: gpd.GeoDataFrame,
     entry: DatasetEntry,
     ds_req: DatasetRequest,
-    var_specs: list[VariableSpec | DerivedVariableSpec],
+    var_specs: list[AnyVariableSpec],
     config: PipelineConfig,
 ) -> xr.Dataset:
     """Process a temporal dataset using gdptools WeightGen + AggGen.
@@ -1063,7 +1182,13 @@ def _save_manifest(
 
 def stage4_process(
     fabric: gpd.GeoDataFrame,
-    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: list[
+        tuple[
+            DatasetEntry,
+            DatasetRequest,
+            list[AnyVariableSpec],
+        ]
+    ],
     config: PipelineConfig,
 ) -> Stage4Results:
     """Stage 4: Process all datasets with spatial batching and incremental writes.
@@ -1086,7 +1211,7 @@ def stage4_process(
     fabric : gpd.GeoDataFrame
         Target fabric with a ``batch_id`` column added by
         :func:`~hydro_param.batching.spatial_batch`.
-    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         Resolved dataset entries from :func:`stage2_resolve_datasets`.
     config : PipelineConfig
         Pipeline configuration (output path, engine, batch size, resume
@@ -1296,7 +1421,13 @@ def stage4_process(
 
 def stage5_normalize_sir(
     stage4: Stage4Results,
-    resolved: list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]],
+    resolved: list[
+        tuple[
+            DatasetEntry,
+            DatasetRequest,
+            list[AnyVariableSpec],
+        ]
+    ],
     config: PipelineConfig,
 ) -> tuple[
     dict[str, Path],
@@ -1319,7 +1450,7 @@ def stage5_normalize_sir(
     ----------
     stage4 : Stage4Results
         Stage 4 results containing raw per-variable file paths.
-    resolved : list[tuple[DatasetEntry, DatasetRequest, list[VariableSpec | DerivedVariableSpec]]]
+    resolved : list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         Resolved dataset entries from :func:`stage2_resolve_datasets`,
         used to build the SIR schema.
     config : PipelineConfig
