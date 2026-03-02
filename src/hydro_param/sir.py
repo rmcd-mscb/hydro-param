@@ -36,6 +36,7 @@ from numpy.typing import NDArray
 
 from hydro_param.config import DatasetRequest
 from hydro_param.dataset_registry import (
+    DerivedCategoricalSpec,
     DerivedVariableSpec,
     VariableSpec,
 )
@@ -264,6 +265,28 @@ def build_sir_schema(
             years = [None]
 
         for var_spec in var_specs:
+            # DerivedCategoricalSpec: always categorical fraction columns
+            if isinstance(var_spec, DerivedCategoricalSpec):
+                for year in years:
+                    cname = canonical_name(var_spec.name, "", "frac")
+                    if year is not None:
+                        cname = f"{cname}_{year}"
+                    schema.append(
+                        SIRVariableSchema(
+                            canonical_name=cname,
+                            source_name=var_spec.name,
+                            source_units=var_spec.units,
+                            canonical_units="",
+                            long_name=var_spec.long_name or var_spec.name,
+                            categorical=True,
+                            valid_range=(0.0, 1.0),
+                            conversion=None,
+                            temporal=is_temporal,
+                            dataset_name=ds_req.name,
+                        )
+                    )
+                continue
+
             units = var_spec.units
             long_name = var_spec.long_name or var_spec.name
 
