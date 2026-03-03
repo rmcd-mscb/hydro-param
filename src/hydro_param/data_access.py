@@ -269,9 +269,95 @@ def derive_aspect(
     return result
 
 
+def derive_sin_aspect(
+    elevation: xr.DataArray,
+    method: str = "horn",
+    *,
+    x_coord: str = "x",
+    y_coord: str = "y",
+) -> xr.DataArray:
+    """Compute sine of terrain aspect for circular mean aggregation.
+
+    Derive per-pixel ``sin(aspect)`` from a DEM raster.  Arithmetic zonal
+    mean of sine values is one component of the circular mean: the HRU-level
+    aspect is recovered as ``atan2(mean_sin, mean_cos)``.
+
+    Parameters
+    ----------
+    elevation : xr.DataArray
+        2-D elevation raster with spatial coordinates.
+    method : str
+        Derivation method. Only ``"horn"`` is currently supported.
+    x_coord : str
+        Name of the x coordinate dimension in the DataArray.
+    y_coord : str
+        Name of the y coordinate dimension in the DataArray.
+
+    Returns
+    -------
+    xr.DataArray
+        Sine of aspect, unitless [-1, 1], with the same shape,
+        coordinates, and CRS as the input elevation.
+
+    See Also
+    --------
+    derive_cos_aspect : Cosine component for circular mean.
+    derive_aspect : Raw aspect in degrees.
+    """
+    aspect = derive_aspect(elevation, method, x_coord=x_coord, y_coord=y_coord)
+    result = aspect.copy(data=np.sin(np.radians(aspect.values)))
+    result.name = "sin_aspect"
+    result.attrs = {"units": "unitless", "long_name": "Sine of terrain aspect"}
+    return result
+
+
+def derive_cos_aspect(
+    elevation: xr.DataArray,
+    method: str = "horn",
+    *,
+    x_coord: str = "x",
+    y_coord: str = "y",
+) -> xr.DataArray:
+    """Compute cosine of terrain aspect for circular mean aggregation.
+
+    Derive per-pixel ``cos(aspect)`` from a DEM raster.  Arithmetic zonal
+    mean of cosine values is one component of the circular mean: the HRU-level
+    aspect is recovered as ``atan2(mean_sin, mean_cos)``.
+
+    Parameters
+    ----------
+    elevation : xr.DataArray
+        2-D elevation raster with spatial coordinates.
+    method : str
+        Derivation method. Only ``"horn"`` is currently supported.
+    x_coord : str
+        Name of the x coordinate dimension in the DataArray.
+    y_coord : str
+        Name of the y coordinate dimension in the DataArray.
+
+    Returns
+    -------
+    xr.DataArray
+        Cosine of aspect, unitless [-1, 1], with the same shape,
+        coordinates, and CRS as the input elevation.
+
+    See Also
+    --------
+    derive_sin_aspect : Sine component for circular mean.
+    derive_aspect : Raw aspect in degrees.
+    """
+    aspect = derive_aspect(elevation, method, x_coord=x_coord, y_coord=y_coord)
+    result = aspect.copy(data=np.cos(np.radians(aspect.values)))
+    result.name = "cos_aspect"
+    result.attrs = {"units": "unitless", "long_name": "Cosine of terrain aspect"}
+    return result
+
+
 DERIVATION_FUNCTIONS = {
     "slope": derive_slope,
     "aspect": derive_aspect,
+    "sin_aspect": derive_sin_aspect,
+    "cos_aspect": derive_cos_aspect,
 }
 
 

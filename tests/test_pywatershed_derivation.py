@@ -101,6 +101,14 @@ def sir_topography() -> _MockSIRAccessor:
                 "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
                 "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
                 "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
+                "sin_aspect_mean": (
+                    "nhm_id",
+                    np.sin(np.radians([0.0, 90.0, 270.0])),
+                ),
+                "cos_aspect_mean": (
+                    "nhm_id",
+                    np.cos(np.radians([0.0, 90.0, 270.0])),
+                ),
                 "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
             },
             coords={"nhm_id": [1, 2, 3]},
@@ -279,15 +287,15 @@ class TestDerivationContextTemporal:
 class TestDeriveTopography:
     """Tests for step 3: topographic parameter derivation."""
 
-    def test_elevation_m_to_ft(
+    def test_elevation_meters_preserved(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_elev" in ds
-        # 100m ~ 328.084 ft
-        np.testing.assert_allclose(ds["hru_elev"].values[0], 328.084, atol=0.01)
-        assert ds["hru_elev"].attrs["units"] == "feet"
+        # Elevation is kept in meters (no m→ft conversion)
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        assert ds["hru_elev"].attrs["units"] == "meters"
 
     def test_slope_degrees_to_fraction(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -301,14 +309,34 @@ class TestDeriveTopography:
         np.testing.assert_allclose(ds["hru_slope"].values[2], np.tan(np.radians(30.0)), atol=1e-4)
         assert ds["hru_slope"].attrs["units"] == "decimal_fraction"
 
-    def test_aspect_preserved(
+    def test_aspect_circular_mean(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
+        """Aspect uses atan2(sin_mean, cos_mean) circular mean."""
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_aspect" in ds
-        np.testing.assert_array_equal(ds["hru_aspect"].values, [0.0, 90.0, 270.0])
+        # sin/cos decomposition of [0°, 90°, 270°] → atan2 recovers same values
+        np.testing.assert_allclose(ds["hru_aspect"].values, [0.0, 90.0, 270.0], atol=1e-10)
         assert ds["hru_aspect"].attrs["units"] == "degrees"
+
+    def test_aspect_legacy_fallback(self, derivation: PywatershedDerivation) -> None:
+        """Aspect falls back to arithmetic mean when only aspect_deg_mean available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([45.0, 180.0, 315.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_aspect" in ds
+        np.testing.assert_array_equal(ds["hru_aspect"].values, [45.0, 180.0, 315.0])
 
 
 class TestDeriveGeometry:
@@ -736,18 +764,29 @@ class TestApplyDefaults:
         ds = derivation.derive(ctx)
         nhru = 3  # sir_topography fixture has 3 HRUs
 
-        # Per-HRU defaults must be 1-D arrays of length nhru
-        per_hru = [
+        # Scalar defaults — pywatershed stores these with dims=('scalar',),
+        # shape=(1,), and passes them to inner functions without per-HRU indexing.
+        scalar_params = [
+            "albset_rna",
+            "albset_rnm",
+            "albset_sna",
+            "albset_snm",
             "den_init",
             "den_max",
             "settle_const",
+        ]
+        for name in scalar_params:
+            assert name in ds, f"Missing scalar default: {name}"
+            assert ds[name].dims == ("scalar",), (
+                f"{name}: expected dims=('scalar',), got {ds[name].dims}"
+            )
+            assert ds[name].shape == (1,), f"{name}: expected shape (1,), got {ds[name].shape}"
+
+        # Per-HRU defaults must be 1-D arrays of length nhru
+        per_hru = [
             "emis_noppt",
             "freeh2o_cap",
             "potet_sublim",
-            "albset_rna",
-            "albset_snm",
-            "albset_rnm",
-            "albset_sna",
             "radj_sppt",
             "radj_wppt",
             "soil_moist_init_frac",
@@ -840,8 +879,8 @@ class TestApplyDefaults:
         )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
-        # hru_elev was derived from data, not from defaults
-        np.testing.assert_allclose(ds["hru_elev"].values, [328.084], atol=0.01)
+        # hru_elev was derived from data (meters preserved), not from defaults
+        np.testing.assert_allclose(ds["hru_elev"].values, [100.0], atol=0.01)
 
 
 class TestParameterOverrides:

@@ -33,3 +33,13 @@ datasets:
         method: horn
         units: "degrees"
         long_name: "Terrain aspect (clockwise from north)"
+      - name: sin_aspect
+        source: elevation
+        method: horn
+        units: "unitless"
+        long_name: "Sine of terrain aspect"
+      - name: cos_aspect
+        source: elevation
+        method: horn
+        units: "unitless"
+        long_name: "Cosine of terrain aspect"

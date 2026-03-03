@@ -141,6 +141,7 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
         "doy",
         "hru_in_to_cf",
         "temp_units",
+        "elev_units",
         "snarea_curve",
         "pref_flow_infil_frac",
     }
@@ -152,17 +153,19 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
 # shape broadcasting in _derive_calibration_seeds.  pywatershed v2.0
 # requires all parameters as correctly-dimensioned arrays.
 _PARAM_DIMS: dict[str, tuple[str, ...]] = {
+    # Scalar parameters — pywatershed stores these with dims=('scalar',)
+    # and passes them to inner functions without per-HRU indexing.
+    "albset_rna": ("scalar",),
+    "albset_rnm": ("scalar",),
+    "albset_sna": ("scalar",),
+    "albset_snm": ("scalar",),
+    "den_init": ("scalar",),
+    "den_max": ("scalar",),
+    "settle_const": ("scalar",),
     # Per-HRU (nhru,)
-    "den_init": ("nhru",),
-    "den_max": ("nhru",),
-    "settle_const": ("nhru",),
     "emis_noppt": ("nhru",),
     "freeh2o_cap": ("nhru",),
     "potet_sublim": ("nhru",),
-    "albset_rna": ("nhru",),
-    "albset_snm": ("nhru",),
-    "albset_rnm": ("nhru",),
-    "albset_sna": ("nhru",),
     "radj_sppt": ("nhru",),
     "radj_wppt": ("nhru",),
     "soil_moist_init_frac": ("nhru",),
@@ -225,7 +228,7 @@ if _MISSING_DIMS:
     )
 
 # Known dimension names referenced by _PARAM_DIMS.
-_KNOWN_DIMS = frozenset({"nhru", "nmonth"})
+_KNOWN_DIMS = frozenset({"nhru", "nmonth", "scalar"})
 _BAD_DIMS = {
     p: [d for d in dims if d not in _KNOWN_DIMS]
     for p, dims in _PARAM_DIMS.items()
@@ -1354,12 +1357,13 @@ class PywatershedDerivation:
     def _derive_topography(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Convert DEM zonal statistics to PRMS topographic parameters (step 3).
 
-        Transform 3DEP-derived zonal statistics from SI units to PRMS
-        conventions:
+        Transform 3DEP-derived zonal statistics to PRMS conventions:
 
-        - ``elevation_m_mean`` (meters) -> ``hru_elev`` (feet)
+        - ``elevation_m_mean`` (meters) -> ``hru_elev`` (meters, preserved)
         - ``slope_deg_mean`` (degrees) -> ``hru_slope`` (decimal fraction = tan(slope))
-        - ``aspect_deg_mean`` (degrees) -> ``hru_aspect`` (degrees, unchanged)
+        - ``sin_aspect_mean`` + ``cos_aspect_mean`` -> ``hru_aspect`` (degrees,
+          circular mean via atan2)
+        - ``aspect_deg_mean`` -> ``hru_aspect`` (degrees, legacy fallback)
 
         Parameters
         ----------
@@ -1371,26 +1375,34 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``hru_elev`` (feet), ``hru_slope`` (decimal
+            Dataset with ``hru_elev`` (meters), ``hru_slope`` (decimal
             fraction), and ``hru_aspect`` (degrees) on the ``nhru``
             dimension.  Only variables with corresponding SIR input are
             added.
 
         Notes
         -----
-        Unit conversions: meters -> feet (``convert(m, ft)``),
-        degrees -> radians -> tan() for slope.
+        Elevation is kept in meters (``elev_units=1``).  pywatershed v2
+        does not use ``elev_units`` internally — the reference DRB data
+        uses meters throughout.
 
         PRMS slope is rise/run (dimensionless), not an angle.  The
         conversion is ``tan(slope_rad)`` where ``slope_rad`` is the
         slope angle in radians.
+
+        Aspect uses circular mean via sin/cos decomposition: the pipeline
+        computes per-pixel ``sin(aspect)`` and ``cos(aspect)``, then
+        arithmetic zonal mean is correct for those components.  The
+        derivation recombines with ``atan2(mean_sin, mean_cos)`` to get
+        a proper circular mean.  Falls back to arithmetic mean of raw
+        aspect if only ``aspect_deg_mean`` is available (legacy SIR).
         """
         sir = ctx.sir
         if "elevation_m_mean" in sir:
             ds["hru_elev"] = xr.DataArray(
-                convert(sir["elevation_m_mean"].values, "m", "ft"),
+                sir["elevation_m_mean"].values.astype(np.float64),
                 dims="nhru",
-                attrs={"units": "feet", "long_name": "Mean HRU elevation"},
+                attrs={"units": "meters", "long_name": "Mean HRU elevation"},
             )
 
         if "slope_deg_mean" in sir:
@@ -1402,7 +1414,21 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_fraction", "long_name": "Mean HRU slope"},
             )
 
-        if "aspect_deg_mean" in sir:
+        # Aspect: prefer circular mean via sin/cos decomposition
+        if "sin_aspect_mean" in sir and "cos_aspect_mean" in sir:
+            sin_mean = sir["sin_aspect_mean"].values.astype(np.float64)
+            cos_mean = sir["cos_aspect_mean"].values.astype(np.float64)
+            aspect = (np.degrees(np.arctan2(sin_mean, cos_mean)) + 360) % 360
+            ds["hru_aspect"] = xr.DataArray(
+                aspect,
+                dims="nhru",
+                attrs={
+                    "units": "degrees",
+                    "long_name": "Mean HRU aspect (circular mean)",
+                },
+            )
+        elif "aspect_deg_mean" in sir:
+            # Legacy fallback: arithmetic mean of aspect angles
             ds["hru_aspect"] = xr.DataArray(
                 sir["aspect_deg_mean"].values.astype(np.float64),
                 dims="nhru",
@@ -2467,6 +2493,13 @@ class PywatershedDerivation:
                 attrs={"long_name": "Temperature units (0=F, 1=C)"},
             )
 
+        # elev_units: 1 = meters (elevations kept in meters, not converted)
+        if "elev_units" not in ds:
+            ds["elev_units"] = xr.DataArray(
+                np.int32(1),
+                attrs={"long_name": "Elevation units (0=feet, 1=meters)"},
+            )
+
         # snarea_curve: snow depletion curve (11 values, default all 1.0)
         if "snarea_curve" not in ds:
             ds["snarea_curve"] = xr.DataArray(
@@ -2495,6 +2528,7 @@ class PywatershedDerivation:
         dim_sizes: dict[str, int] = {
             "nhru": nhru,
             "nmonth": 12,
+            "scalar": 1,
         }
 
         for param_name, default_val in _DEFAULTS.items():
@@ -3054,7 +3088,7 @@ class PywatershedDerivation:
         Parameters
         ----------
         ds : xr.Dataset
-            In-progress parameter dataset.  ``hru_elev`` (feet) is used
+            In-progress parameter dataset.  ``hru_elev`` (meters) is used
             for elevation adjustment of ``jh_coef_hru`` if available.
         normals : tuple[np.ndarray, np.ndarray] or None
             Monthly climate normals ``(monthly_tmax, monthly_tmin)`` each
@@ -3077,8 +3111,9 @@ class PywatershedDerivation:
         clipped to ``[0.005, 0.06]``.
 
         ``jh_coef_hru`` uses the July (warmest month) coefficient with
-        a linear elevation adjustment: ``+0.00001`` per foot above sea
-        level, reflecting the increased vapor pressure deficit at higher
+        a linear elevation adjustment: ``+0.0000328084`` per meter above
+        sea level (equivalent to PRMS-IV's ``+0.00001`` per foot),
+        reflecting the increased vapor pressure deficit at higher
         elevations due to lower atmospheric pressure.
 
         References
@@ -3121,10 +3156,11 @@ class PywatershedDerivation:
 
         # Elevation adjustment: higher elevations have lower boiling point,
         # increasing vapor pressure deficit -> slightly higher coefficients.
-        # Linear approximation: +0.00001 per foot above sea level.
+        # PRMS-IV uses +0.00001 per foot.  With elevations in meters:
+        # 0.00001 / 0.3048 = 0.0000328084 per meter.
         if "hru_elev" in ds:
-            elev_ft = ds["hru_elev"].values
-            jh_coef_hru = july_jh + 0.00001 * elev_ft
+            elev_m = ds["hru_elev"].values
+            jh_coef_hru = july_jh + 0.0000328084 * elev_m
         else:
             logger.info(
                 "hru_elev not in dataset; computing jh_coef_hru without elevation adjustment.",

@@ -63,6 +63,7 @@ _UNIT_TABLE: dict[str, tuple[str, str, str | None]] = {
     "W/m2": ("W_m2", "W/m2", None),
     "kg/kg": ("kg_kg", "kg/kg", None),
     "m/s": ("m_s", "m/s", None),
+    "unitless": ("", "unitless", None),
 }
 
 
