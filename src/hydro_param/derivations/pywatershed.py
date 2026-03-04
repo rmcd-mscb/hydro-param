@@ -1800,20 +1800,24 @@ class PywatershedDerivation:
         # rootznaws represents root zone available water storage, which
         # maps directly to PRMS soil_moist_max.  aws0_100 is the full
         # 0-100cm column and overestimates root zone capacity.
-        rzaws_key = sir.find_variable("rootznaws_cm_mean")
+        #
+        # gNATSGO rootznaws and aws0_100 are in mm (per Planetary Computer
+        # STAC metadata).  awc_mm_mean is also in mm.  All paths convert
+        # mm → inches via convert().
+        rzaws_key = sir.find_variable("rootznaws_mm_mean")
         awc_key = sir.find_variable("awc_mm_mean")
-        aws_key = sir.find_variable("aws0_100_cm_mean")
+        aws_key = sir.find_variable("aws0_100_mm_mean")
 
         if rzaws_key is not None:
-            rzaws_cm = sir[rzaws_key].values.astype(np.float64)
-            soil_moist_max = convert(rzaws_cm * 10.0, "mm", "in")  # cm → mm → in
+            rzaws_mm = sir[rzaws_key].values.astype(np.float64)
+            soil_moist_max = convert(rzaws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
                 soil_moist_max,
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-            logger.info("Used rootznaws_cm_mean (root zone AWS) for soil_moist_max")
+            logger.info("Used rootznaws_mm_mean (root zone AWS, mm -> in) for soil_moist_max")
         elif awc_key is not None:
             awc_mm = sir[awc_key].values.astype(np.float64)
             soil_moist_max = convert(awc_mm, "mm", "in")
@@ -1824,22 +1828,21 @@ class PywatershedDerivation:
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
         elif aws_key is not None:
-            # Full-column available water storage in cm — fallback when
+            # Full-column available water storage in mm — fallback when
             # rootznaws is not available.
-            aws_cm = sir[aws_key].values.astype(np.float64)
-            awc_mm = aws_cm * 10.0  # cm -> mm
-            soil_moist_max = convert(awc_mm, "mm", "in")
+            aws_mm = sir[aws_key].values.astype(np.float64)
+            soil_moist_max = convert(aws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
                 soil_moist_max,
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-            logger.info("Used aws0_100_cm_mean (cm -> mm -> in) for soil_moist_max")
+            logger.info("Used aws0_100_mm_mean (mm -> in) for soil_moist_max")
         else:
             logger.warning(
-                "Skipping soil_moist_max derivation (step 5): no rootznaws_cm_mean, "
-                "awc_mm_mean, or aws0_100_cm_mean found in SIR."
+                "Skipping soil_moist_max derivation (step 5): no rootznaws_mm_mean, "
+                "awc_mm_mean, or aws0_100_mm_mean found in SIR."
             )
 
         # --- soil_rechr_max_frac ---
@@ -3151,23 +3154,30 @@ class PywatershedDerivation:
 
         Notes
         -----
-        The PRMS-IV equation 1-26 for ``jh_coef``:
-        ``jh = 27.5 - 0.25 * (es_max - es_min) / es_max``
-        where ``es_max`` and ``es_min`` are monthly saturation vapor
-        pressures computed from tmax and tmin respectively.  Values are
-        clipped to ``[0.005, 0.06]``.
+        The Jensen-Haise coefficient (Jensen et al. 1970, PRMS-IV eq. 1-26):
 
-        ``jh_coef_hru`` uses the July (warmest month) coefficient with
-        a linear elevation adjustment: ``+0.0000328084`` per meter above
-        sea level (equivalent to PRMS-IV's ``+0.00001`` per foot),
-        reflecting the increased vapor pressure deficit at higher
-        elevations due to lower atmospheric pressure.
+        ``C1 = 68 - 3.6 * (elev_ft / 1000)``
+        ``Ch = 50 / (e2 - e1)``
+        ``Ct = C1 + 13 * Ch``
+        ``jh_coef = 1 / Ct``
+
+        where ``e2`` and ``e1`` are saturation vapor pressures (mb) at
+        monthly mean tmax and tmin respectively.  ``C1`` is the elevation
+        correction term.  Computed per month to capture seasonal variation.
+        Values are clipped to ``[0.005, 0.06]``.
+
+        ``jh_coef_hru`` (Tx) is the temperature threshold in the PET
+        equation, computed from July vapor pressure extremes and elevation:
+        ``Tx = -2.5 - 0.14 * (e_july_max - e_july_min) - elev_ft / 1000``.
 
         References
         ----------
         Markstrom, S. L., et al. (2015). PRMS-IV. USGS TM 6-B7, eq. 1-26.
-        Jensen, M. E. and Haise, H. R. (1963). Estimating evapotranspiration
+        Jensen, M. E., Haise, H. R. (1963). Estimating evapotranspiration
             from solar radiation. J. Irrig. Drain. Div., 89, 15-41.
+        Jensen, M. E., Robb, D. C. N., Franzoy, C. E. (1970). Scheduling
+            irrigations using climate-crop-soil data. J. Irrig. Drain.
+            Div., 96(1), 25-38.
 
         See Also
         --------
@@ -3181,21 +3191,36 @@ class PywatershedDerivation:
         monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
         nhru = monthly_tmax.shape[1]
 
-        # --- jh_coef: PRMS-IV eq. 1-26 ---
-        # Ct = 27.5 - 0.25 * (es_max - es_min) / es_max  (denominator term)
-        # jh_coef = 1/Ct  (the actual coefficient used in PET calculation)
-        svp_max = _sat_vp(monthly_tmax)  # (12, nhru)
-        svp_min = _sat_vp(monthly_tmin)  # (12, nhru)
+        # --- Elevation for both jh_coef and jh_coef_hru ---
+        if "hru_elev" in ds:
+            elev_m = ds["hru_elev"].values
+            elev_ft = elev_m / 0.3048
+        else:
+            logger.info(
+                "hru_elev not in dataset; computing PET coefficients without elevation.",
+            )
+            elev_ft = np.zeros(nhru)
 
-        # Guard against division by zero
-        svp_max_safe = np.maximum(svp_max, 1e-6)
-        ch1 = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
-        # ch1 ≈ 27 for typical climates; invert to get jh_coef = 1/Ct
-        ch1_safe = np.maximum(ch1, 1e-6)
-        jh_coef = 1.0 / ch1_safe
+        # --- jh_coef: Jensen-Haise (Jensen et al. 1970, PRMS-IV eq. 1-26) ---
+        # Ct = C1 + 13*Ch  where:
+        #   C1 = 68 - 3.6 * (elev_ft / 1000)  [elevation correction]
+        #   Ch = 50 / (e2 - e1)                [humidity index, mb]
+        # e2 = SVP at monthly mean tmax, e1 = SVP at monthly mean tmin
+        # jh_coef = 1/Ct
+        c1 = 68.0 - 3.6 * (elev_ft / 1000.0)  # (nhru,)
+
+        jh_coef = np.zeros((12, nhru))
+        for m in range(12):
+            e2 = _sat_vp(monthly_tmax[m, :])  # SVP at tmax (hPa ≈ mb)
+            e1 = _sat_vp(monthly_tmin[m, :])  # SVP at tmin
+            de = np.maximum(e2 - e1, 0.01)  # guard against zero
+            ch = 50.0 / de
+            ct = c1 + 13.0 * ch
+            ct_safe = np.maximum(ct, 1e-6)
+            jh_coef[m, :] = 1.0 / ct_safe
+
         jh_coef = np.clip(jh_coef, 0.005, 0.06)
 
-        # Shape is already (12, nhru) = (nmonth, nhru)
         ds["jh_coef"] = xr.DataArray(
             jh_coef,
             dims=("nmonth", "nhru"),
@@ -3203,19 +3228,10 @@ class PywatershedDerivation:
         )
 
         # --- jh_coef_hru: Jensen-Haise temperature threshold Tx (°F) ---
-        # Tx = -2.5 - 0.14*(es_july_max - es_july_min) - elev_ft/1000
+        # Tx = -2.5 - 0.14*(e_july_max - e_july_min) - elev_ft/1000
         # Used in PET equation: PET = jh_coef * (T_avg_F - jh_coef_hru) * swrad / elh
         svp_july_max = _sat_vp(monthly_tmax[6, :])  # (nhru,)
         svp_july_min = _sat_vp(monthly_tmin[6, :])  # (nhru,)
-
-        if "hru_elev" in ds:
-            elev_m = ds["hru_elev"].values
-            elev_ft = elev_m / 0.3048
-        else:
-            logger.info(
-                "hru_elev not in dataset; computing jh_coef_hru without elevation term.",
-            )
-            elev_ft = np.zeros(nhru)
 
         jh_coef_hru = -2.5 - 0.14 * (svp_july_max - svp_july_min) - elev_ft / 1000.0
         ds["jh_coef_hru"] = xr.DataArray(

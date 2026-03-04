@@ -580,12 +580,12 @@ class TestDeriveSoils:
         # soil_rechr_max_frac gates on soil_type
         assert "soil_rechr_max_frac" not in ds
 
-    def test_derive_soils_aws_cm_fallback(self, derivation: PywatershedDerivation) -> None:
-        """soil_moist_max derived from aws0_100_cm_mean with cm->mm conversion."""
+    def test_derive_soils_aws_mm_fallback(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max derived from aws0_100_mm_mean (mm -> inches)."""
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
-                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0, 15.0, 8.0])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
                     "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
@@ -596,9 +596,9 @@ class TestDeriveSoils:
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_moist_max" in ds
-        # 5 cm = 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
-        # 15 cm = 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
-        # 8 cm = 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
+        # 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
+        # 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
+        # 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
         expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
@@ -631,7 +631,7 @@ class TestDeriveSoils:
                     "sand_pct_mean": ("nhm_id", np.array([82.0])),
                     "silt_pct_mean": ("nhm_id", np.array([10.0])),
                     "clay_pct_mean": ("nhm_id", np.array([8.0])),
-                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([50.0])),
                 },
                 coords={"nhm_id": [1]},
             )
@@ -2593,16 +2593,19 @@ class TestDerivePetCoefficients:
         assert np.all(ds["jh_coef"].values <= 0.06)
 
     def test_jh_coef_formula_known_values(self) -> None:
-        """Test jh_coef formula: 1/Ct where Ct = 27.5 - 0.25*(e_max-e_min)/e_max."""
+        """Test jh_coef formula: 1/(C1 + 13*Ch) per Jensen et al. 1970."""
         from hydro_param.derivations.pywatershed import _sat_vp
 
-        # tmax=80°F, tmin=50°F — Ct ≈ 27.3, so jh_coef = 1/27.3 ≈ 0.0366
-        svp_max = _sat_vp(np.array([80.0]))[0]
-        svp_min = _sat_vp(np.array([50.0]))[0]
-        ct = 27.5 - 0.25 * (svp_max - svp_min) / svp_max
+        # tmax=80°F, tmin=50°F, elev=500ft
+        e2 = _sat_vp(np.array([80.0]))[0]
+        e1 = _sat_vp(np.array([50.0]))[0]
+        c1 = 68.0 - 3.6 * (500.0 / 1000.0)  # 66.2
+        ch = 50.0 / (e2 - e1)
+        ct = c1 + 13.0 * ch
         jh_coef = 1.0 / ct
         clipped = np.clip(jh_coef, 0.005, 0.06)
-        assert 0.03 < clipped < 0.04, f"Expected ~0.036, got {clipped}"
+        # Ct ≈ 95, jh_coef ≈ 0.0105
+        assert 0.008 < clipped < 0.015, f"Expected ~0.0105, got {clipped}"
 
     def test_fallback_without_temporal(
         self,

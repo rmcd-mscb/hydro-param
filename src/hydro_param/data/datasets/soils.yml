@@ -197,7 +197,7 @@ datasets:
     variables:
       - name: aws0_100
         band: 1
-        units: "cm"
+        units: "mm"
         long_name: "Available water storage 0-100cm"
         native_name: "aws0_100"
         categorical: false
@@ -211,7 +211,7 @@ datasets:
         asset_key: "rootznemc"
       - name: rootznaws
         band: 1
-        units: "cm"
+        units: "mm"
         long_name: "Root zone available water storage"
         native_name: "rootznaws"
         categorical: false
