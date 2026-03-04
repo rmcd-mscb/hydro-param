@@ -26,7 +26,7 @@ from hydro_param.manifest import (
 
 
 def test_fabric_fingerprint(tmp_path: Path):
-    """fabric_fingerprint returns '{filename}|{mtime}|{size}' format."""
+    """fabric_fingerprint returns '{filename}|{mtime}|{size}|{id_field}' format."""
     gpkg = tmp_path / "test.gpkg"
     gpkg.write_text("fake data")
 
@@ -38,11 +38,31 @@ def test_fabric_fingerprint(tmp_path: Path):
 
     fp = fabric_fingerprint(config)
     parts = fp.split("|")
-    assert len(parts) == 3
+    assert len(parts) == 4
     assert parts[0] == "test.gpkg"
     # mtime and size should be numeric
     float(parts[1])
     int(parts[2])
+    assert parts[3] == "id"
+
+
+def test_fabric_fingerprint_changes_on_id_field(tmp_path: Path):
+    """Changing id_field produces a different fabric fingerprint."""
+    gpkg = tmp_path / "test.gpkg"
+    gpkg.write_text("fake data")
+
+    config_a = PipelineConfig(
+        target_fabric={"path": str(gpkg), "id_field": "nhm_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+    config_b = PipelineConfig(
+        target_fabric={"path": str(gpkg), "id_field": "nhru_v1_1"},
+        domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
+        datasets=[],
+    )
+
+    assert fabric_fingerprint(config_a) != fabric_fingerprint(config_b)
 
 
 def test_fabric_fingerprint_missing_file(tmp_path: Path):

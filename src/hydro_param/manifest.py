@@ -183,8 +183,8 @@ class PipelineManifest(BaseModel):
         (currently {2}).  Incompatible versions cause a validation error.
     fabric_fingerprint : str
         Fingerprint of the target fabric file (format:
-        ``"{filename}|{mtime}|{size}"``).  Empty string for new
-        manifests.
+        ``"{filename}|{mtime}|{size}|{id_field}"``).  Empty string
+        for new manifests.
     entries : dict[str, ManifestEntry]
         Per-dataset manifest entries, keyed by dataset name.
     sir : SIRManifestEntry or None
@@ -340,8 +340,12 @@ def load_manifest(output_dir: Path) -> PipelineManifest | None:
 def fabric_fingerprint(config: PipelineConfig) -> str:
     """Compute a fingerprint for the target fabric file.
 
-    Return ``"{filename}|{mtime}|{size}"`` as a cheap proxy for
-    content identity without hashing large GeoPackage files.
+    Return ``"{filename}|{mtime}|{size}|{id_field}"`` as a cheap proxy
+    for content identity without hashing large GeoPackage files.
+    Including ``id_field`` ensures that changing which column is used
+    as the feature ID (e.g., ``nhm_id`` → ``nhru_v1_1``) invalidates
+    all cached results, since it affects the dimension name in every
+    output file.
 
     Parameters
     ----------
@@ -351,7 +355,8 @@ def fabric_fingerprint(config: PipelineConfig) -> str:
     Returns
     -------
     str
-        Fingerprint string in the format ``"{filename}|{mtime}|{size}"``.
+        Fingerprint string in the format
+        ``"{filename}|{mtime}|{size}|{id_field}"``.
 
     Raises
     ------
@@ -377,7 +382,8 @@ def fabric_fingerprint(config: PipelineConfig) -> str:
             f"Cannot compute fabric fingerprint: file not found at {path}. "
             f"Ensure target_fabric.path is correct in your pipeline config."
         ) from None
-    return f"{path.name}|{stat.st_mtime}|{stat.st_size}"
+    id_field = config.target_fabric.id_field
+    return f"{path.name}|{stat.st_mtime}|{stat.st_size}|{id_field}"
 
 
 def _serialize_var_spec(v: AnyVariableSpec) -> dict[str, int | str | None]:
