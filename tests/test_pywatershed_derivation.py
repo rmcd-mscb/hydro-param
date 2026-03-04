@@ -602,6 +602,45 @@ class TestDeriveSoils:
         expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
 
+    def test_derive_soils_rootznaws_last_resort(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max falls back to rootznaws_mm_mean when aws0_100 and awc absent."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "rootznaws_mm_mean": ("nhm_id", np.array([75.0, 200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.5])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.3])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        expected = np.clip(np.array([75.0, 200.0]) / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
+
+    def test_soil_moist_max_priority_aws_over_awc(self, derivation: PywatershedDerivation) -> None:
+        """aws0_100_mm_mean is preferred over awc_mm_mean when both present."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Should use aws0_100 (100mm), not awc (200mm)
+        expected = np.clip(100.0 / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values[0], expected, rtol=1e-3)
+
     def test_soil_type_from_continuous_percentages(self, derivation: PywatershedDerivation) -> None:
         """Falls back to USDA texture triangle when only continuous percentages available."""
         sir = _MockSIRAccessor(
@@ -1618,7 +1657,7 @@ class TestCategoricalFractionMajority:
                 {
                     # HRU 1: 41=25%, 42=15%, 43=10% -> 50% forest, but 81=30% pasture
                     # Old bug: argmax picks class 81 (30% > 25%), cov_type=1
-                    # Fix: grouped forest (3+4) = 35%+15% = 50% > grasses 30%
+                    # Fix: grouped type3=35% (41+43), type4=15% (42) > grasses 30%
                     "lndcov_frac_41": ("nhm_id", np.array([0.25, 0.05])),
                     "lndcov_frac_42": ("nhm_id", np.array([0.15, 0.05])),
                     "lndcov_frac_43": ("nhm_id", np.array([0.10, 0.05])),
@@ -1631,12 +1670,25 @@ class TestCategoricalFractionMajority:
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "cov_type" in ds
-        # HRU 1: grouped forest (41→3, 42→4, 43→3) = type3=35% + type4=15%
+        # HRU 1: grouped type3 (41→3, 43→3) = 35%, type4 (42→4) = 15%
         # vs grasses (81→1) = 30%, bare (11→0) = 20%
-        # type3 wins at 35%
+        # type3 wins at 35% > type1 at 30%
         assert ds["cov_type"].values[0] == 3
         # HRU 2: grasses dominate at 70%
         assert ds["cov_type"].values[1] == 1
+
+    def test_grouped_majority_nan_fractions(self, derivation: PywatershedDerivation) -> None:
+        """NaN fractions treated as zero; all-NaN HRU gets bare ground default."""
+        class_codes = [41, 81]
+        fractions_list = [
+            np.array([0.6, np.nan]),  # forest
+            np.array([0.4, np.nan]),  # grasses
+        ]
+        mapping: dict[int, int] = {41: 3, 81: 1}
+        result = derivation._compute_grouped_majority(class_codes, fractions_list, mapping)
+        assert result[0] == 3  # forest wins for HRU 1
+        # HRU 2: all NaN -> all zero -> explicit bare ground default (0)
+        assert result[1] == 0
 
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
         """When no fraction columns exist, falls back to land_cover."""
@@ -2660,6 +2712,21 @@ class TestDerivePetCoefficients:
         clipped = np.clip(jh_coef, 0.005, 0.06)
         # Ct ≈ 95, jh_coef ≈ 0.0105
         assert 0.008 < clipped < 0.015, f"Expected ~0.0105, got {clipped}"
+
+    def test_jh_coef_hru_formula_known_values(self) -> None:
+        """Test jh_coef_hru (Tx) formula: -2.5 - 0.14*(e2-e1) - elev_ft/1000."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        # July tmax=85°F, tmin=60°F, elev=1000ft (≈304.8m)
+        e_max = _sat_vp(np.array([85.0]))[0]
+        e_min = _sat_vp(np.array([60.0]))[0]
+        elev_ft = 1000.0
+        tx = -2.5 - 0.14 * (e_max - e_min) - elev_ft / 1000.0
+        # Tx should be negative and in typical CONUS range
+        assert -20 < tx < 0, f"Tx out of typical range, got {tx}"
+        # Verify exact computation
+        expected_tx = -2.5 - 0.14 * (e_max - e_min) - 1.0
+        np.testing.assert_allclose(tx, expected_tx, rtol=1e-10)
 
     def test_fallback_without_temporal(
         self,

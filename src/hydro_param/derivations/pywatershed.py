@@ -1441,7 +1441,11 @@ class PywatershedDerivation:
                 },
             )
         elif "aspect_deg_mean" in sir:
-            # Legacy fallback: arithmetic mean of aspect angles
+            logger.warning(
+                "Using arithmetic mean of aspect (legacy SIR). Circular mean via "
+                "sin_aspect_mean/cos_aspect_mean is preferred. Consider regenerating "
+                "SIR with the sin_aspect and cos_aspect terrain derivations."
+            )
             ds["hru_aspect"] = xr.DataArray(
                 sir["aspect_deg_mean"].values.astype(np.float64),
                 dims="nhru",
@@ -1465,8 +1469,9 @@ class PywatershedDerivation:
 
         1. **Categorical fractions** (preferred): SIR contains columns
            like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
-           normalized categorical zonal output.  The majority class is
-           computed via argmax across fraction columns.
+           normalized categorical zonal output.  Fractions are grouped
+           by target category before selecting the majority class to
+           avoid split-vote problems.
         2. **Single majority value**: ``land_cover`` or
            ``land_cover_majority`` variable containing the dominant
            NLCD class code per HRU.
@@ -1515,7 +1520,7 @@ class PywatershedDerivation:
         # Group fractions by cov_type BEFORE argmax so that multiple NLCD
         # classes mapping to the same cov_type (e.g., 41+42+43 → forest)
         # contribute their combined fraction instead of competing individually.
-        lc_var = None
+        cov_type: np.ndarray | None = None
         extracted = self._extract_nlcd_fractions(sir, valid_codes=self._VALID_NLCD_CLASSES)
 
         if extracted is not None:
@@ -1525,14 +1530,11 @@ class PywatershedDerivation:
             # Fallback to single majority value
             for candidate in ("land_cover", "land_cover_majority"):
                 if candidate in sir:
-                    lc_var = candidate
+                    nlcd_values_lc = sir[candidate].values.astype(int)
+                    cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
                     break
-            if lc_var is not None:
-                nlcd_values_lc = sir[lc_var].values.astype(int)
-                cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
 
-        has_lc = extracted is not None or lc_var is not None
-        if has_lc:
+        if cov_type is not None:
             ds["cov_type"] = xr.DataArray(
                 cov_type,
                 dims="nhru",
@@ -1603,7 +1605,8 @@ class PywatershedDerivation:
         valid_codes : frozenset[int] or None
             Set of valid NLCD class codes.  Codes not in this set are
             filtered out (e.g., NoData sentinel 250).  If ``None``,
-            all integer codes <= 95 are accepted.
+            no code filtering is applied.  Codes exceeding 95 are
+            treated as year-suffixed file-level keys regardless.
 
         Returns
         -------
@@ -1730,14 +1733,27 @@ class PywatershedDerivation:
 
         Notes
         -----
-        For HRUs where all grouped fractions are NaN or zero, the
-        category with code 0 is returned and a warning is logged.
+        For HRUs where all grouped fractions are NaN or zero, cov_type
+        0 (bare ground) is explicitly assigned and a warning is logged.
+
+        Raises
+        ------
+        ValueError
+            If ``fractions_list`` is empty or ``mapping`` is empty.
 
         References
         ----------
         Regan et al. 2018 (USGS TM6-B9), Table A1-3 for NLCD → PRMS
         cov_type mapping.
         """
+        if not fractions_list:
+            raise ValueError(
+                "_compute_grouped_majority requires at least one fraction array; "
+                "received an empty list."
+            )
+        if not mapping:
+            raise ValueError("_compute_grouped_majority requires a non-empty mapping dict.")
+
         nhru = len(fractions_list[0])
 
         # Identify unique target categories (sorted for determinism).
@@ -1758,15 +1774,17 @@ class PywatershedDerivation:
             majority_idx = np.argmax(grouped, axis=1)
         result = np.array([target_codes[i] for i in majority_idx])
 
-        # Warn on all-zero rows.
+        # Explicitly assign bare ground (0) for HRUs with no valid data.
+        _DEFAULT_CATEGORY = 0
         all_zero = np.all(grouped == 0, axis=1)
         if np.any(all_zero):
+            result[all_zero] = _DEFAULT_CATEGORY
             logger.warning(
                 "%d of %d HRUs have all-zero grouped fractions; "
-                "majority category defaulting to %d for those HRUs",
+                "majority category set to %d (bare ground) for those HRUs",
                 int(np.sum(all_zero)),
                 nhru,
-                target_codes[0],
+                _DEFAULT_CATEGORY,
             )
 
         logger.info(
@@ -1787,8 +1805,9 @@ class PywatershedDerivation:
 
         Classify soil texture into PRMS ``soil_type`` and derive
         ``soil_moist_max`` (maximum soil moisture capacity) from
-        available water capacity (``awc_mm_mean``) or, as a fallback,
-        available water storage (``aws0_100_cm_mean``).
+        available water storage (``aws0_100_mm_mean``), available water
+        capacity (``awc_mm_mean``), or root-zone AWS
+        (``rootznaws_mm_mean``), in that priority order.
 
         Supports three input modes for soil texture:
 
@@ -1892,6 +1911,7 @@ class PywatershedDerivation:
             )
             logger.info("Used aws0_100_mm_mean (0-100cm AWS, mm -> in) for soil_moist_max")
         elif awc_key is not None:
+            logger.debug("aws0_100_mm_mean not found in SIR; falling back to awc_mm_mean")
             awc_mm = sir[awc_key].values.astype(np.float64)
             soil_moist_max = convert(awc_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
@@ -1902,8 +1922,10 @@ class PywatershedDerivation:
             )
             logger.info("Used awc_mm_mean (mm -> in) for soil_moist_max")
         elif rzaws_key is not None:
-            # Root zone AWS — last resort due to dominant-component-only
-            # rasterization artifacts in gNATSGO.
+            logger.debug(
+                "aws0_100_mm_mean and awc_mm_mean not found in SIR; "
+                "falling back to rootznaws_mm_mean (lower quality)"
+            )
             rzaws_mm = sir[rzaws_key].values.astype(np.float64)
             soil_moist_max = convert(rzaws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
@@ -3199,7 +3221,8 @@ class PywatershedDerivation:
         (= Tx, temperature threshold in °F) using the PRMS-IV equation 1-26
         (Markstrom et al. 2015).
 
-        ``jh_coef = 1 / (27.5 - 0.25 * (e_max - e_min) / e_max)``
+        ``jh_coef = 1 / Ct`` where ``Ct = C1 + 13 * Ch``
+        (see Notes for full derivation).
 
         ``jh_coef_hru = Tx = -2.5 - 0.14 * (e_july_max - e_july_min) - elev_ft / 1000``
 
@@ -3223,8 +3246,8 @@ class PywatershedDerivation:
         -------
         xr.Dataset
             Dataset with ``jh_coef`` (per_degF_per_day, shape
-            ``(nhru, 12)``) and ``jh_coef_hru`` (per_degF_per_day,
-            shape ``(nhru,)``) added.
+            ``(nmonth, nhru)``) and ``jh_coef_hru``
+            (degrees_fahrenheit, shape ``(nhru,)``) added.
 
         Notes
         -----
@@ -3270,8 +3293,10 @@ class PywatershedDerivation:
             elev_m = ds["hru_elev"].values
             elev_ft = elev_m / 0.3048
         else:
-            logger.info(
-                "hru_elev not in dataset; computing PET coefficients without elevation.",
+            logger.warning(
+                "hru_elev not in dataset; PET coefficients will be computed assuming "
+                "sea-level elevation (0 ft). This affects both jh_coef and jh_coef_hru. "
+                "Ensure step 3 (topography) ran successfully.",
             )
             elev_ft = np.zeros(nhru)
 
