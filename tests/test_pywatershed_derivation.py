@@ -580,8 +580,8 @@ class TestDeriveSoils:
         # soil_rechr_max_frac gates on soil_type
         assert "soil_rechr_max_frac" not in ds
 
-    def test_derive_soils_aws_mm_fallback(self, derivation: PywatershedDerivation) -> None:
-        """soil_moist_max derived from aws0_100_mm_mean (mm -> inches)."""
+    def test_derive_soils_aws_mm_preferred(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max derived from aws0_100_mm_mean (preferred source, mm -> in)."""
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
@@ -1605,6 +1605,39 @@ class TestCategoricalFractionMajority:
         # HRU 3: LndCov_42 (Evergreen Forest) highest -> cov_type 4
         assert ds["cov_type"].values[2] == 4
 
+    def test_grouped_majority_forest_split_vote(self, derivation: PywatershedDerivation) -> None:
+        """Forest wins when multiple forest classes together exceed any single competitor.
+
+        Regression test for the grouped-majority fix: NLCD classes 41+42+43
+        all map to forest (cov_type 3 or 4).  Their combined fraction should
+        beat a single non-forest class even when no individual forest class
+        is the single largest.
+        """
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # HRU 1: 41=25%, 42=15%, 43=10% -> 50% forest, but 81=30% pasture
+                    # Old bug: argmax picks class 81 (30% > 25%), cov_type=1
+                    # Fix: grouped forest (3+4) = 35%+15% = 50% > grasses 30%
+                    "lndcov_frac_41": ("nhm_id", np.array([0.25, 0.05])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.15, 0.05])),
+                    "lndcov_frac_43": ("nhm_id", np.array([0.10, 0.05])),
+                    "lndcov_frac_81": ("nhm_id", np.array([0.30, 0.70])),
+                    "lndcov_frac_11": ("nhm_id", np.array([0.20, 0.15])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "cov_type" in ds
+        # HRU 1: grouped forest (41→3, 42→4, 43→3) = type3=35% + type4=15%
+        # vs grasses (81→1) = 30%, bare (11→0) = 20%
+        # type3 wins at 35%
+        assert ds["cov_type"].values[0] == 3
+        # HRU 2: grasses dominate at 70%
+        assert ds["cov_type"].values[1] == 1
+
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
         """When no fraction columns exist, falls back to land_cover."""
         sir = _MockSIRAccessor(
@@ -1618,10 +1651,8 @@ class TestCategoricalFractionMajority:
         assert "cov_type" in ds
         assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
 
-    def test_majority_from_fractions_file_level_key(
-        self, derivation: PywatershedDerivation
-    ) -> None:
-        """Majority class from a file-level SIR key with inner fraction columns.
+    def test_extract_fractions_file_level_key(self, derivation: PywatershedDerivation) -> None:
+        """Extract NLCD fractions from a file-level SIR key with inner columns.
 
         Simulates real SIR where data_vars=['lndcov_frac_2021'] and
         load_dataset('lndcov_frac_2021') returns the inner columns.
@@ -1650,11 +1681,13 @@ class TestCategoricalFractionMajority:
                 raise KeyError(name)
 
         sir = _FileKeyMock()
-        result = derivation._compute_majority_from_fractions(sir)
+        result = derivation._extract_nlcd_fractions(sir)
         assert result is not None
-        np.testing.assert_array_equal(result, [41, 42])
+        codes, fracs = result
+        assert sorted(codes) == [11, 41, 42]
+        assert len(fracs) == 3
 
-    def test_majority_from_fractions_multi_year_file_keys(
+    def test_extract_fractions_multi_year_file_keys(
         self, derivation: PywatershedDerivation
     ) -> None:
         """Multiple year-suffixed file keys don't overwrite each other.
@@ -1699,12 +1732,33 @@ class TestCategoricalFractionMajority:
                 raise KeyError(name)
 
         sir = _MultiYearMock()
-        result = derivation._compute_majority_from_fractions(sir)
+        result = derivation._extract_nlcd_fractions(sir)
         assert result is not None
+        codes, fracs = result
         # 4 fraction columns total (2020_11, 2020_41, 2021_11, 2021_41).
-        # HRU 1: max fraction is 2020_11=0.9 -> class 11.
-        # HRU 2: max fraction is 2020_41=0.9 -> class 41.
-        np.testing.assert_array_equal(result, [11, 41])
+        assert len(codes) == 4
+        assert len(fracs) == 4
+        assert 11 in codes
+        assert 41 in codes
+
+    def test_nodata_sentinel_filtered(self, derivation: PywatershedDerivation) -> None:
+        """NLCD NoData sentinel class (250) is filtered from fraction extraction."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_41": ("nhm_id", np.array([0.3, 0.1])),
+                    "lndcov_frac_71": ("nhm_id", np.array([0.2, 0.4])),
+                    "lndcov_frac_250": ("nhm_id", np.array([0.5, 0.5])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        result = derivation._extract_nlcd_fractions(sir, valid_codes=derivation._VALID_NLCD_CLASSES)
+        assert result is not None
+        codes, _ = result
+        assert 250 not in codes
+        assert 41 in codes
+        assert 71 in codes
 
 
 # ------------------------------------------------------------------

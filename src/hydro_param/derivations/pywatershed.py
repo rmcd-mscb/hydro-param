@@ -1502,35 +1502,36 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _compute_majority_from_fractions : Argmax over fraction columns.
+        _extract_nlcd_fractions : Extract class codes and fractions from SIR.
+        _compute_grouped_majority : Group fractions by target category.
         """
         sir = ctx.sir
-        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
-        lc_var = None
-        nlcd_values = self._compute_majority_from_fractions(sir)
+        nlcd_table = self._load_lookup_table(
+            "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
+        )
+        mapping: dict[int, int] = nlcd_table["mapping"]
 
-        if nlcd_values is None:
+        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
+        # Group fractions by cov_type BEFORE argmax so that multiple NLCD
+        # classes mapping to the same cov_type (e.g., 41+42+43 → forest)
+        # contribute their combined fraction instead of competing individually.
+        lc_var = None
+        extracted = self._extract_nlcd_fractions(sir, valid_codes=self._VALID_NLCD_CLASSES)
+
+        if extracted is not None:
+            class_codes, fractions_list = extracted
+            cov_type = self._compute_grouped_majority(class_codes, fractions_list, mapping)
+        else:
             # Fallback to single majority value
             for candidate in ("land_cover", "land_cover_majority"):
                 if candidate in sir:
                     lc_var = candidate
                     break
+            if lc_var is not None:
+                nlcd_values_lc = sir[lc_var].values.astype(int)
+                cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
 
-        has_lc = nlcd_values is not None or lc_var is not None
-        if nlcd_values is not None:
-            nlcd_table = self._load_lookup_table(
-                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
-            )
-            mapping = nlcd_table["mapping"]
-            cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values])
-        elif lc_var is not None:
-            nlcd_table = self._load_lookup_table(
-                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
-            )
-            mapping = nlcd_table["mapping"]
-            nlcd_values_lc = sir[lc_var].values.astype(int)
-            cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
-
+        has_lc = extracted is not None or lc_var is not None
         if has_lc:
             ds["cov_type"] = xr.DataArray(
                 cov_type,
@@ -1567,64 +1568,62 @@ class PywatershedDerivation:
 
         return ds
 
+    # Valid NLCD Anderson Level II class codes (11–95).
+    _VALID_NLCD_CLASSES: frozenset[int] = frozenset(
+        {11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 51, 52, 71, 72, 73, 74, 81, 82, 90, 95}
+    )
+
     @staticmethod
-    def _compute_majority_from_fractions(
+    def _extract_nlcd_fractions(
         sir: SIRAccessor,
         prefixes: tuple[str, ...] = ("lndcov_frac_",),
-    ) -> np.ndarray | None:
-        """Compute majority NLCD class from categorical fraction columns.
+        valid_codes: frozenset[int] | None = None,
+    ) -> tuple[list[int], list[np.ndarray]] | None:
+        """Extract NLCD class codes and fraction arrays from SIR.
 
         Scan SIR variables for columns matching ``{prefix}{class_code}``
-        (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU,
-        return the class code with the highest fraction via ``np.argmax``.
+        and return parallel lists of class codes and fraction arrays.
+        Filter out NoData sentinels (class codes not in ``valid_codes``).
 
-        This method supports two SIR layouts:
+        Support two SIR layouts:
 
         1. **Column-level keys** — each fraction is a separate SIR variable
-           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  This is the
-           normalized categorical output from gdptools ``ZonalGen``.
+           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).
         2. **File-level keys** — ``data_vars`` contains a year-suffixed
            entry like ``lndcov_frac_2021``.  The individual fraction
-           columns (``lndcov_frac_2021_11``, ``lndcov_frac_2021_41``,
-           etc.) are inside the backing file and accessed via
+           columns are inside the backing file and accessed via
            ``sir.load_dataset()``.
 
         Parameters
         ----------
         sir : SIRAccessor
-            SIR dataset potentially containing fraction columns.
+            SIR dataset containing fraction columns.
         prefixes : tuple[str, ...]
-            Variable name prefixes to search for (default:
-            ``("lndcov_frac_",)``).
+            Variable name prefixes to search for.
+        valid_codes : frozenset[int] or None
+            Set of valid NLCD class codes.  Codes not in this set are
+            filtered out (e.g., NoData sentinel 250).  If ``None``,
+            all integer codes <= 95 are accepted.
 
         Returns
         -------
-        np.ndarray or None
-            Array of majority NLCD class codes (int) with shape
-            ``(nhru,)``, or ``None`` if fewer than 2 fraction columns
-            are found for any prefix.
+        tuple[list[int], list[np.ndarray]] or None
+            ``(class_codes, fractions_list)`` if at least 2 valid
+            fraction columns are found, else ``None``.
 
         Notes
         -----
-        Suffixes that cannot be parsed as integers are silently skipped
-        with a debug log message.  At least 2 valid fraction columns
-        are required to compute a meaningful majority.
-
         When a suffix parses as an integer but exceeds 95 (the maximum
         NLCD class code), it is treated as a year-suffixed file-level
-        key.  The method calls ``sir.load_dataset()`` to retrieve the
-        inner columns and searches them for ``{file_key}_{class_code}``
-        patterns.
+        key.  Inner columns within that file are individually checked
+        against ``valid_codes`` to filter NoData sentinels (e.g.,
+        class 250).
         """
         for prefix in prefixes:
             fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
             if not fraction_vars:
                 continue
 
-            # Extract class codes from suffixes.  Fraction values are
-            # collected eagerly so that file-level datasets can be released
-            # immediately and multiple year-suffixed files don't overwrite
-            # each other.
             class_codes: list[int] = []
             fractions_list: list[np.ndarray] = []
             for v in fraction_vars:
@@ -1641,7 +1640,6 @@ class PywatershedDerivation:
 
                 if code > 95:
                     # Suffix looks like a year (e.g. 2021), not an NLCD class.
-                    # Load the backing file and extract inner fraction columns.
                     try:
                         inner_ds = sir.load_dataset(v)
                     except KeyError:
@@ -1666,9 +1664,23 @@ class PywatershedDerivation:
                                 inner_suffix,
                             )
                             continue
+                        if valid_codes is not None and inner_code not in valid_codes:
+                            logger.debug(
+                                "Filtering inner variable '%s': code %d not in valid NLCD classes",
+                                inner_name,
+                                inner_code,
+                            )
+                            continue
                         class_codes.append(inner_code)
                         fractions_list.append(inner_ds[inner_name].values)
                 else:
+                    if valid_codes is not None and code not in valid_codes:
+                        logger.debug(
+                            "Filtering variable '%s': code %d not in valid NLCD classes",
+                            v,
+                            code,
+                        )
+                        continue
                     class_codes.append(code)
                     fractions_list.append(sir[v].values)
 
@@ -1683,35 +1695,86 @@ class PywatershedDerivation:
                     )
                 continue
 
-            fractions = np.column_stack(fractions_list)
-            codes = np.array(class_codes)
-            # Use nanargmax to handle NaN fractions; rows with all-NaN
-            # will produce index 0 (first class) — detected below.
-            with np.errstate(invalid="ignore"):
-                majority_idx = np.nanargmax(fractions, axis=1)
-            majority_class = codes[majority_idx]
-
-            # Warn on rows where all fractions are NaN or zero
-            all_nan = np.all(np.isnan(fractions), axis=1)
-            all_zero = np.all(fractions == 0, axis=1)
-            invalid = all_nan | all_zero
-            if np.any(invalid):
-                logger.warning(
-                    "%d of %d HRUs have all-NaN or all-zero land cover fractions; "
-                    "majority class defaulting to code %d for those HRUs",
-                    int(np.sum(invalid)),
-                    len(majority_class),
-                    codes[0],
-                )
-
-            logger.info(
-                "Computed majority class from %d categorical fraction columns (prefix=%r)",
-                len(class_codes),
-                prefix,
-            )
-            return majority_class
+            return class_codes, fractions_list
 
         return None
+
+    @staticmethod
+    def _compute_grouped_majority(
+        class_codes: list[int],
+        fractions_list: list[np.ndarray],
+        mapping: dict[int, int],
+    ) -> np.ndarray:
+        """Compute majority category by grouping source fractions.
+
+        Sum NLCD class fractions that map to the same target category
+        (e.g., cov_type), then return the category with the highest
+        total fraction per HRU.  This avoids the "split vote" problem
+        where multiple source classes mapping to the same category
+        individually lose to a single competitor class.
+
+        Parameters
+        ----------
+        class_codes : list[int]
+            NLCD class codes (parallel with ``fractions_list``).
+        fractions_list : list[np.ndarray]
+            Fraction arrays, each shape ``(nhru,)``.
+        mapping : dict[int, int]
+            Source class code → target category code (e.g., NLCD →
+            cov_type).  Unmapped codes default to 0.
+
+        Returns
+        -------
+        np.ndarray
+            Majority target category code per HRU, shape ``(nhru,)``.
+
+        Notes
+        -----
+        For HRUs where all grouped fractions are NaN or zero, the
+        category with code 0 is returned and a warning is logged.
+
+        References
+        ----------
+        Regan et al. 2018 (USGS TM6-B9), Table A1-3 for NLCD → PRMS
+        cov_type mapping.
+        """
+        nhru = len(fractions_list[0])
+
+        # Identify unique target categories (sorted for determinism).
+        target_codes = sorted(set(mapping.values()))
+        code_to_idx = {c: i for i, c in enumerate(target_codes)}
+        n_groups = len(target_codes)
+
+        # Accumulate fractions by target group.
+        grouped = np.zeros((nhru, n_groups), dtype=np.float64)
+        for src_code, frac_arr in zip(class_codes, fractions_list, strict=True):
+            tgt = mapping.get(src_code, 0)
+            idx = code_to_idx[tgt]
+            frac_clean = np.where(np.isfinite(frac_arr), frac_arr, 0.0)
+            grouped[:, idx] += frac_clean
+
+        # Majority = argmax over grouped fractions.
+        with np.errstate(invalid="ignore"):
+            majority_idx = np.argmax(grouped, axis=1)
+        result = np.array([target_codes[i] for i in majority_idx])
+
+        # Warn on all-zero rows.
+        all_zero = np.all(grouped == 0, axis=1)
+        if np.any(all_zero):
+            logger.warning(
+                "%d of %d HRUs have all-zero grouped fractions; "
+                "majority category defaulting to %d for those HRUs",
+                int(np.sum(all_zero)),
+                nhru,
+                target_codes[0],
+            )
+
+        logger.info(
+            "Computed grouped majority from %d source classes into %d target categories",
+            len(class_codes),
+            n_groups,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Step 5: Soils zonal stats
@@ -1762,11 +1825,19 @@ class PywatershedDerivation:
         -----
         Unit conversions for ``soil_moist_max``:
 
-        - ``awc_mm_mean``: mm -> inches via ``convert(mm, in)``.
-        - ``aws0_100_cm_mean`` (fallback): cm -> mm (* 10) -> inches via
-          ``convert(mm, in)``.
+        - ``aws0_100_mm_mean`` (preferred): mm -> inches via ``convert()``.
+        - ``awc_mm_mean``: mm -> inches via ``convert()``.
+        - ``rootznaws_mm_mean`` (last resort): mm -> inches.
 
-        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches in both cases.
+        gNATSGO ``aws0_100`` (fixed 0-100 cm column) is preferred over
+        ``rootznaws`` (variable root-zone depth) because ``rootznaws``
+        uses dominant-component-only rasterization that can produce
+        spatial patterns inconsistent with the underlying SSURGO
+        polygon database.  NHM historically derived ``soil_moist_max``
+        from SSURGO component-weighted AWC with a 60-inch depth cap,
+        which ``aws0_100`` (fixed depth) better approximates.
+
+        All paths clip to ``[0.5, 20.0]`` inches.
 
         ``soil_rechr_max_frac`` is set to a constant default of 0.4
         (no soil layer depth data is currently available from the SIR
@@ -1796,28 +1867,30 @@ class PywatershedDerivation:
             )
 
         # --- soil_moist_max ---
-        # Prefer root zone AWS (rootznaws) over full-column aws0_100.
-        # rootznaws represents root zone available water storage, which
-        # maps directly to PRMS soil_moist_max.  aws0_100 is the full
-        # 0-100cm column and overestimates root zone capacity.
+        # Prefer fixed-depth aws0_100 (0-100cm column) over variable-depth
+        # rootznaws (root zone).  gNATSGO rootznaws uses dominant-component-
+        # only rasterization that can produce spatial patterns inconsistent
+        # with the underlying SSURGO polygon database.  aws0_100 is a
+        # fixed-depth product that better approximates NHM's SSURGO-derived
+        # component-weighted AWC with a 60-inch depth cap.
         #
-        # gNATSGO rootznaws and aws0_100 are in mm (per Planetary Computer
-        # STAC metadata).  awc_mm_mean is also in mm.  All paths convert
-        # mm → inches via convert().
-        rzaws_key = sir.find_variable("rootznaws_mm_mean")
-        awc_key = sir.find_variable("awc_mm_mean")
+        # All gNATSGO water storage variables (rootznaws, aws0_100) are in mm
+        # (per Planetary Computer STAC metadata).  awc_mm_mean is also in mm.
+        # All paths convert mm → inches via convert().
         aws_key = sir.find_variable("aws0_100_mm_mean")
+        awc_key = sir.find_variable("awc_mm_mean")
+        rzaws_key = sir.find_variable("rootznaws_mm_mean")
 
-        if rzaws_key is not None:
-            rzaws_mm = sir[rzaws_key].values.astype(np.float64)
-            soil_moist_max = convert(rzaws_mm, "mm", "in")
+        if aws_key is not None:
+            aws_mm = sir[aws_key].values.astype(np.float64)
+            soil_moist_max = convert(aws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
                 soil_moist_max,
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-            logger.info("Used rootznaws_mm_mean (root zone AWS, mm -> in) for soil_moist_max")
+            logger.info("Used aws0_100_mm_mean (0-100cm AWS, mm -> in) for soil_moist_max")
         elif awc_key is not None:
             awc_mm = sir[awc_key].values.astype(np.float64)
             soil_moist_max = convert(awc_mm, "mm", "in")
@@ -1827,18 +1900,19 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-        elif aws_key is not None:
-            # Full-column available water storage in mm — fallback when
-            # rootznaws is not available.
-            aws_mm = sir[aws_key].values.astype(np.float64)
-            soil_moist_max = convert(aws_mm, "mm", "in")
+            logger.info("Used awc_mm_mean (mm -> in) for soil_moist_max")
+        elif rzaws_key is not None:
+            # Root zone AWS — last resort due to dominant-component-only
+            # rasterization artifacts in gNATSGO.
+            rzaws_mm = sir[rzaws_key].values.astype(np.float64)
+            soil_moist_max = convert(rzaws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
                 soil_moist_max,
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-            logger.info("Used aws0_100_mm_mean (mm -> in) for soil_moist_max")
+            logger.info("Used rootznaws_mm_mean (root zone AWS, mm -> in) for soil_moist_max")
         else:
             logger.warning(
                 "Skipping soil_moist_max derivation (step 5): no rootznaws_mm_mean, "
