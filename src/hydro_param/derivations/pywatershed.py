@@ -93,7 +93,7 @@ _DEFAULTS: dict[str, float] = {
     "transp_tmax": 500.0,  # degree-days
     # PET (Jensen-Haise)
     "jh_coef": 0.014,
-    "jh_coef_hru": 0.014,
+    "jh_coef_hru": -10.0,  # temperature threshold Tx in °F
     # Transpiration timing
     "transp_beg": 4,  # April
     "transp_end": 10,  # October
@@ -141,6 +141,7 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
         "doy",
         "hru_in_to_cf",
         "temp_units",
+        "elev_units",
         "snarea_curve",
         "pref_flow_infil_frac",
     }
@@ -152,17 +153,19 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
 # shape broadcasting in _derive_calibration_seeds.  pywatershed v2.0
 # requires all parameters as correctly-dimensioned arrays.
 _PARAM_DIMS: dict[str, tuple[str, ...]] = {
+    # Scalar parameters — pywatershed stores these with dims=('scalar',)
+    # and passes them to inner functions without per-HRU indexing.
+    "albset_rna": ("scalar",),
+    "albset_rnm": ("scalar",),
+    "albset_sna": ("scalar",),
+    "albset_snm": ("scalar",),
+    "den_init": ("scalar",),
+    "den_max": ("scalar",),
+    "settle_const": ("scalar",),
     # Per-HRU (nhru,)
-    "den_init": ("nhru",),
-    "den_max": ("nhru",),
-    "settle_const": ("nhru",),
     "emis_noppt": ("nhru",),
     "freeh2o_cap": ("nhru",),
     "potet_sublim": ("nhru",),
-    "albset_rna": ("nhru",),
-    "albset_snm": ("nhru",),
-    "albset_rnm": ("nhru",),
-    "albset_sna": ("nhru",),
     "radj_sppt": ("nhru",),
     "radj_wppt": ("nhru",),
     "soil_moist_init_frac": ("nhru",),
@@ -225,7 +228,7 @@ if _MISSING_DIMS:
     )
 
 # Known dimension names referenced by _PARAM_DIMS.
-_KNOWN_DIMS = frozenset({"nhru", "nmonth"})
+_KNOWN_DIMS = frozenset({"nhru", "nmonth", "scalar"})
 _BAD_DIMS = {
     p: [d for d in dims if d not in _KNOWN_DIMS]
     for p, dims in _PARAM_DIMS.items()
@@ -646,6 +649,19 @@ class PywatershedDerivation:
             attrs={
                 "units": "none",
                 "long_name": "Index of downstream segment (0=outlet)",
+            },
+        )
+
+        # --- tosegment_nhm: map local indices to NHM segment IDs ---
+        # tosegment values are 1-based indices into the segment array;
+        # 0 means outlet (no downstream segment).
+        toseg_nhm = np.where(tosegment > 0, seg_ids[tosegment.astype(int) - 1], 0)
+        ds["tosegment_nhm"] = xr.DataArray(
+            toseg_nhm,
+            dims="nsegment",
+            attrs={
+                "units": "none",
+                "long_name": "NHM downstream segment ID (0=outlet)",
             },
         )
 
@@ -1321,7 +1337,7 @@ class PywatershedDerivation:
         ds["K_coef"] = xr.DataArray(
             k_coef,
             dims="nsegment",
-            attrs={"units": "hours", "long_name": "Muskingum storage time coefficient"},
+            attrs={"units": "hr", "long_name": "Muskingum storage time coefficient"},
         )
 
         # --- x_coef ---
@@ -1354,12 +1370,13 @@ class PywatershedDerivation:
     def _derive_topography(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Convert DEM zonal statistics to PRMS topographic parameters (step 3).
 
-        Transform 3DEP-derived zonal statistics from SI units to PRMS
-        conventions:
+        Transform 3DEP-derived zonal statistics to PRMS conventions:
 
-        - ``elevation_m_mean`` (meters) -> ``hru_elev`` (feet)
+        - ``elevation_m_mean`` (meters) -> ``hru_elev`` (meters, preserved)
         - ``slope_deg_mean`` (degrees) -> ``hru_slope`` (decimal fraction = tan(slope))
-        - ``aspect_deg_mean`` (degrees) -> ``hru_aspect`` (degrees, unchanged)
+        - ``sin_aspect_mean`` + ``cos_aspect_mean`` -> ``hru_aspect`` (degrees,
+          circular mean via atan2)
+        - ``aspect_deg_mean`` -> ``hru_aspect`` (degrees, legacy fallback)
 
         Parameters
         ----------
@@ -1371,26 +1388,34 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``hru_elev`` (feet), ``hru_slope`` (decimal
+            Dataset with ``hru_elev`` (meters), ``hru_slope`` (decimal
             fraction), and ``hru_aspect`` (degrees) on the ``nhru``
             dimension.  Only variables with corresponding SIR input are
             added.
 
         Notes
         -----
-        Unit conversions: meters -> feet (``convert(m, ft)``),
-        degrees -> radians -> tan() for slope.
+        Elevation is kept in meters (``elev_units=1``).  pywatershed v2
+        does not use ``elev_units`` internally — the reference DRB data
+        uses meters throughout.
 
         PRMS slope is rise/run (dimensionless), not an angle.  The
         conversion is ``tan(slope_rad)`` where ``slope_rad`` is the
         slope angle in radians.
+
+        Aspect uses circular mean via sin/cos decomposition: the pipeline
+        computes per-pixel ``sin(aspect)`` and ``cos(aspect)``, then
+        arithmetic zonal mean is correct for those components.  The
+        derivation recombines with ``atan2(mean_sin, mean_cos)`` to get
+        a proper circular mean.  Falls back to arithmetic mean of raw
+        aspect if only ``aspect_deg_mean`` is available (legacy SIR).
         """
         sir = ctx.sir
         if "elevation_m_mean" in sir:
             ds["hru_elev"] = xr.DataArray(
-                convert(sir["elevation_m_mean"].values, "m", "ft"),
+                sir["elevation_m_mean"].values.astype(np.float64),
                 dims="nhru",
-                attrs={"units": "feet", "long_name": "Mean HRU elevation"},
+                attrs={"units": "meters", "long_name": "Mean HRU elevation"},
             )
 
         if "slope_deg_mean" in sir:
@@ -1402,7 +1427,25 @@ class PywatershedDerivation:
                 attrs={"units": "decimal_fraction", "long_name": "Mean HRU slope"},
             )
 
-        if "aspect_deg_mean" in sir:
+        # Aspect: prefer circular mean via sin/cos decomposition
+        if "sin_aspect_mean" in sir and "cos_aspect_mean" in sir:
+            sin_mean = sir["sin_aspect_mean"].values.astype(np.float64)
+            cos_mean = sir["cos_aspect_mean"].values.astype(np.float64)
+            aspect = (np.degrees(np.arctan2(sin_mean, cos_mean)) + 360) % 360
+            ds["hru_aspect"] = xr.DataArray(
+                aspect,
+                dims="nhru",
+                attrs={
+                    "units": "degrees",
+                    "long_name": "Mean HRU aspect (circular mean)",
+                },
+            )
+        elif "aspect_deg_mean" in sir:
+            logger.warning(
+                "Using arithmetic mean of aspect (legacy SIR). Circular mean via "
+                "sin_aspect_mean/cos_aspect_mean is preferred. Consider regenerating "
+                "SIR with the sin_aspect and cos_aspect terrain derivations."
+            )
             ds["hru_aspect"] = xr.DataArray(
                 sir["aspect_deg_mean"].values.astype(np.float64),
                 dims="nhru",
@@ -1426,8 +1469,9 @@ class PywatershedDerivation:
 
         1. **Categorical fractions** (preferred): SIR contains columns
            like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
-           normalized categorical zonal output.  The majority class is
-           computed via argmax across fraction columns.
+           normalized categorical zonal output.  Fractions are grouped
+           by target category before selecting the majority class to
+           avoid split-vote problems.
         2. **Single majority value**: ``land_cover`` or
            ``land_cover_majority`` variable containing the dominant
            NLCD class code per HRU.
@@ -1463,46 +1507,45 @@ class PywatershedDerivation:
 
         See Also
         --------
-        _compute_majority_from_fractions : Argmax over fraction columns.
+        _extract_nlcd_fractions : Extract class codes and fractions from SIR.
+        _compute_grouped_majority : Group fractions by target category.
         """
         sir = ctx.sir
-        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
-        lc_var = None
-        nlcd_values = self._compute_majority_from_fractions(sir)
+        nlcd_table = self._load_lookup_table(
+            "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
+        )
+        mapping: dict[int, int] = nlcd_table["mapping"]
 
-        if nlcd_values is None:
+        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
+        # Group fractions by cov_type BEFORE argmax so that multiple NLCD
+        # classes mapping to the same cov_type (e.g., 41+42+43 → forest)
+        # contribute their combined fraction instead of competing individually.
+        cov_type: np.ndarray | None = None
+        extracted = self._extract_nlcd_fractions(sir, valid_codes=self._VALID_NLCD_CLASSES)
+
+        if extracted is not None:
+            class_codes, fractions_list = extracted
+            cov_type = self._compute_grouped_majority(class_codes, fractions_list, mapping)
+        else:
             # Fallback to single majority value
             for candidate in ("land_cover", "land_cover_majority"):
                 if candidate in sir:
-                    lc_var = candidate
+                    nlcd_values_lc = sir[candidate].values.astype(int)
+                    cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
                     break
 
-        has_lc = nlcd_values is not None or lc_var is not None
-        if nlcd_values is not None:
-            nlcd_table = self._load_lookup_table(
-                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
-            )
-            mapping = nlcd_table["mapping"]
-            cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values])
-        elif lc_var is not None:
-            nlcd_table = self._load_lookup_table(
-                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
-            )
-            mapping = nlcd_table["mapping"]
-            nlcd_values_lc = sir[lc_var].values.astype(int)
-            cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
-
-        if has_lc:
+        if cov_type is not None:
             ds["cov_type"] = xr.DataArray(
                 cov_type,
                 dims="nhru",
                 attrs={"units": "integer", "long_name": "Vegetation cover type"},
             )
 
-        if "tree_canopy_pct_mean" in sir:
+        canopy_key = sir.find_variable("tree_canopy_pct_mean")
+        if canopy_key is not None:
             # Continuous canopy cover (0-100%) -> fraction (0-1)
             ds["covden_sum"] = xr.DataArray(
-                np.clip(sir["tree_canopy_pct_mean"].values / 100.0, 0.0, 1.0),
+                np.clip(sir[canopy_key].values / 100.0, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
@@ -1527,64 +1570,63 @@ class PywatershedDerivation:
 
         return ds
 
+    # Valid NLCD Anderson Level II class codes (11–95).
+    _VALID_NLCD_CLASSES: frozenset[int] = frozenset(
+        {11, 12, 21, 22, 23, 24, 31, 41, 42, 43, 51, 52, 71, 72, 73, 74, 81, 82, 90, 95}
+    )
+
     @staticmethod
-    def _compute_majority_from_fractions(
+    def _extract_nlcd_fractions(
         sir: SIRAccessor,
         prefixes: tuple[str, ...] = ("lndcov_frac_",),
-    ) -> np.ndarray | None:
-        """Compute majority NLCD class from categorical fraction columns.
+        valid_codes: frozenset[int] | None = None,
+    ) -> tuple[list[int], list[np.ndarray]] | None:
+        """Extract NLCD class codes and fraction arrays from SIR.
 
         Scan SIR variables for columns matching ``{prefix}{class_code}``
-        (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  For each HRU,
-        return the class code with the highest fraction via ``np.argmax``.
+        and return parallel lists of class codes and fraction arrays.
+        Filter out NoData sentinels (class codes not in ``valid_codes``).
 
-        This method supports two SIR layouts:
+        Support two SIR layouts:
 
         1. **Column-level keys** — each fraction is a separate SIR variable
-           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).  This is the
-           normalized categorical output from gdptools ``ZonalGen``.
+           (e.g., ``lndcov_frac_11``, ``lndcov_frac_41``).
         2. **File-level keys** — ``data_vars`` contains a year-suffixed
            entry like ``lndcov_frac_2021``.  The individual fraction
-           columns (``lndcov_frac_2021_11``, ``lndcov_frac_2021_41``,
-           etc.) are inside the backing file and accessed via
+           columns are inside the backing file and accessed via
            ``sir.load_dataset()``.
 
         Parameters
         ----------
         sir : SIRAccessor
-            SIR dataset potentially containing fraction columns.
+            SIR dataset containing fraction columns.
         prefixes : tuple[str, ...]
-            Variable name prefixes to search for (default:
-            ``("lndcov_frac_",)``).
+            Variable name prefixes to search for.
+        valid_codes : frozenset[int] or None
+            Set of valid NLCD class codes.  Codes not in this set are
+            filtered out (e.g., NoData sentinel 250).  If ``None``,
+            no code filtering is applied.  Codes exceeding 95 are
+            treated as year-suffixed file-level keys regardless.
 
         Returns
         -------
-        np.ndarray or None
-            Array of majority NLCD class codes (int) with shape
-            ``(nhru,)``, or ``None`` if fewer than 2 fraction columns
-            are found for any prefix.
+        tuple[list[int], list[np.ndarray]] or None
+            ``(class_codes, fractions_list)`` if at least 2 valid
+            fraction columns are found, else ``None``.
 
         Notes
         -----
-        Suffixes that cannot be parsed as integers are silently skipped
-        with a debug log message.  At least 2 valid fraction columns
-        are required to compute a meaningful majority.
-
         When a suffix parses as an integer but exceeds 95 (the maximum
         NLCD class code), it is treated as a year-suffixed file-level
-        key.  The method calls ``sir.load_dataset()`` to retrieve the
-        inner columns and searches them for ``{file_key}_{class_code}``
-        patterns.
+        key.  Inner columns within that file are individually checked
+        against ``valid_codes`` to filter NoData sentinels (e.g.,
+        class 250).
         """
         for prefix in prefixes:
             fraction_vars = sorted(v for v in sir.data_vars if v.startswith(prefix))
             if not fraction_vars:
                 continue
 
-            # Extract class codes from suffixes.  Fraction values are
-            # collected eagerly so that file-level datasets can be released
-            # immediately and multiple year-suffixed files don't overwrite
-            # each other.
             class_codes: list[int] = []
             fractions_list: list[np.ndarray] = []
             for v in fraction_vars:
@@ -1601,7 +1643,6 @@ class PywatershedDerivation:
 
                 if code > 95:
                     # Suffix looks like a year (e.g. 2021), not an NLCD class.
-                    # Load the backing file and extract inner fraction columns.
                     try:
                         inner_ds = sir.load_dataset(v)
                     except KeyError:
@@ -1626,9 +1667,23 @@ class PywatershedDerivation:
                                 inner_suffix,
                             )
                             continue
+                        if valid_codes is not None and inner_code not in valid_codes:
+                            logger.debug(
+                                "Filtering inner variable '%s': code %d not in valid NLCD classes",
+                                inner_name,
+                                inner_code,
+                            )
+                            continue
                         class_codes.append(inner_code)
                         fractions_list.append(inner_ds[inner_name].values)
                 else:
+                    if valid_codes is not None and code not in valid_codes:
+                        logger.debug(
+                            "Filtering variable '%s': code %d not in valid NLCD classes",
+                            v,
+                            code,
+                        )
+                        continue
                     class_codes.append(code)
                     fractions_list.append(sir[v].values)
 
@@ -1643,19 +1698,101 @@ class PywatershedDerivation:
                     )
                 continue
 
-            fractions = np.column_stack(fractions_list)
-            codes = np.array(class_codes)
-            majority_idx = np.argmax(fractions, axis=1)
-            majority_class = codes[majority_idx]
-
-            logger.info(
-                "Computed majority class from %d categorical fraction columns (prefix=%r)",
-                len(class_codes),
-                prefix,
-            )
-            return majority_class
+            return class_codes, fractions_list
 
         return None
+
+    @staticmethod
+    def _compute_grouped_majority(
+        class_codes: list[int],
+        fractions_list: list[np.ndarray],
+        mapping: dict[int, int],
+    ) -> np.ndarray:
+        """Compute majority category by grouping source fractions.
+
+        Sum NLCD class fractions that map to the same target category
+        (e.g., cov_type), then return the category with the highest
+        total fraction per HRU.  This avoids the "split vote" problem
+        where multiple source classes mapping to the same category
+        individually lose to a single competitor class.
+
+        Parameters
+        ----------
+        class_codes : list[int]
+            NLCD class codes (parallel with ``fractions_list``).
+        fractions_list : list[np.ndarray]
+            Fraction arrays, each shape ``(nhru,)``.
+        mapping : dict[int, int]
+            Source class code → target category code (e.g., NLCD →
+            cov_type).  Unmapped codes default to 0.
+
+        Returns
+        -------
+        np.ndarray
+            Majority target category code per HRU, shape ``(nhru,)``.
+
+        Notes
+        -----
+        For HRUs where all grouped fractions are NaN or zero, cov_type
+        0 (bare ground) is explicitly assigned and a warning is logged.
+
+        Raises
+        ------
+        ValueError
+            If ``fractions_list`` is empty or ``mapping`` is empty.
+
+        References
+        ----------
+        Regan et al. 2018 (USGS TM6-B9), Table A1-3 for NLCD → PRMS
+        cov_type mapping.
+        """
+        if not fractions_list:
+            raise ValueError(
+                "_compute_grouped_majority requires at least one fraction array; "
+                "received an empty list."
+            )
+        if not mapping:
+            raise ValueError("_compute_grouped_majority requires a non-empty mapping dict.")
+
+        nhru = len(fractions_list[0])
+
+        # Identify unique target categories (sorted for determinism).
+        target_codes = sorted(set(mapping.values()))
+        code_to_idx = {c: i for i, c in enumerate(target_codes)}
+        n_groups = len(target_codes)
+
+        # Accumulate fractions by target group.
+        grouped = np.zeros((nhru, n_groups), dtype=np.float64)
+        for src_code, frac_arr in zip(class_codes, fractions_list, strict=True):
+            tgt = mapping.get(src_code, 0)
+            idx = code_to_idx[tgt]
+            frac_clean = np.where(np.isfinite(frac_arr), frac_arr, 0.0)
+            grouped[:, idx] += frac_clean
+
+        # Majority = argmax over grouped fractions.
+        with np.errstate(invalid="ignore"):
+            majority_idx = np.argmax(grouped, axis=1)
+        result = np.array([target_codes[i] for i in majority_idx])
+
+        # Explicitly assign bare ground (0) for HRUs with no valid data.
+        _DEFAULT_CATEGORY = 0
+        all_zero = np.all(grouped == 0, axis=1)
+        if np.any(all_zero):
+            result[all_zero] = _DEFAULT_CATEGORY
+            logger.warning(
+                "%d of %d HRUs have all-zero grouped fractions; "
+                "majority category set to %d (bare ground) for those HRUs",
+                int(np.sum(all_zero)),
+                nhru,
+                _DEFAULT_CATEGORY,
+            )
+
+        logger.info(
+            "Computed grouped majority from %d source classes into %d target categories",
+            len(class_codes),
+            n_groups,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Step 5: Soils zonal stats
@@ -1668,8 +1805,9 @@ class PywatershedDerivation:
 
         Classify soil texture into PRMS ``soil_type`` and derive
         ``soil_moist_max`` (maximum soil moisture capacity) from
-        available water capacity (``awc_mm_mean``) or, as a fallback,
-        available water storage (``aws0_100_cm_mean``).
+        available water storage (``aws0_100_mm_mean``), available water
+        capacity (``awc_mm_mean``), or root-zone AWS
+        (``rootznaws_mm_mean``), in that priority order.
 
         Supports three input modes for soil texture:
 
@@ -1706,11 +1844,19 @@ class PywatershedDerivation:
         -----
         Unit conversions for ``soil_moist_max``:
 
-        - ``awc_mm_mean``: mm -> inches via ``convert(mm, in)``.
-        - ``aws0_100_cm_mean`` (fallback): cm -> mm (* 10) -> inches via
-          ``convert(mm, in)``.
+        - ``aws0_100_mm_mean`` (preferred): mm -> inches via ``convert()``.
+        - ``awc_mm_mean``: mm -> inches via ``convert()``.
+        - ``rootznaws_mm_mean`` (last resort): mm -> inches.
 
-        ``soil_moist_max`` is clipped to ``[0.5, 20.0]`` inches in both cases.
+        gNATSGO ``aws0_100`` (fixed 0-100 cm column) is preferred over
+        ``rootznaws`` (variable root-zone depth) because ``rootznaws``
+        uses dominant-component-only rasterization that can produce
+        spatial patterns inconsistent with the underlying SSURGO
+        polygon database.  NHM historically derived ``soil_moist_max``
+        from SSURGO component-weighted AWC with a 60-inch depth cap,
+        which ``aws0_100`` (fixed depth) better approximates.
+
+        All paths clip to ``[0.5, 20.0]`` inches.
 
         ``soil_rechr_max_frac`` is set to a constant default of 0.4
         (no soil layer depth data is currently available from the SIR
@@ -1740,8 +1886,33 @@ class PywatershedDerivation:
             )
 
         # --- soil_moist_max ---
-        if "awc_mm_mean" in sir:
-            awc_mm = sir["awc_mm_mean"].values.astype(np.float64)
+        # Prefer fixed-depth aws0_100 (0-100cm column) over variable-depth
+        # rootznaws (root zone).  gNATSGO rootznaws uses dominant-component-
+        # only rasterization that can produce spatial patterns inconsistent
+        # with the underlying SSURGO polygon database.  aws0_100 is a
+        # fixed-depth product that better approximates NHM's SSURGO-derived
+        # component-weighted AWC with a 60-inch depth cap.
+        #
+        # All gNATSGO water storage variables (rootznaws, aws0_100) are in mm
+        # (per Planetary Computer STAC metadata).  awc_mm_mean is also in mm.
+        # All paths convert mm → inches via convert().
+        aws_key = sir.find_variable("aws0_100_mm_mean")
+        awc_key = sir.find_variable("awc_mm_mean")
+        rzaws_key = sir.find_variable("rootznaws_mm_mean")
+
+        if aws_key is not None:
+            aws_mm = sir[aws_key].values.astype(np.float64)
+            soil_moist_max = convert(aws_mm, "mm", "in")
+            soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
+            ds["soil_moist_max"] = xr.DataArray(
+                soil_moist_max,
+                dims="nhru",
+                attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
+            )
+            logger.info("Used aws0_100_mm_mean (0-100cm AWS, mm -> in) for soil_moist_max")
+        elif awc_key is not None:
+            logger.debug("aws0_100_mm_mean not found in SIR; falling back to awc_mm_mean")
+            awc_mm = sir[awc_key].values.astype(np.float64)
             soil_moist_max = convert(awc_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
@@ -1749,22 +1920,25 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-        elif "aws0_100_cm_mean" in sir:
-            # Available water storage in cm — convert to mm first, then to inches.
-            aws_cm = sir["aws0_100_cm_mean"].values.astype(np.float64)
-            awc_mm = aws_cm * 10.0  # cm -> mm
-            soil_moist_max = convert(awc_mm, "mm", "in")
+            logger.info("Used awc_mm_mean (mm -> in) for soil_moist_max")
+        elif rzaws_key is not None:
+            logger.debug(
+                "aws0_100_mm_mean and awc_mm_mean not found in SIR; "
+                "falling back to rootznaws_mm_mean (lower quality)"
+            )
+            rzaws_mm = sir[rzaws_key].values.astype(np.float64)
+            soil_moist_max = convert(rzaws_mm, "mm", "in")
             soil_moist_max = np.clip(soil_moist_max, 0.5, 20.0)
             ds["soil_moist_max"] = xr.DataArray(
                 soil_moist_max,
                 dims="nhru",
                 attrs={"units": "inches", "long_name": "Maximum soil moisture capacity"},
             )
-            logger.info("Used aws0_100_cm_mean (cm -> mm -> in) for soil_moist_max")
+            logger.info("Used rootznaws_mm_mean (root zone AWS, mm -> in) for soil_moist_max")
         else:
             logger.warning(
-                "Skipping soil_moist_max derivation (step 5): neither 'awc_mm_mean' "
-                "nor 'aws0_100_cm_mean' found in SIR."
+                "Skipping soil_moist_max derivation (step 5): no rootznaws_mm_mean, "
+                "awc_mm_mean, or aws0_100_mm_mean found in SIR."
             )
 
         # --- soil_rechr_max_frac ---
@@ -2351,7 +2525,7 @@ class PywatershedDerivation:
         ds["soltab_sunhrs"] = xr.DataArray(
             sunhrs,
             dims=("ndoy", "nhru"),
-            attrs={"units": "hours", "long_name": "Hours of direct sunlight"},
+            attrs={"units": "hr", "long_name": "Hours of direct sunlight"},
         )
         return ds
 
@@ -2467,6 +2641,13 @@ class PywatershedDerivation:
                 attrs={"long_name": "Temperature units (0=F, 1=C)"},
             )
 
+        # elev_units: 1 = meters (elevations kept in meters, not converted)
+        if "elev_units" not in ds:
+            ds["elev_units"] = xr.DataArray(
+                np.int32(1),
+                attrs={"long_name": "Elevation units (0=feet, 1=meters)"},
+            )
+
         # snarea_curve: snow depletion curve (11 values, default all 1.0)
         if "snarea_curve" not in ds:
             ds["snarea_curve"] = xr.DataArray(
@@ -2495,6 +2676,7 @@ class PywatershedDerivation:
         dim_sizes: dict[str, int] = {
             "nhru": nhru,
             "nmonth": 12,
+            "scalar": 1,
         }
 
         for param_name, default_val in _DEFAULTS.items():
@@ -2530,14 +2712,6 @@ class PywatershedDerivation:
                             dims=("nsegment",),
                             attrs={"long_name": desc},
                         )
-
-                # tosegment_nhm: copy from tosegment if available
-                if "tosegment_nhm" not in ds and "tosegment" in ds:
-                    ds["tosegment_nhm"] = xr.DataArray(
-                        ds["tosegment"].values.copy(),
-                        dims=("nsegment",),
-                        attrs={"long_name": "NHM downstream segment ID"},
-                    )
 
         return ds
 
@@ -3043,10 +3217,17 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Derive Jensen-Haise PET coefficients from climate normals (step 10).
 
-        Compute monthly ``jh_coef`` and per-HRU ``jh_coef_hru`` using
-        the PRMS-IV equation 1-26 (Markstrom et al. 2015).  The
-        Jensen-Haise method estimates potential evapotranspiration from
-        temperature and vapor pressure deficit.
+        Compute monthly ``jh_coef`` (= 1/Ct) and per-HRU ``jh_coef_hru``
+        (= Tx, temperature threshold in °F) using the PRMS-IV equation 1-26
+        (Markstrom et al. 2015).
+
+        ``jh_coef = 1 / Ct`` where ``Ct = C1 + 13 * Ch``
+        (see Notes for full derivation).
+
+        ``jh_coef_hru = Tx = -2.5 - 0.14 * (e_july_max - e_july_min) - elev_ft / 1000``
+
+        The Jensen-Haise PET equation uses these as:
+        ``PET = jh_coef * (T_avg_F - jh_coef_hru) * swrad / elh``
 
         Falls back to step 13 scalar defaults when no temporal data is
         available (normals is ``None``).
@@ -3054,7 +3235,7 @@ class PywatershedDerivation:
         Parameters
         ----------
         ds : xr.Dataset
-            In-progress parameter dataset.  ``hru_elev`` (feet) is used
+            In-progress parameter dataset.  ``hru_elev`` (meters) is used
             for elevation adjustment of ``jh_coef_hru`` if available.
         normals : tuple[np.ndarray, np.ndarray] or None
             Monthly climate normals ``(monthly_tmax, monthly_tmin)`` each
@@ -3065,27 +3246,35 @@ class PywatershedDerivation:
         -------
         xr.Dataset
             Dataset with ``jh_coef`` (per_degF_per_day, shape
-            ``(nhru, 12)``) and ``jh_coef_hru`` (per_degF_per_day,
-            shape ``(nhru,)``) added.
+            ``(nmonth, nhru)``) and ``jh_coef_hru``
+            (degrees_fahrenheit, shape ``(nhru,)``) added.
 
         Notes
         -----
-        The PRMS-IV equation 1-26 for ``jh_coef``:
-        ``jh = 27.5 - 0.25 * (es_max - es_min) / es_max``
-        where ``es_max`` and ``es_min`` are monthly saturation vapor
-        pressures computed from tmax and tmin respectively.  Values are
-        clipped to ``[0.005, 0.06]``.
+        The Jensen-Haise coefficient (Jensen et al. 1970, PRMS-IV eq. 1-26):
 
-        ``jh_coef_hru`` uses the July (warmest month) coefficient with
-        a linear elevation adjustment: ``+0.00001`` per foot above sea
-        level, reflecting the increased vapor pressure deficit at higher
-        elevations due to lower atmospheric pressure.
+        ``C1 = 68 - 3.6 * (elev_ft / 1000)``
+        ``Ch = 50 / (e2 - e1)``
+        ``Ct = C1 + 13 * Ch``
+        ``jh_coef = 1 / Ct``
+
+        where ``e2`` and ``e1`` are saturation vapor pressures (mb) at
+        monthly mean tmax and tmin respectively.  ``C1`` is the elevation
+        correction term.  Computed per month to capture seasonal variation.
+        Values are clipped to ``[0.005, 0.06]``.
+
+        ``jh_coef_hru`` (Tx) is the temperature threshold in the PET
+        equation, computed from July vapor pressure extremes and elevation:
+        ``Tx = -2.5 - 0.14 * (e_july_max - e_july_min) - elev_ft / 1000``.
 
         References
         ----------
         Markstrom, S. L., et al. (2015). PRMS-IV. USGS TM 6-B7, eq. 1-26.
-        Jensen, M. E. and Haise, H. R. (1963). Estimating evapotranspiration
+        Jensen, M. E., Haise, H. R. (1963). Estimating evapotranspiration
             from solar radiation. J. Irrig. Drain. Div., 89, 15-41.
+        Jensen, M. E., Robb, D. C. N., Franzoy, C. E. (1970). Scheduling
+            irrigations using climate-crop-soil data. J. Irrig. Drain.
+            Div., 96(1), 25-38.
 
         See Also
         --------
@@ -3099,43 +3288,58 @@ class PywatershedDerivation:
         monthly_tmax, monthly_tmin = normals  # (12, nhru) in °F
         nhru = monthly_tmax.shape[1]
 
-        # --- jh_coef: PRMS-IV eq. 1-26 ---
-        svp_max = _sat_vp(monthly_tmax)  # (12, nhru)
-        svp_min = _sat_vp(monthly_tmin)  # (12, nhru)
+        # --- Elevation for both jh_coef and jh_coef_hru ---
+        if "hru_elev" in ds:
+            elev_m = ds["hru_elev"].values
+            elev_ft = elev_m / 0.3048
+        else:
+            logger.warning(
+                "hru_elev not in dataset; PET coefficients will be computed assuming "
+                "sea-level elevation (0 ft). This affects both jh_coef and jh_coef_hru. "
+                "Ensure step 3 (topography) ran successfully.",
+            )
+            elev_ft = np.zeros(nhru)
 
-        # Guard against division by zero
-        svp_max_safe = np.maximum(svp_max, 1e-6)
-        jh_coef = 27.5 - 0.25 * (svp_max - svp_min) / svp_max_safe
+        # --- jh_coef: Jensen-Haise (Jensen et al. 1970, PRMS-IV eq. 1-26) ---
+        # Ct = C1 + 13*Ch  where:
+        #   C1 = 68 - 3.6 * (elev_ft / 1000)  [elevation correction]
+        #   Ch = 50 / (e2 - e1)                [humidity index, mb]
+        # e2 = SVP at monthly mean tmax, e1 = SVP at monthly mean tmin
+        # jh_coef = 1/Ct
+        c1 = 68.0 - 3.6 * (elev_ft / 1000.0)  # (nhru,)
+
+        jh_coef = np.zeros((12, nhru))
+        for m in range(12):
+            e2 = _sat_vp(monthly_tmax[m, :])  # SVP at tmax (hPa ≈ mb)
+            e1 = _sat_vp(monthly_tmin[m, :])  # SVP at tmin
+            de = np.maximum(e2 - e1, 0.01)  # guard against zero
+            ch = 50.0 / de
+            ct = c1 + 13.0 * ch
+            ct_safe = np.maximum(ct, 1e-6)
+            jh_coef[m, :] = 1.0 / ct_safe
+
         jh_coef = np.clip(jh_coef, 0.005, 0.06)
 
-        # Shape is already (12, nhru) = (nmonth, nhru)
         ds["jh_coef"] = xr.DataArray(
             jh_coef,
             dims=("nmonth", "nhru"),
             attrs={"units": "per_degF_per_day", "long_name": "Jensen-Haise PET coefficient"},
         )
 
-        # --- jh_coef_hru: elevation-adjusted coefficient ---
-        # Use July (index 6) as warmest month for base coefficient
-        july_jh = jh_coef[6, :]  # (nhru,)
+        # --- jh_coef_hru: Jensen-Haise temperature threshold Tx (°F) ---
+        # Tx = -2.5 - 0.14*(e_july_max - e_july_min) - elev_ft/1000
+        # Used in PET equation: PET = jh_coef * (T_avg_F - jh_coef_hru) * swrad / elh
+        svp_july_max = _sat_vp(monthly_tmax[6, :])  # (nhru,)
+        svp_july_min = _sat_vp(monthly_tmin[6, :])  # (nhru,)
 
-        # Elevation adjustment: higher elevations have lower boiling point,
-        # increasing vapor pressure deficit -> slightly higher coefficients.
-        # Linear approximation: +0.00001 per foot above sea level.
-        if "hru_elev" in ds:
-            elev_ft = ds["hru_elev"].values
-            jh_coef_hru = july_jh + 0.00001 * elev_ft
-        else:
-            logger.info(
-                "hru_elev not in dataset; computing jh_coef_hru without elevation adjustment.",
-            )
-            jh_coef_hru = july_jh
-
-        jh_coef_hru = np.clip(jh_coef_hru, 0.005, 0.06)
+        jh_coef_hru = -2.5 - 0.14 * (svp_july_max - svp_july_min) - elev_ft / 1000.0
         ds["jh_coef_hru"] = xr.DataArray(
             jh_coef_hru,
             dims=("nhru",),
-            attrs={"units": "per_degF_per_day", "long_name": "Per-HRU Jensen-Haise coefficient"},
+            attrs={
+                "units": "degrees_fahrenheit",
+                "long_name": "Jensen-Haise temperature threshold (Tx)",
+            },
         )
 
         logger.info(

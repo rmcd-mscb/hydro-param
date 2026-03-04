@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from hydro_param.data_access import derive_aspect, derive_slope
+from hydro_param.data_access import (
+    derive_aspect,
+    derive_cos_aspect,
+    derive_sin_aspect,
+    derive_slope,
+)
 
 
 def _make_elevation(
@@ -220,3 +225,84 @@ def test_aspect_with_custom_coord_names():
     assert aspect.shape == elev.shape
     assert (aspect.values >= 0).all()
     assert (aspect.values < 360).all()
+
+
+# ---------------------------------------------------------------------------
+# Sin/Cos aspect derivation for circular mean
+# ---------------------------------------------------------------------------
+
+
+def test_sin_aspect_east_facing():
+    """East-facing slope (aspect=90°): sin(90°)=1, cos(90°)=0."""
+    data = np.zeros((10, 10))
+    for c in range(10):
+        data[:, c] = (9 - c) * 100.0  # decreases eastward → aspect=90°
+
+    elev = _make_elevation(data, dx=100.0, dy=100.0)
+    sin_asp = derive_sin_aspect(elev)
+
+    interior = sin_asp.values[2:-2, 2:-2]
+    np.testing.assert_allclose(interior, 1.0, atol=0.01)
+    assert sin_asp.attrs["units"] == "unitless"
+    assert sin_asp.name == "sin_aspect"
+
+
+def test_cos_aspect_east_facing():
+    """East-facing slope (aspect=90°): cos(90°)=0."""
+    data = np.zeros((10, 10))
+    for c in range(10):
+        data[:, c] = (9 - c) * 100.0  # decreases eastward → aspect=90°
+
+    elev = _make_elevation(data, dx=100.0, dy=100.0)
+    cos_asp = derive_cos_aspect(elev)
+
+    interior = cos_asp.values[2:-2, 2:-2]
+    np.testing.assert_allclose(interior, 0.0, atol=0.01)
+    assert cos_asp.attrs["units"] == "unitless"
+    assert cos_asp.name == "cos_aspect"
+
+
+def test_sin_aspect_north_facing():
+    """North-facing slope (aspect≈0°): sin(0°)=0."""
+    data = np.zeros((10, 10))
+    for r in range(10):
+        data[r, :] = (9 - r) * 100.0  # decreases northward → aspect≈0°
+
+    elev = _make_elevation(data, dx=100.0, dy=100.0)
+    sin_asp = derive_sin_aspect(elev)
+
+    interior = sin_asp.values[2:-2, 2:-2]
+    np.testing.assert_allclose(interior, 0.0, atol=0.01)
+
+
+def test_cos_aspect_north_facing():
+    """North-facing slope (aspect≈0°): cos(0°)=1."""
+    data = np.zeros((10, 10))
+    for r in range(10):
+        data[r, :] = (9 - r) * 100.0  # decreases northward → aspect≈0°
+
+    elev = _make_elevation(data, dx=100.0, dy=100.0)
+    cos_asp = derive_cos_aspect(elev)
+
+    interior = cos_asp.values[2:-2, 2:-2]
+    np.testing.assert_allclose(interior, 1.0, atol=0.01)
+
+
+def test_sin_cos_aspect_output_shape():
+    """Sin/cos aspect output shape matches input elevation."""
+    data = np.random.default_rng(42).uniform(0, 1000, (15, 20))
+    elev = _make_elevation(data)
+    sin_asp = derive_sin_aspect(elev)
+    cos_asp = derive_cos_aspect(elev)
+    assert sin_asp.shape == elev.shape
+    assert cos_asp.shape == elev.shape
+
+
+def test_sin_cos_aspect_value_range():
+    """Sin/cos values should be in [-1, 1]."""
+    data = np.random.default_rng(42).uniform(0, 1000, (15, 20))
+    elev = _make_elevation(data)
+    sin_asp = derive_sin_aspect(elev)
+    cos_asp = derive_cos_aspect(elev)
+    assert (sin_asp.values >= -1.0).all() and (sin_asp.values <= 1.0).all()
+    assert (cos_asp.values >= -1.0).all() and (cos_asp.values <= 1.0).all()

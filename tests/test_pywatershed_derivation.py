@@ -101,6 +101,14 @@ def sir_topography() -> _MockSIRAccessor:
                 "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
                 "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
                 "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
+                "sin_aspect_mean": (
+                    "nhm_id",
+                    np.sin(np.radians([0.0, 90.0, 270.0])),
+                ),
+                "cos_aspect_mean": (
+                    "nhm_id",
+                    np.cos(np.radians([0.0, 90.0, 270.0])),
+                ),
                 "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
             },
             coords={"nhm_id": [1, 2, 3]},
@@ -279,15 +287,15 @@ class TestDerivationContextTemporal:
 class TestDeriveTopography:
     """Tests for step 3: topographic parameter derivation."""
 
-    def test_elevation_m_to_ft(
+    def test_elevation_meters_preserved(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_elev" in ds
-        # 100m ~ 328.084 ft
-        np.testing.assert_allclose(ds["hru_elev"].values[0], 328.084, atol=0.01)
-        assert ds["hru_elev"].attrs["units"] == "feet"
+        # Elevation is kept in meters (no m→ft conversion)
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        assert ds["hru_elev"].attrs["units"] == "meters"
 
     def test_slope_degrees_to_fraction(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -301,14 +309,34 @@ class TestDeriveTopography:
         np.testing.assert_allclose(ds["hru_slope"].values[2], np.tan(np.radians(30.0)), atol=1e-4)
         assert ds["hru_slope"].attrs["units"] == "decimal_fraction"
 
-    def test_aspect_preserved(
+    def test_aspect_circular_mean(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
     ) -> None:
+        """Aspect uses atan2(sin_mean, cos_mean) circular mean."""
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_aspect" in ds
-        np.testing.assert_array_equal(ds["hru_aspect"].values, [0.0, 90.0, 270.0])
+        # sin/cos decomposition of [0°, 90°, 270°] → atan2 recovers same values
+        np.testing.assert_allclose(ds["hru_aspect"].values, [0.0, 90.0, 270.0], atol=1e-10)
         assert ds["hru_aspect"].attrs["units"] == "degrees"
+
+    def test_aspect_legacy_fallback(self, derivation: PywatershedDerivation) -> None:
+        """Aspect falls back to arithmetic mean when only aspect_deg_mean available."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([45.0, 180.0, 315.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_aspect" in ds
+        np.testing.assert_array_equal(ds["hru_aspect"].values, [45.0, 180.0, 315.0])
 
 
 class TestDeriveGeometry:
@@ -552,12 +580,12 @@ class TestDeriveSoils:
         # soil_rechr_max_frac gates on soil_type
         assert "soil_rechr_max_frac" not in ds
 
-    def test_derive_soils_aws_cm_fallback(self, derivation: PywatershedDerivation) -> None:
-        """soil_moist_max derived from aws0_100_cm_mean with cm->mm conversion."""
+    def test_derive_soils_aws_mm_preferred(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max derived from aws0_100_mm_mean (preferred source, mm -> in)."""
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
-                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0, 15.0, 8.0])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([50.0, 150.0, 80.0])),
                     "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.1, 0.0])),
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.8, 0.1])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1, 0.9])),
@@ -568,11 +596,50 @@ class TestDeriveSoils:
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "soil_moist_max" in ds
-        # 5 cm = 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
-        # 15 cm = 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
-        # 8 cm = 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
+        # 50 mm -> convert(50, mm, in) = 50/25.4 ≈ 1.969
+        # 150 mm -> convert(150, mm, in) = 150/25.4 ≈ 5.906
+        # 80 mm -> convert(80, mm, in) = 80/25.4 ≈ 3.150
         expected = np.clip(np.array([50.0, 150.0, 80.0]) / 25.4, 0.5, 20.0)
         np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
+
+    def test_derive_soils_rootznaws_last_resort(self, derivation: PywatershedDerivation) -> None:
+        """soil_moist_max falls back to rootznaws_mm_mean when aws0_100 and awc absent."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "rootznaws_mm_mean": ("nhm_id", np.array([75.0, 200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5, 0.5])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3, 0.3])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2, 0.2])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_moist_max" in ds
+        expected = np.clip(np.array([75.0, 200.0]) / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values, expected, rtol=1e-3)
+
+    def test_soil_moist_max_priority_aws_over_awc(self, derivation: PywatershedDerivation) -> None:
+        """aws0_100_mm_mean is preferred over awc_mm_mean when both present."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0])),
+                    "awc_mm_mean": ("nhm_id", np.array([200.0])),
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.5])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.3])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.2])),
+                },
+                coords={"nhm_id": [1]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Should use aws0_100 (100mm), not awc (200mm)
+        expected = np.clip(100.0 / 25.4, 0.5, 20.0)
+        np.testing.assert_allclose(ds["soil_moist_max"].values[0], expected, rtol=1e-3)
 
     def test_soil_type_from_continuous_percentages(self, derivation: PywatershedDerivation) -> None:
         """Falls back to USDA texture triangle when only continuous percentages available."""
@@ -603,7 +670,7 @@ class TestDeriveSoils:
                     "sand_pct_mean": ("nhm_id", np.array([82.0])),
                     "silt_pct_mean": ("nhm_id", np.array([10.0])),
                     "clay_pct_mean": ("nhm_id", np.array([8.0])),
-                    "aws0_100_cm_mean": ("nhm_id", np.array([5.0])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([50.0])),
                 },
                 coords={"nhm_id": [1]},
             )
@@ -736,18 +803,29 @@ class TestApplyDefaults:
         ds = derivation.derive(ctx)
         nhru = 3  # sir_topography fixture has 3 HRUs
 
-        # Per-HRU defaults must be 1-D arrays of length nhru
-        per_hru = [
+        # Scalar defaults — pywatershed stores these with dims=('scalar',),
+        # shape=(1,), and passes them to inner functions without per-HRU indexing.
+        scalar_params = [
+            "albset_rna",
+            "albset_rnm",
+            "albset_sna",
+            "albset_snm",
             "den_init",
             "den_max",
             "settle_const",
+        ]
+        for name in scalar_params:
+            assert name in ds, f"Missing scalar default: {name}"
+            assert ds[name].dims == ("scalar",), (
+                f"{name}: expected dims=('scalar',), got {ds[name].dims}"
+            )
+            assert ds[name].shape == (1,), f"{name}: expected shape (1,), got {ds[name].shape}"
+
+        # Per-HRU defaults must be 1-D arrays of length nhru
+        per_hru = [
             "emis_noppt",
             "freeh2o_cap",
             "potet_sublim",
-            "albset_rna",
-            "albset_snm",
-            "albset_rnm",
-            "albset_sna",
             "radj_sppt",
             "radj_wppt",
             "soil_moist_init_frac",
@@ -840,8 +918,8 @@ class TestApplyDefaults:
         )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
-        # hru_elev was derived from data, not from defaults
-        np.testing.assert_allclose(ds["hru_elev"].values, [328.084], atol=0.01)
+        # hru_elev was derived from data (meters preserved), not from defaults
+        np.testing.assert_allclose(ds["hru_elev"].values, [100.0], atol=0.01)
 
 
 class TestParameterOverrides:
@@ -1073,6 +1151,10 @@ class TestDeriveTopology:
         assert "tosegment" in ds
         np.testing.assert_array_equal(ds["tosegment"].values, [2, 3, 0])
         assert ds["tosegment"].dims == ("nsegment",)
+        # tosegment_nhm maps local indices to NHM segment IDs:
+        # tosegment=[2,3,0] with seg_ids=[201,202,203] → [202,203,0]
+        assert "tosegment_nhm" in ds
+        np.testing.assert_array_equal(ds["tosegment_nhm"].values, [202, 203, 0])
 
     def test_hru_segment_extraction(
         self,
@@ -1562,6 +1644,52 @@ class TestCategoricalFractionMajority:
         # HRU 3: LndCov_42 (Evergreen Forest) highest -> cov_type 4
         assert ds["cov_type"].values[2] == 4
 
+    def test_grouped_majority_forest_split_vote(self, derivation: PywatershedDerivation) -> None:
+        """Forest wins when multiple forest classes together exceed any single competitor.
+
+        Regression test for the grouped-majority fix: NLCD classes 41+42+43
+        all map to forest (cov_type 3 or 4).  Their combined fraction should
+        beat a single non-forest class even when no individual forest class
+        is the single largest.
+        """
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # HRU 1: 41=25%, 42=15%, 43=10% -> 50% forest, but 81=30% pasture
+                    # Old bug: argmax picks class 81 (30% > 25%), cov_type=1
+                    # Fix: grouped type3=35% (41+43), type4=15% (42) > grasses 30%
+                    "lndcov_frac_41": ("nhm_id", np.array([0.25, 0.05])),
+                    "lndcov_frac_42": ("nhm_id", np.array([0.15, 0.05])),
+                    "lndcov_frac_43": ("nhm_id", np.array([0.10, 0.05])),
+                    "lndcov_frac_81": ("nhm_id", np.array([0.30, 0.70])),
+                    "lndcov_frac_11": ("nhm_id", np.array([0.20, 0.15])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "cov_type" in ds
+        # HRU 1: grouped type3 (41→3, 43→3) = 35%, type4 (42→4) = 15%
+        # vs grasses (81→1) = 30%, bare (11→0) = 20%
+        # type3 wins at 35% > type1 at 30%
+        assert ds["cov_type"].values[0] == 3
+        # HRU 2: grasses dominate at 70%
+        assert ds["cov_type"].values[1] == 1
+
+    def test_grouped_majority_nan_fractions(self, derivation: PywatershedDerivation) -> None:
+        """NaN fractions treated as zero; all-NaN HRU gets bare ground default."""
+        class_codes = [41, 81]
+        fractions_list = [
+            np.array([0.6, np.nan]),  # forest
+            np.array([0.4, np.nan]),  # grasses
+        ]
+        mapping: dict[int, int] = {41: 3, 81: 1}
+        result = derivation._compute_grouped_majority(class_codes, fractions_list, mapping)
+        assert result[0] == 3  # forest wins for HRU 1
+        # HRU 2: all NaN -> all zero -> explicit bare ground default (0)
+        assert result[1] == 0
+
     def test_falls_back_to_single_land_cover(self, derivation: PywatershedDerivation) -> None:
         """When no fraction columns exist, falls back to land_cover."""
         sir = _MockSIRAccessor(
@@ -1575,10 +1703,8 @@ class TestCategoricalFractionMajority:
         assert "cov_type" in ds
         assert ds["cov_type"].values[0] == 4  # Evergreen -> coniferous
 
-    def test_majority_from_fractions_file_level_key(
-        self, derivation: PywatershedDerivation
-    ) -> None:
-        """Majority class from a file-level SIR key with inner fraction columns.
+    def test_extract_fractions_file_level_key(self, derivation: PywatershedDerivation) -> None:
+        """Extract NLCD fractions from a file-level SIR key with inner columns.
 
         Simulates real SIR where data_vars=['lndcov_frac_2021'] and
         load_dataset('lndcov_frac_2021') returns the inner columns.
@@ -1607,11 +1733,13 @@ class TestCategoricalFractionMajority:
                 raise KeyError(name)
 
         sir = _FileKeyMock()
-        result = derivation._compute_majority_from_fractions(sir)
+        result = derivation._extract_nlcd_fractions(sir)
         assert result is not None
-        np.testing.assert_array_equal(result, [41, 42])
+        codes, fracs = result
+        assert sorted(codes) == [11, 41, 42]
+        assert len(fracs) == 3
 
-    def test_majority_from_fractions_multi_year_file_keys(
+    def test_extract_fractions_multi_year_file_keys(
         self, derivation: PywatershedDerivation
     ) -> None:
         """Multiple year-suffixed file keys don't overwrite each other.
@@ -1656,12 +1784,33 @@ class TestCategoricalFractionMajority:
                 raise KeyError(name)
 
         sir = _MultiYearMock()
-        result = derivation._compute_majority_from_fractions(sir)
+        result = derivation._extract_nlcd_fractions(sir)
         assert result is not None
+        codes, fracs = result
         # 4 fraction columns total (2020_11, 2020_41, 2021_11, 2021_41).
-        # HRU 1: max fraction is 2020_11=0.9 -> class 11.
-        # HRU 2: max fraction is 2020_41=0.9 -> class 41.
-        np.testing.assert_array_equal(result, [11, 41])
+        assert len(codes) == 4
+        assert len(fracs) == 4
+        assert 11 in codes
+        assert 41 in codes
+
+    def test_nodata_sentinel_filtered(self, derivation: PywatershedDerivation) -> None:
+        """NLCD NoData sentinel class (250) is filtered from fraction extraction."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "lndcov_frac_41": ("nhm_id", np.array([0.3, 0.1])),
+                    "lndcov_frac_71": ("nhm_id", np.array([0.2, 0.4])),
+                    "lndcov_frac_250": ("nhm_id", np.array([0.5, 0.5])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        result = derivation._extract_nlcd_fractions(sir, valid_codes=derivation._VALID_NLCD_CLASSES)
+        assert result is not None
+        codes, _ = result
+        assert 250 not in codes
+        assert 41 in codes
+        assert 71 in codes
 
 
 # ------------------------------------------------------------------
@@ -2550,15 +2699,34 @@ class TestDerivePetCoefficients:
         assert np.all(ds["jh_coef"].values <= 0.06)
 
     def test_jh_coef_formula_known_values(self) -> None:
-        """Test jh_coef formula produces clipped values."""
+        """Test jh_coef formula: 1/(C1 + 13*Ch) per Jensen et al. 1970."""
         from hydro_param.derivations.pywatershed import _sat_vp
 
-        # tmax=80°F, tmin=50°F — raw formula gives ~27.3, clips to 0.06
-        svp_max = _sat_vp(np.array([80.0]))[0]
-        svp_min = _sat_vp(np.array([50.0]))[0]
-        raw = 27.5 - 0.25 * (svp_max - svp_min) / svp_max
-        clipped = np.clip(raw, 0.005, 0.06)
-        assert clipped == 0.06, f"Expected clipped to upper bound, got {clipped}"
+        # tmax=80°F, tmin=50°F, elev=500ft
+        e2 = _sat_vp(np.array([80.0]))[0]
+        e1 = _sat_vp(np.array([50.0]))[0]
+        c1 = 68.0 - 3.6 * (500.0 / 1000.0)  # 66.2
+        ch = 50.0 / (e2 - e1)
+        ct = c1 + 13.0 * ch
+        jh_coef = 1.0 / ct
+        clipped = np.clip(jh_coef, 0.005, 0.06)
+        # Ct ≈ 95, jh_coef ≈ 0.0105
+        assert 0.008 < clipped < 0.015, f"Expected ~0.0105, got {clipped}"
+
+    def test_jh_coef_hru_formula_known_values(self) -> None:
+        """Test jh_coef_hru (Tx) formula: -2.5 - 0.14*(e2-e1) - elev_ft/1000."""
+        from hydro_param.derivations.pywatershed import _sat_vp
+
+        # July tmax=85°F, tmin=60°F, elev=1000ft (≈304.8m)
+        e_max = _sat_vp(np.array([85.0]))[0]
+        e_min = _sat_vp(np.array([60.0]))[0]
+        elev_ft = 1000.0
+        tx = -2.5 - 0.14 * (e_max - e_min) - elev_ft / 1000.0
+        # Tx should be negative and in typical CONUS range
+        assert -20 < tx < 0, f"Tx out of typical range, got {tx}"
+        # Verify exact computation
+        expected_tx = -2.5 - 0.14 * (e_max - e_min) - 1.0
+        np.testing.assert_allclose(tx, expected_tx, rtol=1e-10)
 
     def test_fallback_without_temporal(
         self,
@@ -3798,9 +3966,8 @@ class TestSegmentDefaults:
         for name in ("mann_n", "seg_depth", "segment_flow_init", "obsout_segment"):
             assert name in ds, f"Missing segment default: {name}"
             assert ds[name].shape == (2,), f"{name}: expected (2,), got {ds[name].shape}"
-        # tosegment_nhm should be a copy of tosegment
-        assert "tosegment_nhm" in ds
-        np.testing.assert_array_equal(ds["tosegment_nhm"].values, [2, 0])
+        # tosegment_nhm is now set by _derive_topology, not _apply_defaults
+        assert "tosegment_nhm" not in ds
 
     def test_segment_defaults_absent_without_nsegment(
         self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
