@@ -1112,6 +1112,10 @@ class TestDeriveTopology:
         assert "tosegment" in ds
         np.testing.assert_array_equal(ds["tosegment"].values, [2, 3, 0])
         assert ds["tosegment"].dims == ("nsegment",)
+        # tosegment_nhm maps local indices to NHM segment IDs:
+        # tosegment=[2,3,0] with seg_ids=[201,202,203] → [202,203,0]
+        assert "tosegment_nhm" in ds
+        np.testing.assert_array_equal(ds["tosegment_nhm"].values, [202, 203, 0])
 
     def test_hru_segment_extraction(
         self,
@@ -2589,15 +2593,16 @@ class TestDerivePetCoefficients:
         assert np.all(ds["jh_coef"].values <= 0.06)
 
     def test_jh_coef_formula_known_values(self) -> None:
-        """Test jh_coef formula produces clipped values."""
+        """Test jh_coef formula: 1/Ct where Ct = 27.5 - 0.25*(e_max-e_min)/e_max."""
         from hydro_param.derivations.pywatershed import _sat_vp
 
-        # tmax=80°F, tmin=50°F — raw formula gives ~27.3, clips to 0.06
+        # tmax=80°F, tmin=50°F — Ct ≈ 27.3, so jh_coef = 1/27.3 ≈ 0.0366
         svp_max = _sat_vp(np.array([80.0]))[0]
         svp_min = _sat_vp(np.array([50.0]))[0]
-        raw = 27.5 - 0.25 * (svp_max - svp_min) / svp_max
-        clipped = np.clip(raw, 0.005, 0.06)
-        assert clipped == 0.06, f"Expected clipped to upper bound, got {clipped}"
+        ct = 27.5 - 0.25 * (svp_max - svp_min) / svp_max
+        jh_coef = 1.0 / ct
+        clipped = np.clip(jh_coef, 0.005, 0.06)
+        assert 0.03 < clipped < 0.04, f"Expected ~0.036, got {clipped}"
 
     def test_fallback_without_temporal(
         self,
@@ -3837,9 +3842,8 @@ class TestSegmentDefaults:
         for name in ("mann_n", "seg_depth", "segment_flow_init", "obsout_segment"):
             assert name in ds, f"Missing segment default: {name}"
             assert ds[name].shape == (2,), f"{name}: expected (2,), got {ds[name].shape}"
-        # tosegment_nhm should be a copy of tosegment
-        assert "tosegment_nhm" in ds
-        np.testing.assert_array_equal(ds["tosegment_nhm"].values, [2, 0])
+        # tosegment_nhm is now set by _derive_topology, not _apply_defaults
+        assert "tosegment_nhm" not in ds
 
     def test_segment_defaults_absent_without_nsegment(
         self, derivation: PywatershedDerivation, sir_topography: _MockSIRAccessor
