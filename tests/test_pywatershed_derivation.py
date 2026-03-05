@@ -461,6 +461,88 @@ class TestDeriveSoils:
         np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, 0.4)
         assert ds["soil_rechr_max_frac"].attrs["units"] == "decimal_fraction"
 
+    def test_soil_rechr_max_frac_from_awc_ratio(self, derivation: PywatershedDerivation) -> None:
+        """Computes aws0_30/aws0_100 ratio when both variables present."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.3])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.5])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.2])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([60.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "soil_rechr_max_frac" in ds
+        # 60/100 = 0.6, 80/200 = 0.4
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.6, 0.4], atol=1e-6)
+        assert ds["soil_rechr_max_frac"].attrs["units"] == "decimal_fraction"
+
+    def test_soil_rechr_max_frac_clipped(self, derivation: PywatershedDerivation) -> None:
+        """Ratio clipped to [0.1, 0.9] physical bounds."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 100.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([5.0, 99.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # 5/100 = 0.05 -> clips to 0.1;  99/100 = 0.99 -> clips to 0.9
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.1, 0.9])
+
+    def test_soil_rechr_max_frac_zero_aws100_uses_default(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """HRUs with aws0_100 = 0 get the 0.4 default (no data)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([0.0, 100.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([0.0, 60.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # HRU 1: aws0_100=0 -> default 0.4;  HRU 2: 60/100=0.6
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.4, 0.6])
+
+    def test_soil_rechr_max_frac_nan_aws50_uses_default(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """HRUs with NaN aws0_30 get the default (no recharge zone data)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 100.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([np.nan, 60.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # HRU 1: NaN -> default 0.4;  HRU 2: 60/100=0.6
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.4, 0.6])
+
     def test_soil_moist_max_clipped(self, derivation: PywatershedDerivation) -> None:
         """Very low AWC clips to 0.5 inches, very high clips to 20.0 inches."""
         sir = _MockSIRAccessor(
