@@ -69,7 +69,7 @@ static_datasets:
       source: default
       variable: none
       value: 999.0
-      description: "Placeholder default (999.0). Physically-based derivation tracked in #147."
+      description: "Step 13 default (999.0). Physically-based derivation tracked in #147."
     soil_moist_max:
       source: gnatsgo_rasters
       variable: aws0_100
@@ -79,7 +79,7 @@ static_datasets:
       source: gnatsgo_rasters
       variables: [aws0_30, aws0_100]
       statistic: mean
-      description: "Recharge zone storage as fraction of soil_moist_max (aws0_30 / aws0_100)"
+      description: "Step 5: recharge zone fraction of soil_moist_max (aws0_30 / aws0_100)"
 
   landcover:
     available: [nlcd_osn_lndcov, nlcd_osn_fctimp]
@@ -102,7 +102,9 @@ static_datasets:
       source: calibration_seed
       variable: soil_moist_max
       method: "fraction_of(soil_moist_max, 0.8)"
-      description: "Calibration seed: 80% of soil_moist_max. SNODAS-based improvement tracked in #155."
+      range: [0.0, 200.0]
+      default: 50.0
+      description: "Step 14 calibration seed: 80% of soil_moist_max. SNODAS-based improvement tracked in #155."
 
   waterbodies:
     available: []
