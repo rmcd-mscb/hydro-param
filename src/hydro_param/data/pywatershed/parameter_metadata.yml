@@ -658,6 +658,13 @@ parameters:
     required: false
     description: "Inches-to-cubic-feet conversion factor per HRU"
 
+  seg_elev:
+    dimension: nsegment
+    units: feet
+    valid_range: [-1000.0, 30000.0]
+    required: false
+    description: "Mean segment channel elevation"
+
   seg_slope:
     dimension: nsegment
     units: decimal_fraction

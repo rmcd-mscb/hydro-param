@@ -12,6 +12,7 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 1. Geometry --- HRU area (acres) and latitude (decimal degrees)
 2. Topology --- segment routing (tosegment, hru_segment, seg_length)
 3. Topography --- elevation (feet), slope (decimal fraction), aspect (degrees)
+3b. Segment elevation --- mean channel elevation from DEM via InterpGen
 4. Land cover --- NLCD reclassification to PRMS cov_type, canopy density, imperviousness
 5. Soils --- gNATSGO/STATSGO2 texture classification and AWC
 6. Waterbody --- NHDPlus depression storage overlay
@@ -380,9 +381,10 @@ class PywatershedDerivation:
         Notes
         -----
         Step execution order: 1 (geometry) -> 2 (topology) -> 3 (topo) ->
-        4 (landcover) -> 5 (soils) -> 6 (waterbody) -> 8 (lookups) ->
-        12 (routing) -> 9 (soltab) -> 10 (PET) -> 11 (transp) ->
-        13 (defaults) -> 14 (calibration) -> 7 (forcing) -> overrides.
+        3b (seg_elev) -> 4 (landcover) -> 5 (soils) -> 6 (waterbody) ->
+        8 (lookups) -> 12 (routing) -> 9 (soltab) -> 10 (PET) ->
+        11 (transp) -> 13 (defaults) -> 14 (calibration) -> 7 (forcing) ->
+        overrides.
 
         Step 7 (forcing) runs late because it has no downstream
         dependencies within the static parameter DAG.
@@ -427,6 +429,9 @@ class PywatershedDerivation:
 
         # Step 3: Topographic parameters (hru_elev, hru_slope, hru_aspect)
         ds = self._derive_topography(context, ds)
+
+        # Step 3b: Segment elevation (InterpGen + 3DEP DEM)
+        ds = self._derive_segment_elevation(context, ds)
 
         # Step 4: Land cover parameters (cov_type, covden_sum, hru_percent_imperv)
         ds = self._derive_landcover(context, ds)
@@ -1662,6 +1667,152 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "degrees", "long_name": "Mean HRU aspect"},
             )
+
+        return ds
+
+    # ------------------------------------------------------------------
+    # Step 3b: Segment elevation (InterpGen + DEM)
+    # ------------------------------------------------------------------
+
+    def _derive_segment_elevation(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+    ) -> xr.Dataset:
+        """Derive mean segment elevation from a DEM raster (step 3b).
+
+        Sample a 3DEP DEM along each segment polyline using gdptools
+        ``InterpGen`` (grid-to-line interpolation) and compute the mean
+        elevation.  Convert from meters to feet.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context.  Must have ``segments`` and a
+            ``dem_path`` key in ``config`` pointing to a local
+            GeoTIFF DEM.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``seg_elev`` (feet) on ``nsegment``, or
+            ``ds`` unchanged if DEM path is unavailable or segments
+            are ``None``.
+
+        Notes
+        -----
+        Step 3b of the derivation DAG (runs after step 3, before step 4).
+        The DEM path is provided via ``config["dem_path"]``.  When absent,
+        this step is skipped with a debug log message.
+
+        ``InterpGen`` samples the raster at 50 m intervals along each
+        segment polyline and returns per-segment statistics.  The
+        ``"mean"`` statistic gives the average elevation along the
+        stream channel.
+
+        Unit conversion: DEM values are assumed to be in meters; the
+        output ``seg_elev`` is in feet (1 m = 3.28084 ft).
+
+        References
+        ----------
+        gdptools InterpGen: grid-to-line interpolation for polyline
+        geometries.
+        """
+        segments = ctx.segments
+        dem_path_str = ctx.config.get("dem_path")
+
+        if segments is None or dem_path_str is None:
+            if dem_path_str is None:
+                logger.debug("No dem_path in config; skipping seg_elev derivation")
+            return ds
+
+        dem_path = Path(dem_path_str)
+        if not dem_path.exists():
+            logger.warning("DEM path %s does not exist; skipping seg_elev", dem_path)
+            return ds
+
+        try:
+            from gdptools import InterpGen, UserTiffData
+        except ImportError:
+            logger.warning("gdptools not available; skipping seg_elev")
+            return ds
+
+        segment_id_field = ctx.segment_id_field or "nhm_seg"
+
+        # Prepare segments in geographic CRS for InterpGen
+        if segments.crs is not None and not segments.crs.is_geographic:
+            segs_geo = segments.to_crs(epsg=4326)
+        else:
+            segs_geo = segments.copy()
+
+        # Build a target_id column for InterpGen
+        if segment_id_field in segs_geo.columns:
+            target_id = segment_id_field
+        else:
+            segs_geo = segs_geo.copy()
+            segs_geo["_seg_idx"] = range(len(segs_geo))
+            target_id = "_seg_idx"
+
+        try:
+            user_data = UserTiffData(
+                source_ds=str(dem_path),
+                source_crs=4326,
+                source_x_coord="x",
+                source_y_coord="y",
+                target_gdf=segs_geo,
+                target_id=target_id,
+            )
+
+            interp = InterpGen(
+                user_data,
+                pt_spacing=50,
+                stat="mean",
+                interp_method="linear",
+            )
+
+            # calc_interp always returns (stats_df, points_gdf) tuple
+            stats_df, _points_gdf = interp.calc_interp()
+        except Exception:
+            logger.warning(
+                "InterpGen failed for seg_elev; skipping",
+                exc_info=True,
+            )
+            return ds
+
+        # Extract mean elevation per segment, maintaining order
+        _m_to_ft = 3.28084
+        nseg = len(segments)
+        seg_elev = np.full(nseg, np.nan, dtype=np.float64)
+
+        # The stats_df has a column named after target_id (e.g. "nhm_seg")
+        # and a "mean" column with the interpolated values
+        if target_id in stats_df.columns:
+            id_vals = segs_geo[target_id].values
+            for i, sid in enumerate(id_vals):
+                row = stats_df[stats_df[target_id] == sid]
+                if not row.empty:
+                    seg_elev[i] = row["mean"].iloc[0] * _m_to_ft
+
+        # Fill NaN with 0 and warn
+        nan_count = int(np.isnan(seg_elev).sum())
+        if nan_count > 0:
+            logger.warning(
+                "%d of %d segments have no DEM elevation; using 0.0 feet",
+                nan_count,
+                nseg,
+            )
+            seg_elev = np.nan_to_num(seg_elev, nan=0.0)
+
+        ds["seg_elev"] = xr.DataArray(
+            seg_elev,
+            dims="nsegment",
+            attrs={
+                "units": "feet",
+                "long_name": "Mean segment channel elevation",
+            },
+        )
 
         return ds
 
