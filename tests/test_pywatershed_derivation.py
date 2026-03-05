@@ -512,15 +512,36 @@ class TestDeriveSoils:
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
                     "aws0_100_mm_mean": ("nhm_id", np.array([0.0, 100.0])),
-                    "aws0_50_mm_mean": ("nhm_id", np.array([0.0, 40.0])),
+                    "aws0_50_mm_mean": ("nhm_id", np.array([0.0, 60.0])),
                 },
                 coords={"nhm_id": [1, 2]},
             )
         )
         ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
-        # HRU 1: aws0_100=0 -> default 0.4;  HRU 2: 40/100=0.4
-        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.4, 0.4])
+        # HRU 1: aws0_100=0 -> default 0.4;  HRU 2: 60/100=0.6
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.4, 0.6])
+
+    def test_soil_rechr_max_frac_nan_aws50_uses_default(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """HRUs with NaN aws0_50 get the default (no recharge zone data)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_texture_frac_sand": ("nhm_id", np.array([0.7, 0.7])),
+                    "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
+                    "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
+                    "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 100.0])),
+                    "aws0_50_mm_mean": ("nhm_id", np.array([np.nan, 60.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # HRU 1: NaN -> default 0.4;  HRU 2: 60/100=0.6
+        np.testing.assert_allclose(ds["soil_rechr_max_frac"].values, [0.4, 0.6])
 
     def test_soil_moist_max_clipped(self, derivation: PywatershedDerivation) -> None:
         """Very low AWC clips to 0.5 inches, very high clips to 20.0 inches."""
