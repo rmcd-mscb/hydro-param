@@ -1335,6 +1335,108 @@ class TestDeriveTopology:
         ds = derivation.derive(ctx)
         assert ds["seg_length"].values[1] > ds["seg_length"].values[0]
 
+    def test_nhm_id_from_fabric(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        """nhm_id emitted from fabric id_field column."""
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "nhm_id" in ds
+        np.testing.assert_array_equal(ds["nhm_id"].values, [101, 102, 103])
+        assert ds["nhm_id"].dims == ("nhru",)
+
+    def test_nhm_seg_from_segments(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        """nhm_seg emitted from segments segment_id_field column."""
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "nhm_seg" in ds
+        np.testing.assert_array_equal(ds["nhm_seg"].values, [201, 202, 203])
+        assert ds["nhm_seg"].dims == ("nsegment",)
+
+    def test_hru_segment_nhm_mapping(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        """hru_segment_nhm maps each HRU to its segment ID."""
+        # synthetic_fabric has hru_segment=[1,2,2], seg_ids=[201,202,203]
+        # HRU 101 -> segment 1 -> seg_id 201
+        # HRU 102 -> segment 2 -> seg_id 202
+        # HRU 103 -> segment 2 -> seg_id 202
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "hru_segment_nhm" in ds
+        np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [201, 202, 202])
+        assert ds["hru_segment_nhm"].dims == ("nhru",)
+
+    def test_identity_params_with_custom_column_names(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """Identity params work with non-NHM column names."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"my_hru": [10, 20]}))
+        fabric = gpd.GeoDataFrame(
+            {"my_hru": [10, 20], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"my_seg": [500, 600], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.5, 0.5), (1.0, 0.5)]),
+                LineString([(1.0, 0.5), (2.0, 0.5)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="my_hru",
+            segment_id_field="my_seg",
+        )
+        ds = derivation.derive(ctx)
+        # Output params always named nhm_id/nhm_seg regardless of source column
+        assert "nhm_id" in ds
+        np.testing.assert_array_equal(ds["nhm_id"].values, [10, 20])
+        assert "nhm_seg" in ds
+        np.testing.assert_array_equal(ds["nhm_seg"].values, [500, 600])
+        assert "hru_segment_nhm" in ds
+        np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [500, 600])
+
 
 class TestTopologyValidation:
     """Tests for topology validation rules."""

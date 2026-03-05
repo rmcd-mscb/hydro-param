@@ -137,6 +137,27 @@ parameters:
     required: false
     description: "Length of stream segment"
 
+  nhm_id:
+    dimension: nhru
+    units: none
+    type: integer
+    required: false
+    description: "HRU identifier from fabric id_field"
+
+  nhm_seg:
+    dimension: nsegment
+    units: none
+    type: integer
+    required: false
+    description: "Segment identifier from fabric segment_id_field"
+
+  hru_segment_nhm:
+    dimension: nhru
+    units: none
+    type: integer
+    required: false
+    description: "Segment identifier for HRU contributing flow"
+
   # --- Soils (Step 5, future) ---
   soil_type:
     dimension: nhru

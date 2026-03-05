@@ -577,10 +577,11 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Extract routing topology from fabric and segment GeoDataFrames (step 2).
 
-        Read ``tosegment``, ``hru_segment``, and ``seg_length`` from the
-        Geospatial Fabric GeoDataFrames.  These define the stream-segment
-        routing network and HRU-to-segment flow contributions used by
-        PRMS for Muskingum routing.
+        Read ``tosegment``, ``hru_segment``, ``seg_length``, ``nhm_id``,
+        ``nhm_seg``, and ``hru_segment_nhm`` from the Geospatial Fabric
+        GeoDataFrames.  These define the stream-segment routing network
+        and HRU-to-segment flow contributions used by PRMS for Muskingum
+        routing.
 
         Segment lengths are computed geodesically (WGS84 ellipsoid) from
         line geometries when a ``seg_length`` column is not already present,
@@ -597,10 +598,16 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``tosegment`` (dimensionless index on ``nsegment``),
-            ``hru_segment`` (dimensionless index on ``nhru``), and
-            ``seg_length`` (meters on ``nsegment``) added.  Returns ``ds``
-            unchanged if ``fabric`` or ``segments`` is ``None``.
+            Dataset with the following variables added (returns ``ds``
+            unchanged if ``fabric`` or ``segments`` is ``None``):
+
+            - ``tosegment`` : dimensionless index on ``nsegment``
+            - ``tosegment_nhm`` : segment ID on ``nsegment``
+            - ``hru_segment`` : dimensionless index on ``nhru``
+            - ``seg_length`` : meters on ``nsegment``
+            - ``nhm_id`` : HRU identifier on ``nhru``
+            - ``nhm_seg`` : segment identifier on ``nsegment``
+            - ``hru_segment_nhm`` : segment ID for each HRU on ``nhru``
 
         Raises
         ------
@@ -618,6 +625,11 @@ class PywatershedDerivation:
         GeoDataFrames --- hydro-param does not normalize between topology
         conventions.  The ``tosegment`` array uses 1-based indexing with
         0 indicating an outlet segment.
+
+        ``nhm_id`` and ``nhm_seg`` are read from the config-declared
+        ``id_field`` and ``segment_id_field`` columns respectively.
+        Output parameter names are always ``nhm_id`` and ``nhm_seg``
+        (pywatershed convention) regardless of the source column name.
         """
         fabric = ctx.fabric
         segments = ctx.segments
@@ -714,6 +726,41 @@ class PywatershedDerivation:
             attrs={
                 "units": "meters",
                 "long_name": "Length of stream segment",
+            },
+        )
+
+        # --- nhm_id: HRU identifier from config id_field ---
+        if id_field in fabric.columns:
+            if "nhru" in ds.coords:
+                nhm_id_vals = ds.coords["nhru"].values
+            else:
+                nhm_id_vals = fabric[id_field].values
+            ds["nhm_id"] = xr.DataArray(
+                nhm_id_vals,
+                dims="nhru",
+                attrs={"units": "none", "long_name": "HRU identifier"},
+            )
+
+        # --- nhm_seg: segment identifier from config segment_id_field ---
+        ds["nhm_seg"] = xr.DataArray(
+            seg_ids,
+            dims="nsegment",
+            attrs={"units": "none", "long_name": "Segment identifier"},
+        )
+
+        # --- hru_segment_nhm: map HRU segment index to segment ID ---
+        # hru_segment is 1-based index into segments; 0 means no segment.
+        hru_seg_nhm = np.where(
+            hru_segment > 0,
+            seg_ids[hru_segment.astype(int) - 1],
+            0,
+        )
+        ds["hru_segment_nhm"] = xr.DataArray(
+            hru_seg_nhm,
+            dims="nhru",
+            attrs={
+                "units": "none",
+                "long_name": "Segment identifier for HRU contributing flow",
             },
         )
 
