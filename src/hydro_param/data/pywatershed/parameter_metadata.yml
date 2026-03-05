@@ -137,6 +137,13 @@ parameters:
     required: false
     description: "Length of stream segment"
 
+  seg_lat:
+    dimension: nsegment
+    units: decimal_degrees
+    valid_range: [-90.0, 90.0]
+    required: false
+    description: "Latitude of segment centroid"
+
   nhm_id:
     dimension: nhru
     units: none

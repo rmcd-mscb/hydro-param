@@ -612,6 +612,7 @@ class PywatershedDerivation:
             - ``nhm_id`` : HRU identifier on ``nhru``
             - ``nhm_seg`` : segment identifier on ``nsegment``
             - ``hru_segment_nhm`` : segment ID for each HRU on ``nhru``
+            - ``seg_lat`` : decimal degrees on ``nsegment``
 
         Raises
         ------
@@ -773,6 +774,21 @@ class PywatershedDerivation:
             attrs={
                 "units": "none",
                 "long_name": "Segment identifier for HRU contributing flow",
+            },
+        )
+
+        # --- seg_lat: segment centroid latitude (WGS84) ---
+        if segments.crs is not None and not segments.crs.is_geographic:
+            segs_4326 = segments.to_crs(epsg=4326)
+        else:
+            segs_4326 = segments
+        seg_centroids = segs_4326.geometry.centroid
+        ds["seg_lat"] = xr.DataArray(
+            seg_centroids.y.values,
+            dims="nsegment",
+            attrs={
+                "units": "decimal_degrees",
+                "long_name": "Latitude of segment centroid",
             },
         )
 

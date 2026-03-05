@@ -1514,6 +1514,27 @@ class TestDeriveTopology:
         # hru_segment=1 -> seg_ids[0] = 501
         np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [302, 501])
 
+    def test_seg_lat_from_segments(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        """seg_lat computed from segment centroid latitude."""
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_lat" in ds
+        assert ds["seg_lat"].dims == ("nsegment",)
+        # synthetic_segments are at y=0.5 (EPSG:4326)
+        np.testing.assert_allclose(ds["seg_lat"].values, [0.5, 0.5, 0.5], atol=0.01)
+
 
 class TestTopologyValidation:
     """Tests for topology validation rules."""
