@@ -1,0 +1,178 @@
+# pywatershed run configuration for test
+#
+# Phase 2: derive pywatershed parameters from existing SIR output.
+# Run Phase 1 first to produce SIR output:
+#   hydro-param run configs/pipeline.yml
+# Then run this config:
+#   hydro-param pywatershed run configs/pywatershed_run.yml
+#
+# Reference:
+#   docs/reference/pywatershed_parameterization_guide.md
+#   docs/reference/pywatershed_dataset_param_map.yml
+
+target_model: pywatershed
+version: "4.0"
+
+# --- SIR Output ---
+# Path to the pipeline output directory containing SIR files and .manifest.yml.
+# Relative paths are resolved from this config file's directory.
+sir_path: "../output"
+
+# --- Domain ---
+# Pre-existing geospatial fabric files (GeoPackage or GeoParquet).
+# Obtain fabrics with pynhd, pygeohydro, or similar upstream tools —
+# hydro-param does NOT fetch or subset fabrics.
+domain:
+  fabric_path: "data/fabrics/nhru.gpkg"        # REQUIRED: path to HRU fabric
+  segment_path: "data/fabrics/nsegment.gpkg"   # path to segment/flowline fabric
+  waterbody_path: "data/fabrics/waterbodies.gpkg"  # NHDPlus waterbody polygons (optional)
+  id_field: "nhru_v1_1"
+  segment_id_field: "nhm_seg"
+
+# --- Simulation Period ---
+time:
+  start: "1980-10-01"
+  end: "2025-12-31"
+  timestep: daily
+
+# --- Static Datasets ---
+# Declare which pipeline datasets provide each pywatershed parameter.
+# Each entry maps a pywatershed parameter to its SIR data source.
+static_datasets:
+
+  topography:
+    available: [dem_3dep_10m]
+    hru_elev:
+      source: dem_3dep_10m
+      variable: elevation
+      statistic: mean
+      description: "Mean HRU elevation"
+    hru_slope:
+      source: dem_3dep_10m
+      variable: slope
+      statistic: mean
+      description: "Mean land surface slope"
+    hru_aspect:
+      source: dem_3dep_10m
+      variable: aspect
+      statistic: mean
+      description: "Mean HRU aspect"
+
+  soils:
+    available: [polaris_30m, gnatsgo_rasters]
+    soil_type:
+      source: polaris_30m
+      variables: [sand, silt, clay]
+      statistic: mean
+      description: "Soil type classification (1=sand, 2=loam, 3=clay)"
+    sat_threshold:
+      source: default
+      variable: none
+      value: 999.0
+      description: "Step 13 default (999.0). Physically-based derivation tracked in #147."
+    soil_moist_max:
+      source: gnatsgo_rasters
+      variable: aws0_100
+      statistic: mean
+      description: "Maximum available water-holding capacity"
+    soil_rechr_max_frac:
+      source: gnatsgo_rasters
+      variables: [aws0_30, aws0_100]
+      statistic: mean
+      description: "Step 5: recharge zone fraction of soil_moist_max (aws0_30 / aws0_100)"
+
+  landcover:
+    available: [nlcd_osn_lndcov, nlcd_osn_fctimp]
+    cov_type:
+      source: nlcd_osn_lndcov
+      variable: LndCov
+      statistic: categorical
+      year: [2001]
+      description: "Vegetation cover type (0=bare, 1=grasses, 2=shrubs, 3=trees, 4=coniferous)"
+    hru_percent_imperv:
+      source: nlcd_osn_fctimp
+      variable: FctImp
+      statistic: mean
+      year: [2001]
+      description: "Impervious surface fraction"
+
+  snow:
+    available: [snodas]
+    snarea_thresh:
+      source: calibration_seed
+      variable: soil_moist_max
+      method: "fraction_of(soil_moist_max, 0.8)"
+      range: [0.0, 200.0]
+      default: 50.0
+      description: "Step 14 calibration seed: 80% of soil_moist_max. SNODAS-based improvement tracked in #155."
+
+  waterbodies:
+    available: []
+    # Uncomment after adding waterbody_path above:
+    hru_type:
+      source: domain.waterbody_path
+      description: "HRU type (0=inactive, 1=land, 2=lake, 3=swale)"
+    dprst_frac:
+      source: domain.waterbody_path
+      description: "Fraction of HRU with surface depressions"
+
+# --- Forcing ---
+# Temporal climate time series for model input (prcp, tmax, tmin).
+forcing:
+  available: [gridmet]
+  prcp:
+    source: gridmet
+    variable: pr
+    statistic: mean
+    description: "Daily precipitation"
+  tmax:
+    source: gridmet
+    variable: tmmx
+    statistic: mean
+    description: "Daily maximum temperature"
+  tmin:
+    source: gridmet
+    variable: tmmn
+    statistic: mean
+    description: "Daily minimum temperature"
+
+# --- Climate Normals ---
+# Long-term climate statistics for derived parameters (PET, transpiration).
+# Can use a different source than forcing (e.g., gridMET normals with CONUS404-BA forcing).
+climate_normals:
+  available: [gridmet]
+  jh_coef:
+    source: gridmet
+    variables: [tmmx, tmmn]
+    description: "Jensen-Haise PET coefficient (monthly, from tmax/tmin normals)"
+  transp_beg:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration begins (from monthly mean tmin threshold)"
+  transp_end:
+    source: gridmet
+    variable: tmmn
+    description: "Month transpiration ends (from monthly mean tmin threshold)"
+
+# --- Parameter Overrides ---
+# Manually override any derived parameter value.
+parameter_overrides:
+  values: {}
+  # values:
+  #   tmax_allsnow: 32.0
+  #   den_max: 0.55
+
+# --- Calibration ---
+calibration:
+  generate_seeds: true
+  seed_method: physically_based         # physically_based or all_defaults
+  preserve_from_existing: []
+
+# --- Output ---
+output:
+  path: "models/pywatershed"
+  format: netcdf                        # netcdf or prms_text
+  parameter_file: "parameters.nc"
+  forcing_dir: "forcing"                  # one-variable-per-file NetCDF (prcp.nc, tmax.nc, tmin.nc)
+  control_file: "control.yml"
+  soltab_file: "soltab.nc"
