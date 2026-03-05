@@ -195,13 +195,13 @@ datasets:
     category: soils
     temporal: false
     variables:
-      - name: aws0_50
+      - name: aws0_30
         band: 1
         units: "mm"
-        long_name: "Available water storage 0-50cm"
-        native_name: "aws0_50"
+        long_name: "Available water storage 0-30cm"
+        native_name: "aws0_30"
         categorical: false
-        asset_key: "aws0_50"
+        asset_key: "aws0_30"
       - name: aws0_100
         band: 1
         units: "mm"

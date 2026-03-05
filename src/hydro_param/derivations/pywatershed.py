@@ -1859,13 +1859,13 @@ class PywatershedDerivation:
         All paths clip to ``[0.5, 20.0]`` inches.
 
         ``soil_rechr_max_frac`` is derived from the ratio
-        ``aws0_50_mm / aws0_100_mm`` when both variables are present
-        in the SIR.  ``aws0_50`` (0–50 cm, ~20 inches) is the closest
+        ``aws0_30_mm / aws0_100_mm`` when both variables are present
+        in the SIR.  ``aws0_30`` (0–30 cm, ~12 inches) is the closest
         gNATSGO depth interval to the classic PRMS recharge zone
         (upper 18 inches of soil); ``aws0_100`` (0–100 cm) approximates
         the full root zone.  HRUs with zero or NaN ``aws0_100`` receive
         the default 0.4.  The ratio is clipped to ``[0.1, 0.9]``.
-        Falls back to a uniform 0.4 when ``aws0_50_mm_mean`` is absent
+        Falls back to a uniform 0.4 when ``aws0_30_mm_mean`` is absent
         from the SIR.
 
         See Also
@@ -1948,18 +1948,19 @@ class PywatershedDerivation:
             )
 
         # --- soil_rechr_max_frac ---
-        # Prefer derived ratio: aws0_50 (0-50cm, ~20 inches) / aws0_100
-        # (0-100cm, full root zone).  Falls back to constant default when
-        # either variable is missing from the SIR.
+        # Prefer derived ratio: aws0_30 (0-30cm, ~12 inches) / aws0_100
+        # (0-100cm, full root zone).  aws0_30 is the closest gNATSGO depth
+        # interval to the PRMS recharge zone (~18 inches).  Falls back to
+        # constant default when either variable is missing from the SIR.
         # Note: aws_key (aws0_100_mm_mean) was resolved above for soil_moist_max.
-        aws50_key = sir.find_variable("aws0_50_mm_mean")
-        if aws50_key is not None and aws_key is not None:
-            aws50_mm = sir[aws50_key].values.astype(np.float64)
+        aws30_key = sir.find_variable("aws0_30_mm_mean")
+        if aws30_key is not None and aws_key is not None:
+            aws30_mm = sir[aws30_key].values.astype(np.float64)
             aws100_mm = sir[aws_key].values.astype(np.float64)
             # Guard division by zero and NaN: invalid HRUs get default
-            valid = (aws100_mm > 0) & ~np.isnan(aws100_mm) & ~np.isnan(aws50_mm)
+            valid = (aws100_mm > 0) & ~np.isnan(aws100_mm) & ~np.isnan(aws30_mm)
             ratio = np.full_like(aws100_mm, self._SOIL_RECHR_MAX_FRAC_DEFAULT)
-            ratio[valid] = aws50_mm[valid] / aws100_mm[valid]
+            ratio[valid] = aws30_mm[valid] / aws100_mm[valid]
             ratio = np.clip(ratio, 0.1, 0.9)
             ds["soil_rechr_max_frac"] = xr.DataArray(
                 ratio,
@@ -1970,9 +1971,9 @@ class PywatershedDerivation:
                 },
             )
             n_invalid = int(np.sum(~valid))
-            n_nan = int(np.sum(np.isnan(sir[aws50_key].values) | np.isnan(sir[aws_key].values)))
+            n_nan = int(np.sum(np.isnan(sir[aws30_key].values) | np.isnan(sir[aws_key].values)))
             logger.info(
-                "soil_rechr_max_frac derived from aws0_50/aws0_100 ratio for %d HRUs "
+                "soil_rechr_max_frac derived from aws0_30/aws0_100 ratio for %d HRUs "
                 "(%d non-positive/NaN inputs set to default %.2f)",
                 len(ratio),
                 n_invalid,
@@ -1980,7 +1981,7 @@ class PywatershedDerivation:
             )
             if n_nan > 0:
                 logger.warning(
-                    "%d HRUs have NaN in aws0_50 or aws0_100 input data; "
+                    "%d HRUs have NaN in aws0_30 or aws0_100 input data; "
                     "set to default soil_rechr_max_frac=%.2f",
                     n_nan,
                     self._SOIL_RECHR_MAX_FRAC_DEFAULT,
@@ -1997,7 +1998,7 @@ class PywatershedDerivation:
             )
             logger.info(
                 "soil_rechr_max_frac set to default %.2f for %d HRUs "
-                "(aws0_50_mm_mean and/or aws0_100_mm_mean not available in SIR)",
+                "(aws0_30_mm_mean and/or aws0_100_mm_mean not available in SIR)",
                 self._SOIL_RECHR_MAX_FRAC_DEFAULT,
                 nhru,
             )

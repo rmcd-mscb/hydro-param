@@ -453,11 +453,12 @@ parameter_registry:
     source_dataset: gnatsgo
     derivation_type: derived_formula
     method: >
-      soil_rechr_max_frac = aws0_50_mm / aws0_100_mm
-      where aws0_50 (0-50cm) approximates the PRMS recharge zone (~upper 18 inches)
-      and aws0_100 (0-100cm) approximates the full root zone.
-      Clipped to [0.1, 0.9].  Falls back to constant 0.4 when aws0_50 is absent.
-    dependencies: [aws0_50, aws0_100]
+      soil_rechr_max_frac = aws0_30_mm / aws0_100_mm
+      where aws0_30 (0-30cm, ~12 inches) is the closest gNATSGO depth interval
+      to the PRMS recharge zone (~18 inches), and aws0_100 (0-100cm) approximates
+      the full root zone.  Clipped to [0.1, 0.9].  Falls back to constant 0.4
+      when aws0_30 is absent.
+    dependencies: [aws0_30, aws0_100]
 
   sat_threshold:
     description: "Gravity + preferential reservoir storage capacity"

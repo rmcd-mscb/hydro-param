@@ -462,7 +462,7 @@ class TestDeriveSoils:
         assert ds["soil_rechr_max_frac"].attrs["units"] == "decimal_fraction"
 
     def test_soil_rechr_max_frac_from_awc_ratio(self, derivation: PywatershedDerivation) -> None:
-        """Computes aws0_50/aws0_100 ratio when both variables present."""
+        """Computes aws0_30/aws0_100 ratio when both variables present."""
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
@@ -470,7 +470,7 @@ class TestDeriveSoils:
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.5])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.2])),
                     "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 200.0])),
-                    "aws0_50_mm_mean": ("nhm_id", np.array([60.0, 80.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([60.0, 80.0])),
                 },
                 coords={"nhm_id": [1, 2]},
             )
@@ -491,7 +491,7 @@ class TestDeriveSoils:
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
                     "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 100.0])),
-                    "aws0_50_mm_mean": ("nhm_id", np.array([5.0, 99.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([5.0, 99.0])),
                 },
                 coords={"nhm_id": [1, 2]},
             )
@@ -512,7 +512,7 @@ class TestDeriveSoils:
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
                     "aws0_100_mm_mean": ("nhm_id", np.array([0.0, 100.0])),
-                    "aws0_50_mm_mean": ("nhm_id", np.array([0.0, 60.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([0.0, 60.0])),
                 },
                 coords={"nhm_id": [1, 2]},
             )
@@ -525,7 +525,7 @@ class TestDeriveSoils:
     def test_soil_rechr_max_frac_nan_aws50_uses_default(
         self, derivation: PywatershedDerivation
     ) -> None:
-        """HRUs with NaN aws0_50 get the default (no recharge zone data)."""
+        """HRUs with NaN aws0_30 get the default (no recharge zone data)."""
         sir = _MockSIRAccessor(
             xr.Dataset(
                 {
@@ -533,7 +533,7 @@ class TestDeriveSoils:
                     "soil_texture_frac_loam": ("nhm_id", np.array([0.2, 0.2])),
                     "soil_texture_frac_clay": ("nhm_id", np.array([0.1, 0.1])),
                     "aws0_100_mm_mean": ("nhm_id", np.array([100.0, 100.0])),
-                    "aws0_50_mm_mean": ("nhm_id", np.array([np.nan, 60.0])),
+                    "aws0_30_mm_mean": ("nhm_id", np.array([np.nan, 60.0])),
                 },
                 coords={"nhm_id": [1, 2]},
             )
