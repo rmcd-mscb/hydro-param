@@ -210,13 +210,6 @@ parameters:
     required: false
     description: "Fraction of HRU with surface depressions"
 
-  dprst_area_max:
-    dimension: nhru
-    units: acres
-    valid_range: [0.0, 100000000.0]
-    required: false
-    description: "Maximum surface depression area"
-
   # --- Routing (Step 12, future) ---
   K_coef:
     dimension: nsegment

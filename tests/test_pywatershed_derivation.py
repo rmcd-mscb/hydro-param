@@ -3406,7 +3406,7 @@ class TestDeriveWaterbody:
     def test_overlay_fraction_and_area(
         self, derivation, waterbody_sir, waterbody_fabric, sample_waterbodies
     ):
-        """Verify dprst_frac and dprst_area_max from known geometry."""
+        """Verify dprst_frac from known geometry."""
         ctx = DerivationContext(
             sir=waterbody_sir,
             fabric=waterbody_fabric,
@@ -3421,9 +3421,7 @@ class TestDeriveWaterbody:
         # HRU 2: 30% Reservoir coverage
         assert ds["dprst_frac"].values[1] == pytest.approx(0.3, abs=0.01)
 
-        # Area in acres: 6000 m² and 3000 m²
-        assert ds["dprst_area_max"].values[0] == pytest.approx(6000.0 / 4046.8564224, abs=0.01)
-        assert ds["dprst_area_max"].values[1] == pytest.approx(3000.0 / 4046.8564224, abs=0.01)
+        # dprst_area_max removed — pywatershed computes it internally
 
     def test_hru_type_threshold(
         self, derivation, waterbody_sir, waterbody_fabric, sample_waterbodies
@@ -3453,7 +3451,6 @@ class TestDeriveWaterbody:
         ds = derivation._derive_waterbody(ctx, ds)
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
-        np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
         np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
 
     def test_swamp_only_fallback(self, derivation, waterbody_sir, waterbody_fabric):
@@ -3579,7 +3576,6 @@ class TestDeriveWaterbody:
         ds = derivation._derive_waterbody(ctx, ds)
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
-        np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
         np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
 
     def test_waterbodies_outside_all_hrus(self, derivation, waterbody_sir, waterbody_fabric):
@@ -3602,7 +3598,6 @@ class TestDeriveWaterbody:
         ds = derivation._derive_waterbody(ctx, ds)
 
         np.testing.assert_array_equal(ds["dprst_frac"].values, [0.0, 0.0])
-        np.testing.assert_array_equal(ds["dprst_area_max"].values, [0.0, 0.0])
         np.testing.assert_array_equal(ds["hru_type"].values, [1, 1])
 
     def test_below_50_percent_is_land(self, derivation, waterbody_sir, waterbody_fabric):
@@ -3676,7 +3671,6 @@ class TestDeriveIntegrationWaterbody:
         ds = derivation.derive(ctx)
 
         assert "dprst_frac" in ds
-        assert "dprst_area_max" in ds
         assert "hru_type" in ds
         assert ds["dprst_frac"].shape == (2,)
         assert ds["hru_type"].dtype == np.int32

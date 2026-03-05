@@ -126,9 +126,9 @@ _DEFAULTS: dict[str, float] = {
     "tmax_index": 50.0,  # degF
     # --- Soilzone ---
     "sat_threshold": 999.0,
-    # Depression storage — hru_type only; dprst_frac and dprst_area_max are
-    # always set by _derive_waterbody (or _waterbody_defaults), so no scalar
-    # fallback is needed here.
+    # Depression storage — hru_type only; dprst_frac is always set by
+    # _derive_waterbody (or _waterbody_defaults), so no scalar fallback
+    # is needed here.
     "hru_type": 1,
 }
 
@@ -439,7 +439,7 @@ class PywatershedDerivation:
         # Step 5: Soils parameters (soil_type, soil_moist_max, soil_rechr_max_frac)
         ds = self._derive_soils(context, ds)
 
-        # Step 6: Waterbody overlay (dprst_frac, dprst_area_max, hru_type)
+        # Step 6: Waterbody overlay (dprst_frac, hru_type)
         ds = self._derive_waterbody(context, ds)
 
         # Step 8: Lookup table application
@@ -2606,9 +2606,9 @@ class PywatershedDerivation:
     def _waterbody_defaults(self, ds: xr.Dataset, nhru: int) -> xr.Dataset:
         """Assign zero/default waterbody parameters when no overlay data exists.
 
-        Set ``dprst_frac`` and ``dprst_area_max`` to zero, and
-        ``hru_type`` to 1 (land) for all HRUs.  Used as a fallback
-        when waterbody data, fabric, or ``hru_area`` is unavailable.
+        Set ``dprst_frac`` to zero and ``hru_type`` to 1 (land) for all
+        HRUs.  Used as a fallback when waterbody data, fabric, or
+        ``hru_area`` is unavailable.
 
         Parameters
         ----------
@@ -2620,19 +2620,14 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``dprst_frac`` (fraction), ``dprst_area_max``
-            (acres), and ``hru_type`` (dimensionless integer) set to
-            defaults on the ``nhru`` dimension.
+            Dataset with ``dprst_frac`` (fraction) and ``hru_type``
+            (dimensionless integer) set to defaults on the ``nhru``
+            dimension.
         """
         ds["dprst_frac"] = xr.DataArray(
             np.zeros(nhru),
             dims="nhru",
             attrs={"units": "fraction", "long_name": "Depression storage fraction of HRU area"},
-        )
-        ds["dprst_area_max"] = xr.DataArray(
-            np.zeros(nhru),
-            dims="nhru",
-            attrs={"units": "acres", "long_name": "Maximum depression storage area"},
         )
         ds["hru_type"] = xr.DataArray(
             np.ones(nhru, dtype=np.int32),
@@ -2650,8 +2645,8 @@ class PywatershedDerivation:
 
         Perform polygon-on-polygon overlay of NHDPlus waterbody polygons
         (LakePond and Reservoir feature types) against the HRU fabric to
-        compute depression storage fraction, maximum depression area, and
-        HRU type classification (land vs. lake).
+        compute depression storage fraction and HRU type classification
+        (land vs. lake).
 
         The overlay uses ``geopandas.overlay(how="intersection")`` to clip
         waterbody polygons to HRU boundaries, then sums clipped areas per
@@ -2670,10 +2665,9 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``dprst_frac`` (decimal fraction 0--1 on ``nhru``),
-            ``dprst_area_max`` (acres on ``nhru``), and ``hru_type``
-            (integer: 1=land, 2=lake on ``nhru``).  Falls back to zero
-            defaults if any prerequisite data is missing.
+            Dataset with ``dprst_frac`` (decimal fraction 0--1 on ``nhru``)
+            and ``hru_type`` (integer: 1=land, 2=lake on ``nhru``).  Falls
+            back to zero defaults if any prerequisite data is missing.
 
         Raises
         ------
@@ -2758,7 +2752,7 @@ class PywatershedDerivation:
         except Exception:
             logger.warning(
                 "gpd.overlay failed in step 6 (waterbody); using zero defaults "
-                "for depression storage parameters (dprst_frac, dprst_area_max). "
+                "for depression storage parameters (dprst_frac). "
                 "Check that your waterbody file has valid geometries and a "
                 "compatible CRS.",
                 exc_info=True,
@@ -2789,11 +2783,6 @@ class PywatershedDerivation:
             dprst_frac,
             dims="nhru",
             attrs={"units": "fraction", "long_name": "Depression storage fraction of HRU area"},
-        )
-        ds["dprst_area_max"] = xr.DataArray(
-            clipped_acres,
-            dims="nhru",
-            attrs={"units": "acres", "long_name": "Maximum depression storage area"},
         )
         ds["hru_type"] = xr.DataArray(
             hru_type,
