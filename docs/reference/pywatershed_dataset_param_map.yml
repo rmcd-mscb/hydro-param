@@ -206,7 +206,6 @@ curated_datasets:
         - value_added_attributes  # slope, velocity, etc.
       derives_parameters:
         - dprst_frac          # waterbody_area_in_hru / hru_area
-        - dprst_area_max      # clipped waterbody area
         - K_coef              # from segment slope, length, velocity
         - obsin_segment       # gage-to-segment mapping
       notes: >
@@ -480,15 +479,6 @@ parameter_registry:
     derivation_type: gis_overlay
     method: "sum(waterbody_area_clipped_to_hru) / hru_area"
     dependencies: [hru_area]
-
-  dprst_area_max:
-    description: "Maximum surface depression area"
-    units: "acres"
-    dimension: nhru
-    source_dataset: nhdplus
-    derivation_type: gis_overlay
-    method: "sum(clip(waterbody_polygons, hru_polygon).area) → acres"
-    dependencies: []
 
   # --- Routing ---
   tosegment:
@@ -878,7 +868,7 @@ derivation_pipeline:
       name: "waterbody_overlay"
       description: "Depression storage from NHDPlus waterbodies"
       requires_datasets: [nhdplus]
-      produces: [dprst_frac, dprst_area_max, hru_type]
+      produces: [dprst_frac, hru_type]
       method: "Spatial overlay of waterbody polygons with HRU polygons"
 
     - step: 7

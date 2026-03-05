@@ -613,12 +613,6 @@ const dataCategories = {
         type: "gis_overlay",
       },
       {
-        name: "dprst_area_max",
-        desc: "Maximum area of surface depressions (acres)",
-        method: "From NHDPlus waterbody areas clipped to HRU",
-        type: "gis_overlay",
-      },
-      {
         name: "dprst_depth_avg",
         desc: "Average depth of surface depressions (inches)",
         method: "Regional estimates or DEM-derived; default ~20–48 inches",
@@ -1177,7 +1171,6 @@ hydrography:
     variables: [flowlines, catchments, waterbodies]
     derives:
       - dprst_frac       # waterbody_area / hru_area
-      - dprst_area_max   # clip(waterbody, hru).area
 
 solar_radiation:
   soltab:

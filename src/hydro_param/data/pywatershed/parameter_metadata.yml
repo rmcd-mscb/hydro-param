@@ -210,7 +210,6 @@ parameters:
     required: false
     description: "Fraction of HRU with surface depressions"
 
-
   # --- Routing (Step 12, future) ---
   K_coef:
     dimension: nsegment

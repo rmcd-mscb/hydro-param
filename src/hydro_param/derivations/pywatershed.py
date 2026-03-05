@@ -2645,8 +2645,8 @@ class PywatershedDerivation:
 
         Perform polygon-on-polygon overlay of NHDPlus waterbody polygons
         (LakePond and Reservoir feature types) against the HRU fabric to
-        compute depression storage fraction, maximum depression area, and
-        HRU type classification (land vs. lake).
+        compute depression storage fraction and HRU type classification
+        (land vs. lake).
 
         The overlay uses ``geopandas.overlay(how="intersection")`` to clip
         waterbody polygons to HRU boundaries, then sums clipped areas per
