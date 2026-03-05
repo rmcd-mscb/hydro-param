@@ -187,8 +187,6 @@ class WaterbodyDatasets(BaseModel):
         HRU type (0=inactive, 1=land, 2=lake, 3=swale).
     dprst_frac : ParameterEntry or None
         Fraction of HRU with surface depressions.
-    dprst_area_max : ParameterEntry or None
-        Maximum surface depression area.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -196,7 +194,6 @@ class WaterbodyDatasets(BaseModel):
     available: list[str] = Field(default_factory=list)
     hru_type: ParameterEntry | None = None
     dprst_frac: ParameterEntry | None = None
-    dprst_area_max: ParameterEntry | None = None
 
 
 class StaticDatasetsConfig(BaseModel):
