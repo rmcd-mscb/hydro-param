@@ -12,7 +12,7 @@ The derivation follows a 15-step DAG.  Steps implemented here:
 1. Geometry --- HRU area (acres) and latitude (decimal degrees)
 2. Topology --- segment routing (tosegment, hru_segment, seg_length)
 3. Topography --- elevation (feet), slope (decimal fraction), aspect (degrees)
-3b. Segment elevation --- mean channel elevation from DEM via InterpGen
+3b. Segment elevation --- mean channel elevation from 3DEP DEM via InterpGen
 4. Land cover --- NLCD reclassification to PRMS cov_type, canopy density, imperviousness
 5. Soils --- gNATSGO/STATSGO2 texture classification and AWC
 6. Waterbody --- NHDPlus depression storage overlay
@@ -587,9 +587,10 @@ class PywatershedDerivation:
     ) -> xr.Dataset:
         """Extract routing topology from fabric and segment GeoDataFrames (step 2).
 
-        Read ``tosegment``, ``hru_segment``, ``seg_length``, ``nhm_id``,
-        ``nhm_seg``, and ``hru_segment_nhm`` from the Geospatial Fabric
-        GeoDataFrames.  These define the stream-segment routing network
+        Read ``tosegment``, ``tosegment_nhm``, ``hru_segment``,
+        ``hru_segment_nhm``, ``seg_length``, ``seg_lat``, ``nhm_id``,
+        and ``nhm_seg`` from the Geospatial Fabric GeoDataFrames.
+        These define the stream-segment routing network
         and HRU-to-segment flow contributions used by PRMS for Muskingum
         routing.
 
@@ -784,7 +785,12 @@ class PywatershedDerivation:
         )
 
         # --- seg_lat: segment centroid latitude (WGS84) ---
-        if segments.crs is not None and not segments.crs.is_geographic:
+        if segments.crs is None:
+            logger.warning(
+                "Segments have no CRS; seg_lat assumes coordinates are geographic (WGS84)"
+            )
+            segs_4326 = segments
+        elif not segments.crs.is_geographic:
             segs_4326 = segments.to_crs(epsg=4326)
         else:
             segs_4326 = segments
@@ -1143,7 +1149,18 @@ class PywatershedDerivation:
         _get_slopes_from_comid : Analogous slope lookup by COMID.
         """
         comids = segments[comid_col].values
+        vaa_comid_set = set(vaa["comid"].values)
         vaa_areas = dict(zip(vaa["comid"].values, vaa["totdasqkm"].values, strict=True))
+
+        matched = np.array([c in vaa_comid_set for c in comids])
+        n_missing = int(np.sum(~matched))
+        if n_missing > 0:
+            logger.warning(
+                "%d of %d segments have no matching COMID in VAA for "
+                "cumulative area; using 0.0 km²",
+                n_missing,
+                len(comids),
+            )
         return np.array([vaa_areas.get(c, 0.0) for c in comids], dtype=np.float64)
 
     @staticmethod
@@ -1154,17 +1171,22 @@ class PywatershedDerivation:
     ) -> np.ndarray:
         """Get cumulative area via spatial join to NHDPlus flowlines.
 
-        For each segment, find the nearest NHD flowline (by buffer
-        corridor intersection) and use the maximum ``totdasqkm`` among
-        matched flowlines.  The largest matched flowline's cumulative
-        area is the best proxy for the segment's upstream drainage.
+        For each segment, find all NHD flowlines that intersect a
+        ``_SPATIAL_JOIN_BUFFER_M`` (100 m) buffer corridor around the
+        segment, then take the maximum ``totdasqkm`` among matched
+        flowlines.  The largest matched flowline's cumulative area is
+        the best proxy for the segment's upstream drainage (unlike
+        slopes, which use length-weighted averaging, cumulative area
+        is a property of the most downstream matched flowline).
 
         Parameters
         ----------
         segments : gpd.GeoDataFrame
-            Segment GeoDataFrame (no COMID column).
+            Segment GeoDataFrame (no COMID column).  Must have a
+            projected CRS (units in metres) for correct buffering.
         nhd_flowlines : gpd.GeoDataFrame or None
-            NHDPlus flowlines with COMID.  If ``None``, returns zeros.
+            NHDPlus flowlines with COMID.  If ``None``, returns zeros
+            with a warning.
         vaa : pd.DataFrame
             VAA table with ``comid`` and ``totdasqkm`` columns.
 
@@ -1174,13 +1196,30 @@ class PywatershedDerivation:
             Cumulative drainage area in km² per segment.  Unmatched
             segments get 0.0.
 
+        Raises
+        ------
+        ValueError
+            If ``segments`` has a geographic (non-projected) CRS.  The
+            buffer distance is in metres and requires a projected CRS.
+
         See Also
         --------
         _get_slopes_spatial_join : Analogous slope extraction via spatial join.
         """
         nseg = len(segments)
         if nhd_flowlines is None:
+            logger.warning(
+                "NHD flowlines unavailable; returning 0.0 km² for all %d segments",
+                nseg,
+            )
             return np.zeros(nseg, dtype=np.float64)
+
+        if segments.crs is not None and not segments.crs.is_projected:
+            raise ValueError(
+                f"_get_cum_area_spatial_join requires a projected CRS "
+                f"(units in metres), got {segments.crs}. "
+                f"Reproject segments to e.g. EPSG:5070."
+            )
 
         # Ensure same CRS
         if segments.crs != nhd_flowlines.crs:
@@ -1198,6 +1237,10 @@ class PywatershedDerivation:
         # Find COMID column in flowlines
         fl_comid_col = next((c for c in nhd.columns if c.lower() == "comid"), None)
         if fl_comid_col is None:
+            logger.warning(
+                "NHD flowlines lack COMID column; returning 0.0 km² for all %d segments",
+                nseg,
+            )
             return np.zeros(nseg, dtype=np.float64)
 
         # Build COMID -> totdasqkm lookup
@@ -1476,7 +1519,7 @@ class PywatershedDerivation:
         # --- Fetch NHDPlus slopes ---
         comid_col = self._find_comid_column(segments)
         vaa = self._fetch_vaa()
-        nhd_flowlines = None  # set in GF branch; needed for seg_cum_area too
+        nhd_flowlines = None  # populated by GF spatial-join branch below
 
         if vaa is not None and comid_col is not None:
             # NHD path: direct COMID lookup (no flowline fetch needed)
@@ -1713,7 +1756,13 @@ class PywatershedDerivation:
         stream channel.
 
         Unit conversion: DEM values are assumed to be in meters; the
-        output ``seg_elev`` is in feet (1 m = 3.28084 ft).
+        output ``seg_elev`` is in feet (1 m = 3.28084 ft).  Note that
+        ``hru_elev`` (step 3) is kept in meters (``elev_units=1``),
+        while ``seg_elev`` follows the PRMS convention of feet for
+        segment-level parameters.
+
+        The DEM CRS is read from the GeoTIFF file metadata via
+        rioxarray.  3DEP DEMs are natively EPSG:4269 (NAD83).
 
         References
         ----------
@@ -1756,9 +1805,17 @@ class PywatershedDerivation:
             target_id = "_seg_idx"
 
         try:
+            from typing import cast
+
+            import rioxarray as _rio  # noqa: F811
+
+            dem_da = cast(xr.DataArray, _rio.open_rasterio(str(dem_path)))
+            source_crs = dem_da.rio.crs.to_epsg() if dem_da.rio.crs else 4326
+            dem_da.close()
+
             user_data = UserTiffData(
                 source_ds=str(dem_path),
-                source_crs=4326,
+                source_crs=source_crs,
                 source_x_coord="x",
                 source_y_coord="y",
                 target_gdf=segs_geo,
@@ -1774,10 +1831,10 @@ class PywatershedDerivation:
 
             # calc_interp always returns (stats_df, points_gdf) tuple
             stats_df, _points_gdf = interp.calc_interp()
-        except Exception:
+        except (OSError, ValueError, RuntimeError) as exc:
             logger.warning(
-                "InterpGen failed for seg_elev; skipping",
-                exc_info=True,
+                "InterpGen failed for seg_elev: %s; skipping",
+                exc,
             )
             return ds
 
@@ -1788,7 +1845,20 @@ class PywatershedDerivation:
 
         # The stats_df has a column named after target_id (e.g. "nhm_seg")
         # and a "mean" column with the interpolated values
-        if target_id in stats_df.columns:
+        if target_id not in stats_df.columns:
+            logger.error(
+                "InterpGen stats_df missing expected column '%s' "
+                "(found columns: %s); seg_elev will be set to 0.0",
+                target_id,
+                list(stats_df.columns),
+            )
+        elif "mean" not in stats_df.columns:
+            logger.error(
+                "InterpGen stats_df missing 'mean' column "
+                "(found columns: %s); seg_elev will be set to 0.0",
+                list(stats_df.columns),
+            )
+        else:
             id_vals = segs_geo[target_id].values
             for i, sid in enumerate(id_vals):
                 row = stats_df[stats_df[target_id] == sid]
