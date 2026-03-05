@@ -153,16 +153,14 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
 # shape broadcasting in _derive_calibration_seeds.  pywatershed v2.0
 # requires all parameters as correctly-dimensioned arrays.
 _PARAM_DIMS: dict[str, tuple[str, ...]] = {
-    # Scalar parameters — pywatershed stores these with dims=('scalar',)
-    # and passes them to inner functions without per-HRU indexing.
-    "albset_rna": ("scalar",),
-    "albset_rnm": ("scalar",),
-    "albset_sna": ("scalar",),
-    "albset_snm": ("scalar",),
-    "den_init": ("scalar",),
-    "den_max": ("scalar",),
-    "settle_const": ("scalar",),
     # Per-HRU (nhru,)
+    "albset_rna": ("nhru",),
+    "albset_rnm": ("nhru",),
+    "albset_sna": ("nhru",),
+    "albset_snm": ("nhru",),
+    "den_init": ("nhru",),
+    "den_max": ("nhru",),
+    "settle_const": ("nhru",),
     "emis_noppt": ("nhru",),
     "freeh2o_cap": ("nhru",),
     "potet_sublim": ("nhru",),
@@ -228,7 +226,7 @@ if _MISSING_DIMS:
     )
 
 # Known dimension names referenced by _PARAM_DIMS.
-_KNOWN_DIMS = frozenset({"nhru", "nmonth", "scalar"})
+_KNOWN_DIMS = frozenset({"nhru", "nmonth"})
 _BAD_DIMS = {
     p: [d for d in dims if d not in _KNOWN_DIMS]
     for p, dims in _PARAM_DIMS.items()
@@ -2720,7 +2718,6 @@ class PywatershedDerivation:
         dim_sizes: dict[str, int] = {
             "nhru": nhru,
             "nmonth": 12,
-            "scalar": 1,
         }
 
         for param_name, default_val in _DEFAULTS.items():
