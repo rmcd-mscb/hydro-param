@@ -153,9 +153,7 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
 # shape broadcasting in _derive_calibration_seeds.  pywatershed v2.0
 # requires all parameters as correctly-dimensioned arrays.
 _PARAM_DIMS: dict[str, tuple[str, ...]] = {
-    # Snow albedo/density parameters — pywatershed parameters.yaml declares
-    # these as (nhru,) even though they use uniform defaults.  Previous
-    # implementation used ("scalar",) which is non-conformant.  See #160.
+    # Per-HRU (nhru,)
     "albset_rna": ("nhru",),
     "albset_rnm": ("nhru",),
     "albset_sna": ("nhru",),
@@ -163,7 +161,6 @@ _PARAM_DIMS: dict[str, tuple[str, ...]] = {
     "den_init": ("nhru",),
     "den_max": ("nhru",),
     "settle_const": ("nhru",),
-    # Per-HRU (nhru,)
     "emis_noppt": ("nhru",),
     "freeh2o_cap": ("nhru",),
     "potet_sublim": ("nhru",),
