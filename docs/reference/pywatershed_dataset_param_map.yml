@@ -450,12 +450,14 @@ parameter_registry:
     description: "Max recharge zone storage as fraction of soil_moist_max"
     units: "decimal fraction (0–1)"
     dimension: nhru
-    source_dataset: statsgo2
+    source_dataset: gnatsgo
     derivation_type: derived_formula
     method: >
-      soil_rechr_max_frac = AWC_upper_18inches / AWC_total_rootzone
-      Uses depth-weighted AWC of upper soil layers vs total.
-    dependencies: [awc, soil_depth]
+      soil_rechr_max_frac = aws0_50_mm / aws0_100_mm
+      where aws0_50 (0-50cm) approximates the PRMS recharge zone (~upper 18 inches)
+      and aws0_100 (0-100cm) approximates the full root zone.
+      Clipped to [0.1, 0.9].  Falls back to constant 0.4 when aws0_50 is absent.
+    dependencies: [aws0_50, aws0_100]
 
   sat_threshold:
     description: "Gravity + preferential reservoir storage capacity"
