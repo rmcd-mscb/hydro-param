@@ -1514,6 +1514,27 @@ class TestDeriveTopology:
         # hru_segment=1 -> seg_ids[0] = 501
         np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [302, 501])
 
+    def test_seg_lat_from_segments(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        synthetic_segments: gpd.GeoDataFrame,
+    ) -> None:
+        """seg_lat computed from segment centroid latitude."""
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=synthetic_segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_lat" in ds
+        assert ds["seg_lat"].dims == ("nsegment",)
+        # synthetic_segments are at y=0.5 (EPSG:4326)
+        np.testing.assert_allclose(ds["seg_lat"].values, [0.5, 0.5, 0.5], atol=0.01)
+
 
 class TestTopologyValidation:
     """Tests for topology validation rules."""
@@ -4206,6 +4227,97 @@ class TestDeriveRouting:
         assert "seg_slope" in ds
         np.testing.assert_array_equal(ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE])
 
+    def test_seg_cum_area_with_mocked_vaa(
+        self,
+        derivation: PywatershedDerivation,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """seg_cum_area computed from mocked VAA totdasqkm via COMID lookup."""
+        vaa_df = pd.DataFrame(
+            {
+                "comid": [1001, 1002],
+                "slope": [0.01, 0.02],
+                "totdasqkm": [100.0, 500.0],
+            }
+        )
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: vaa_df),
+        )
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [101, 102], "comid": [1001, 1002], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.5, 0.5), (1.0, 0.5)]),
+                LineString([(1.0, 0.5), (2.0, 0.5)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_cum_area" in ds
+        assert ds["seg_cum_area"].dims == ("nsegment",)
+        assert ds["seg_cum_area"].attrs["units"] == "acres"
+        _KM2_TO_ACRES = 247.10538146717
+        np.testing.assert_allclose(
+            ds["seg_cum_area"].values,
+            [100.0 * _KM2_TO_ACRES, 500.0 * _KM2_TO_ACRES],
+            rtol=1e-5,
+        )
+
+    def test_seg_cum_area_skipped_without_vaa(
+        self,
+        derivation: PywatershedDerivation,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """seg_cum_area absent when VAA fetch fails."""
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: None),
+        )
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1, 2], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_cum_area" not in ds
+
 
 class TestDeriveNhruFallback:
     """Test nhru resolution fallback paths in derive()."""
@@ -4369,6 +4481,99 @@ class TestMonthlyCaliSeedShapes:
             assert ds[name].shape == (12, nhru), (
                 f"{name}: expected (12, {nhru}), got {ds[name].shape}"
             )
+
+
+class TestDeriveSegmentElevation:
+    """Tests for segment elevation via InterpGen."""
+
+    @pytest.fixture()
+    def tmp_dem(self, tmp_path: Path) -> Path:
+        """Create a small synthetic DEM GeoTIFF for testing."""
+        rioxarray = pytest.importorskip("rioxarray")  # noqa: F841
+        dem_data = np.full((10, 10), 500.0, dtype=np.float32)
+        for i in range(10):
+            dem_data[i, :] = 500.0 + i * 10.0
+        da = xr.DataArray(
+            dem_data,
+            dims=["y", "x"],
+            coords={
+                "y": np.linspace(1.0, 0.0, 10),
+                "x": np.linspace(0.0, 1.0, 10),
+            },
+        )
+        da = da.rio.write_crs("EPSG:4326")
+        da = da.rio.set_spatial_dims(x_dim="x", y_dim="y")
+        dem_path = tmp_path / "test_dem.tif"
+        da.rio.to_raster(str(dem_path))
+        return dem_path
+
+    def test_seg_elev_from_dem(
+        self,
+        derivation: PywatershedDerivation,
+        tmp_dem: Path,
+    ) -> None:
+        """seg_elev computed from DEM via InterpGen."""
+        pytest.importorskip("gdptools")
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [101, 102], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.1, 0.5), (0.9, 0.5)]),
+                LineString([(0.1, 0.2), (0.9, 0.2)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+            config={"dem_path": str(tmp_dem)},
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_elev" in ds
+        assert ds["seg_elev"].dims == ("nsegment",)
+        assert ds["seg_elev"].attrs["units"] == "feet"
+        # Both segments should have positive elevation in feet
+        assert np.all(ds["seg_elev"].values > 0)
+        # Segment 2 (y=0.2) should have higher elevation than segment 1 (y=0.5)
+        # because DEM row 0 (y=1.0) = 500m and row 9 (y=0.0) = 590m
+        assert ds["seg_elev"].values[1] > ds["seg_elev"].values[0]
+
+    def test_seg_elev_skipped_without_dem(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """seg_elev skipped gracefully when no dem_path in config."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1], "hru_segment": [1]},
+            geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [101], "tosegment": [0]},
+            geometry=[LineString([(0.1, 0.5), (0.9, 0.5)])],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_elev" not in ds
 
 
 class TestParamDimsConsistency:

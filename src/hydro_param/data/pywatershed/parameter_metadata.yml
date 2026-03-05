@@ -137,6 +137,13 @@ parameters:
     required: false
     description: "Length of stream segment"
 
+  seg_lat:
+    dimension: nsegment
+    units: decimal_degrees
+    valid_range: [-90.0, 90.0]
+    required: false
+    description: "Latitude of segment centroid"
+
   nhm_id:
     dimension: nhru
     units: none
@@ -651,12 +658,26 @@ parameters:
     required: false
     description: "Inches-to-cubic-feet conversion factor per HRU"
 
+  seg_elev:
+    dimension: nsegment
+    units: feet
+    valid_range: [-1000.0, 30000.0]
+    required: false
+    description: "Mean segment channel elevation"
+
   seg_slope:
     dimension: nsegment
     units: decimal_fraction
     valid_range: [0.0, 10.0]
     required: false
     description: "Stream segment slope"
+
+  seg_cum_area:
+    dimension: nsegment
+    units: acres
+    valid_range: [0.0, 1000000000.0]
+    required: false
+    description: "Cumulative drainage area of segment"
 
   segment_type:
     dimension: nsegment
