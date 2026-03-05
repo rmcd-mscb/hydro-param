@@ -44,6 +44,13 @@ parameters:
     required: true
     description: "Latitude of HRU centroid"
 
+  hru_lon:
+    dimension: nhru
+    units: decimal_degrees
+    valid_range: [-180.0, 180.0]
+    required: true
+    description: "Longitude of HRU centroid"
+
   hru_area:
     dimension: nhru
     units: acres

@@ -481,15 +481,16 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Compute HRU area and centroid latitude from the target fabric (step 1).
+        """Compute HRU area, centroid lat/lon from the target fabric (step 1).
 
-        Derive ``hru_area`` (acres) and ``hru_lat`` (decimal degrees) from
-        the fabric GeoDataFrame geometry.  Area is computed in EPSG:5070
-        (NAD83 CONUS Albers equal-area) and converted from m² to acres.
-        Latitude is extracted from EPSG:4326 (WGS84) centroids.
+        Derive ``hru_area`` (acres), ``hru_lat`` (decimal degrees), and
+        ``hru_lon`` (decimal degrees) from the fabric GeoDataFrame geometry.
+        Area is computed in EPSG:5070 (NAD83 CONUS Albers equal-area) and
+        converted from m² to acres.  Latitude and longitude are extracted
+        from EPSG:4326 (WGS84) centroids.
 
-        Falls back to SIR variables ``hru_area_m2`` and ``hru_lat`` when
-        fabric is ``None`` or lacks the ``id_field`` column.
+        Falls back to SIR variables ``hru_area_m2``, ``hru_lat``, and
+        ``hru_lon`` when fabric is ``None`` or lacks the ``id_field`` column.
 
         Parameters
         ----------
@@ -502,8 +503,9 @@ class PywatershedDerivation:
         Returns
         -------
         xr.Dataset
-            Dataset with ``hru_area`` (acres) and ``hru_lat``
-            (decimal degrees) added on the ``nhru`` dimension.
+            Dataset with ``hru_area`` (acres), ``hru_lat``
+            (decimal degrees), and ``hru_lon`` (decimal degrees)
+            added on the ``nhru`` dimension.
 
         Notes
         -----
@@ -536,6 +538,12 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
             )
+            lons = centroids_4326.x.values
+            ds["hru_lon"] = xr.DataArray(
+                lons,
+                dims="nhru",
+                attrs={"units": "decimal_degrees", "long_name": "Longitude of HRU centroid"},
+            )
         else:
             # Fallback to SIR-based geometry
             if "hru_area_m2" in sir:
@@ -549,6 +557,12 @@ class PywatershedDerivation:
                     sir["hru_lat"].values,
                     dims="nhru",
                     attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
+                )
+            if "hru_lon" in sir:
+                ds["hru_lon"] = xr.DataArray(
+                    sir["hru_lon"].values,
+                    dims="nhru",
+                    attrs={"units": "decimal_degrees", "long_name": "Longitude of HRU centroid"},
                 )
         return ds
 

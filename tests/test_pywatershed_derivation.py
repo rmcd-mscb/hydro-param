@@ -1651,6 +1651,35 @@ class TestDeriveGeometryFromFabric:
         assert "hru_lat" in ds
         np.testing.assert_allclose(ds["hru_lat"].values, [40.5, 42.5], atol=0.01)
 
+    def test_lon_from_fabric(self, derivation: PywatershedDerivation) -> None:
+        """hru_lon computed from fabric centroid longitude."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2]},
+            geometry=[
+                Polygon([(0, 40), (1, 40), (1, 41), (0, 41)]),
+                Polygon([(2, 42), (3, 42), (3, 43), (2, 43)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_lon" in ds
+        np.testing.assert_allclose(ds["hru_lon"].values, [0.5, 2.5], atol=0.01)
+
+    def test_lon_fallback_from_sir(self, derivation: PywatershedDerivation) -> None:
+        """Without fabric, hru_lon falls back to SIR."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"hru_lon": ("nhm_id", np.array([-75.0, -76.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_lon" in ds
+        np.testing.assert_allclose(ds["hru_lon"].values, [-75.0, -76.0])
+
     def test_fabric_geometry_overrides_sir(self, derivation: PywatershedDerivation) -> None:
         """When fabric is provided, SIR hru_area_m2/hru_lat are ignored."""
         sir = _MockSIRAccessor(
