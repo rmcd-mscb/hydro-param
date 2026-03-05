@@ -487,10 +487,14 @@ class PywatershedDerivation:
         ``hru_lon`` (decimal degrees) from the fabric GeoDataFrame geometry.
         Area is computed in EPSG:5070 (NAD83 CONUS Albers equal-area) and
         converted from m² to acres.  Latitude and longitude are extracted
-        from EPSG:4326 (WGS84) centroids.
+        Latitude and longitude are extracted from centroids computed in
+        EPSG:5070 (equal-area) and reprojected to EPSG:4326 (WGS84) for
+        accurate positions.
 
         Falls back to SIR variables ``hru_area_m2``, ``hru_lat``, and
-        ``hru_lon`` when fabric is ``None`` or lacks the ``id_field`` column.
+        ``hru_lon`` when fabric is ``None`` or lacks the ``id_field``
+        column.  Each variable is loaded only if present in the SIR;
+        missing variables are skipped.
 
         Parameters
         ----------
@@ -616,20 +620,28 @@ class PywatershedDerivation:
             column is missing from fabric, tosegment contains self-loops or
             out-of-range values, or no outlet segments (tosegment == 0) exist.
         KeyError
-            If an explicitly configured ``segment_id_field`` is not found in
-            the segments GeoDataFrame columns.
+            If an explicitly configured ``segment_id_field`` is not
+            found in the segments GeoDataFrame columns.  When the
+            default field (``"nhm_seg"``) is absent, a warning is
+            logged and sequential IDs (1..nseg) are used as fallback.
 
         Notes
         -----
         Topology is model-specific and comes directly from the fabric
-        GeoDataFrames --- hydro-param does not normalize between topology
-        conventions.  The ``tosegment`` array uses 1-based indexing with
-        0 indicating an outlet segment.
+        GeoDataFrames --- hydro-param does not normalize between
+        topology conventions.  The ``tosegment`` array uses 1-based
+        indexing with 0 indicating an outlet segment.
 
-        ``nhm_id`` and ``nhm_seg`` are read from the config-declared
-        ``id_field`` and ``segment_id_field`` columns respectively.
-        Output parameter names are always ``nhm_id`` and ``nhm_seg``
-        (pywatershed convention) regardless of the source column name.
+        ``nhm_id`` and ``nhm_seg`` are identity copies from the fabric
+        columns named by the config fields ``id_field`` and
+        ``segment_id_field`` respectively.  Output parameter names are
+        always ``nhm_id`` and ``nhm_seg`` (pywatershed convention)
+        regardless of the source column name.
+
+        ``tosegment_nhm`` and ``hru_segment_nhm`` are derived by
+        mapping the 1-based segment indices (``tosegment``,
+        ``hru_segment``) to the corresponding segment IDs from
+        ``segment_id_field``.
         """
         fabric = ctx.fabric
         segments = ctx.segments

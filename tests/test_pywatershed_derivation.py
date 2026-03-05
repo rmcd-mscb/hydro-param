@@ -1436,6 +1436,83 @@ class TestDeriveTopology:
         np.testing.assert_array_equal(ds["nhm_seg"].values, [500, 600])
         assert "hru_segment_nhm" in ds
         np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [500, 600])
+        assert ds["nhm_id"].dims == ("nhru",)
+        assert ds["nhm_seg"].dims == ("nsegment",)
+        assert ds["hru_segment_nhm"].dims == ("nhru",)
+
+    def test_hru_segment_nhm_zero_segment(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """hru_segment_nhm outputs 0 for HRUs with no segment."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2, 3]}))
+        fabric = gpd.GeoDataFrame(
+            {
+                "nhm_id": [1, 2, 3],
+                "hru_segment": [1, 2, 0],  # 3rd HRU unassigned
+            },
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+                Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {
+                "nhm_seg": [201, 202, 203],
+                "tosegment": [2, 3, 0],
+            },
+            geometry=[
+                LineString([(0.5, 0.5), (1.0, 0.5)]),
+                LineString([(1.0, 0.5), (2.0, 0.5)]),
+                LineString([(2.0, 0.5), (3.0, 0.5)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [201, 202, 0])
+
+    def test_hru_segment_nhm_nonsequential_ids(
+        self,
+        derivation: PywatershedDerivation,
+    ) -> None:
+        """hru_segment_nhm maps correctly with non-sequential IDs."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [2, 1]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [501, 302], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.5, 0.5), (1.0, 0.5)]),
+                LineString([(1.0, 0.5), (2.0, 0.5)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        # hru_segment=2 -> seg_ids[1] = 302
+        # hru_segment=1 -> seg_ids[0] = 501
+        np.testing.assert_array_equal(ds["hru_segment_nhm"].values, [302, 501])
 
 
 class TestTopologyValidation:
@@ -1781,6 +1858,20 @@ class TestDeriveGeometryFromFabric:
         ds = derivation.derive(ctx)
         assert "hru_lon" in ds
         np.testing.assert_allclose(ds["hru_lon"].values, [-75.0, -76.0])
+        assert ds["hru_lon"].attrs["units"] == "decimal_degrees"
+        assert ds["hru_lon"].attrs["long_name"] == "Longitude of HRU centroid"
+
+    def test_lon_missing_without_fabric_or_sir(self, derivation: PywatershedDerivation) -> None:
+        """When both fabric and SIR lack hru_lon, param is absent."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", [0.0, 0.0])},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_lon" not in ds
 
     def test_fabric_geometry_overrides_sir(self, derivation: PywatershedDerivation) -> None:
         """When fabric is provided, SIR hru_area_m2/hru_lat are ignored."""
