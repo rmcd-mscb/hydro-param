@@ -1858,9 +1858,13 @@ class PywatershedDerivation:
 
         All paths clip to ``[0.5, 20.0]`` inches.
 
-        ``soil_rechr_max_frac`` is set to a constant default of 0.4
-        (no soil layer depth data is currently available from the SIR
-        to compute it from first principles).
+        ``soil_rechr_max_frac`` is derived from the ratio
+        ``aws0_50_mm / aws0_100_mm`` when both variables are present
+        in the SIR.  ``aws0_50`` (0–50 cm ≈ upper 18 inches) approximates
+        the PRMS recharge zone; ``aws0_100`` (0–100 cm) approximates the
+        full root zone.  HRUs with zero ``aws0_100`` receive the default
+        0.4.  The ratio is clipped to ``[0.1, 0.9]``.  Falls back to a
+        uniform 0.4 when ``aws0_50_mm_mean`` is absent from the SIR.
 
         See Also
         --------
@@ -1942,7 +1946,34 @@ class PywatershedDerivation:
             )
 
         # --- soil_rechr_max_frac ---
-        if "soil_type" in ds:
+        # Prefer derived ratio: aws0_50 (0-50cm, ~upper 18 inches) / aws0_100
+        # (0-100cm, full root zone).  Falls back to constant default when
+        # either variable is missing from the SIR.
+        aws50_key = sir.find_variable("aws0_50_mm_mean")
+        if aws50_key is not None and aws_key is not None:
+            aws50_mm = sir[aws50_key].values.astype(np.float64)
+            aws100_mm = sir[aws_key].values.astype(np.float64)
+            # Guard division by zero: HRUs with zero total AWC get default
+            valid = aws100_mm > 0
+            ratio = np.full_like(aws100_mm, self._SOIL_RECHR_MAX_FRAC_DEFAULT)
+            ratio[valid] = aws50_mm[valid] / aws100_mm[valid]
+            ratio = np.clip(ratio, 0.1, 0.9)
+            ds["soil_rechr_max_frac"] = xr.DataArray(
+                ratio,
+                dims="nhru",
+                attrs={
+                    "units": "decimal_fraction",
+                    "long_name": "Fraction of soil moisture in recharge zone",
+                },
+            )
+            logger.info(
+                "soil_rechr_max_frac derived from aws0_50/aws0_100 ratio for %d HRUs "
+                "(%.1f%% had zero aws0_100, set to default %.2f)",
+                len(ratio),
+                100.0 * np.sum(~valid) / len(ratio),
+                self._SOIL_RECHR_MAX_FRAC_DEFAULT,
+            )
+        elif "soil_type" in ds:
             nhru = len(ds["soil_type"])
             ds["soil_rechr_max_frac"] = xr.DataArray(
                 np.full(nhru, self._SOIL_RECHR_MAX_FRAC_DEFAULT),
@@ -1954,7 +1985,7 @@ class PywatershedDerivation:
             )
             logger.debug(
                 "soil_rechr_max_frac set to default %.2f for %d HRUs "
-                "(no soil layer data available)",
+                "(aws0_50_mm_mean not available in SIR)",
                 self._SOIL_RECHR_MAX_FRAC_DEFAULT,
                 nhru,
             )
