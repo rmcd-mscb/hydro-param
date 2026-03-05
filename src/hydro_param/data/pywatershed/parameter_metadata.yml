@@ -665,6 +665,13 @@ parameters:
     required: false
     description: "Stream segment slope"
 
+  seg_cum_area:
+    dimension: nsegment
+    units: acres
+    valid_range: [0.0, 1000000000.0]
+    required: false
+    description: "Cumulative drainage area of segment"
+
   segment_type:
     dimension: nsegment
     units: integer

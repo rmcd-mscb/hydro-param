@@ -255,6 +255,7 @@ _LAKE_SEGMENT_TYPE = 1  # segment_type value for lake
 _CHANNEL_SEGMENT_TYPE = 0  # segment_type value for channel
 _SPATIAL_JOIN_BUFFER_M = 100.0  # metres — buffer around segments for NHD flowline clipping
 _NHD_MISSING_SLOPE_SENTINEL = -9998.0  # NHDPlus missing-data sentinel for slope
+_KM2_TO_ACRES = 247.10538146717  # 1 km² = 247.105 acres
 
 # Square metres per acre (exact)
 _M2_PER_ACRE = 4046.8564224
@@ -1110,6 +1111,106 @@ class PywatershedDerivation:
         return slopes
 
     @staticmethod
+    def _get_cum_area_from_comid(
+        segments: gpd.GeoDataFrame,
+        vaa: pd.DataFrame,
+        comid_col: str,
+    ) -> np.ndarray:
+        """Look up cumulative drainage area from VAA by COMID.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame with a COMID column.
+        vaa : pd.DataFrame
+            VAA table with ``comid`` and ``totdasqkm`` columns.
+        comid_col : str
+            Name of the COMID column in *segments*.
+
+        Returns
+        -------
+        np.ndarray
+            Cumulative drainage area in km² per segment.  Unmatched
+            segments get 0.0.
+
+        See Also
+        --------
+        _get_slopes_from_comid : Analogous slope lookup by COMID.
+        """
+        comids = segments[comid_col].values
+        vaa_areas = dict(zip(vaa["comid"].values, vaa["totdasqkm"].values, strict=True))
+        return np.array([vaa_areas.get(c, 0.0) for c in comids], dtype=np.float64)
+
+    @staticmethod
+    def _get_cum_area_spatial_join(
+        segments: gpd.GeoDataFrame,
+        nhd_flowlines: gpd.GeoDataFrame | None,
+        vaa: pd.DataFrame,
+    ) -> np.ndarray:
+        """Get cumulative area via spatial join to NHDPlus flowlines.
+
+        For each segment, find the nearest NHD flowline (by buffer
+        corridor intersection) and use the maximum ``totdasqkm`` among
+        matched flowlines.  The largest matched flowline's cumulative
+        area is the best proxy for the segment's upstream drainage.
+
+        Parameters
+        ----------
+        segments : gpd.GeoDataFrame
+            Segment GeoDataFrame (no COMID column).
+        nhd_flowlines : gpd.GeoDataFrame or None
+            NHDPlus flowlines with COMID.  If ``None``, returns zeros.
+        vaa : pd.DataFrame
+            VAA table with ``comid`` and ``totdasqkm`` columns.
+
+        Returns
+        -------
+        np.ndarray
+            Cumulative drainage area in km² per segment.  Unmatched
+            segments get 0.0.
+
+        See Also
+        --------
+        _get_slopes_spatial_join : Analogous slope extraction via spatial join.
+        """
+        nseg = len(segments)
+        if nhd_flowlines is None:
+            return np.zeros(nseg, dtype=np.float64)
+
+        # Ensure same CRS
+        if segments.crs != nhd_flowlines.crs:
+            nhd_flowlines = nhd_flowlines.to_crs(segments.crs)
+
+        segs = segments.reset_index(drop=True)
+        nhd = nhd_flowlines.reset_index(drop=True)
+
+        # Buffer segments into corridors
+        seg_buffers = segs.copy()
+        seg_buffers["geometry"] = segs.geometry.buffer(_SPATIAL_JOIN_BUFFER_M)
+
+        joined = gpd.sjoin(seg_buffers, nhd, how="left", predicate="intersects")
+
+        # Find COMID column in flowlines
+        fl_comid_col = next((c for c in nhd.columns if c.lower() == "comid"), None)
+        if fl_comid_col is None:
+            return np.zeros(nseg, dtype=np.float64)
+
+        # Build COMID -> totdasqkm lookup
+        vaa_areas = dict(zip(vaa["comid"].values, vaa["totdasqkm"].values, strict=True))
+
+        # For each segment, take max totdasqkm among matched flowlines
+        cum_area = np.zeros(nseg, dtype=np.float64)
+        for seg_idx in range(nseg):
+            matches = joined[joined.index == seg_idx]
+            if matches.empty or matches[fl_comid_col].isna().all():
+                continue
+            areas = [vaa_areas.get(int(c), 0.0) for c in matches[fl_comid_col].dropna()]
+            if areas:
+                cum_area[seg_idx] = max(areas)
+
+        return cum_area
+
+    @staticmethod
     def _compute_k_coef(
         slopes: np.ndarray,
         seg_lengths_m: np.ndarray,
@@ -1221,9 +1322,10 @@ class PywatershedDerivation:
         Returns
         -------
         pd.DataFrame or None
-            VAA table with ``comid`` and ``slope`` columns (NaN slopes
-            and ``_NHD_MISSING_SLOPE_SENTINEL`` values removed), or
-            ``None`` if the download fails.
+            VAA table with ``comid``, ``slope``, and (when available)
+            ``totdasqkm`` columns.  NaN slopes and
+            ``_NHD_MISSING_SLOPE_SENTINEL`` values are removed.
+            Returns ``None`` if the download fails.
 
         References
         ----------
@@ -1232,7 +1334,10 @@ class PywatershedDerivation:
         """
         try:
             vaa = pynhd.nhdplus_vaa()
-            result = vaa[["comid", "slope"]].dropna(subset=["slope"])
+            cols = ["comid", "slope"]
+            if "totdasqkm" in vaa.columns:
+                cols.append("totdasqkm")
+            result = vaa[cols].dropna(subset=["slope"])
             # NHDPlus uses -9998 as a sentinel for missing slope values.
             result = result[result["slope"] != _NHD_MISSING_SLOPE_SENTINEL]
             return result
@@ -1315,7 +1420,7 @@ class PywatershedDerivation:
 
         Compute ``K_coef`` (travel time) via Manning's equation using
         NHDPlus VAA slopes, and assign ``x_coef``, ``seg_slope``,
-        ``segment_type``, and ``obsin_segment``.
+        ``seg_cum_area``, ``segment_type``, and ``obsin_segment``.
 
         Supports two segment types:
 
@@ -1337,8 +1442,9 @@ class PywatershedDerivation:
         -------
         xr.Dataset
             Dataset with ``K_coef`` (hours), ``x_coef`` (dimensionless),
-            ``seg_slope`` (m/m), ``segment_type`` (integer), and
-            ``obsin_segment`` (integer) added on ``nsegment``.
+            ``seg_slope`` (m/m), ``seg_cum_area`` (acres, when VAA
+            ``totdasqkm`` is available), ``segment_type`` (integer),
+            and ``obsin_segment`` (integer) added on ``nsegment``.
             Returns ``ds`` unchanged if ``ctx.segments`` is ``None``.
 
         Notes
@@ -1365,6 +1471,7 @@ class PywatershedDerivation:
         # --- Fetch NHDPlus slopes ---
         comid_col = self._find_comid_column(segments)
         vaa = self._fetch_vaa()
+        nhd_flowlines = None  # set in GF branch; needed for seg_cum_area too
 
         if vaa is not None and comid_col is not None:
             # NHD path: direct COMID lookup (no flowline fetch needed)
@@ -1396,6 +1503,23 @@ class PywatershedDerivation:
             dims="nsegment",
             attrs={"units": "m/m", "long_name": "Channel slope"},
         )
+
+        # --- seg_cum_area: cumulative drainage area from VAA ---
+        if vaa is not None and "totdasqkm" in vaa.columns:
+            if comid_col is not None:
+                cum_area = self._get_cum_area_from_comid(segments, vaa, comid_col)
+            else:
+                cum_area = self._get_cum_area_spatial_join(segments, nhd_flowlines, vaa)
+            ds["seg_cum_area"] = xr.DataArray(
+                cum_area * _KM2_TO_ACRES,
+                dims="nsegment",
+                attrs={
+                    "units": "acres",
+                    "long_name": "Cumulative drainage area of segment",
+                },
+            )
+        else:
+            logger.warning("VAA totdasqkm unavailable; skipping seg_cum_area")
 
         # --- K_coef ---
         if "seg_length" in ds:

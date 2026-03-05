@@ -4227,6 +4227,97 @@ class TestDeriveRouting:
         assert "seg_slope" in ds
         np.testing.assert_array_equal(ds["seg_slope"].values, [_FALLBACK_SLOPE, _FALLBACK_SLOPE])
 
+    def test_seg_cum_area_with_mocked_vaa(
+        self,
+        derivation: PywatershedDerivation,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """seg_cum_area computed from mocked VAA totdasqkm via COMID lookup."""
+        vaa_df = pd.DataFrame(
+            {
+                "comid": [1001, 1002],
+                "slope": [0.01, 0.02],
+                "totdasqkm": [100.0, 500.0],
+            }
+        )
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: vaa_df),
+        )
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [101, 102], "comid": [1001, 1002], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0.5, 0.5), (1.0, 0.5)]),
+                LineString([(1.0, 0.5), (2.0, 0.5)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_cum_area" in ds
+        assert ds["seg_cum_area"].dims == ("nsegment",)
+        assert ds["seg_cum_area"].attrs["units"] == "acres"
+        _KM2_TO_ACRES = 247.10538146717
+        np.testing.assert_allclose(
+            ds["seg_cum_area"].values,
+            [100.0 * _KM2_TO_ACRES, 500.0 * _KM2_TO_ACRES],
+            rtol=1e-5,
+        )
+
+    def test_seg_cum_area_skipped_without_vaa(
+        self,
+        derivation: PywatershedDerivation,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """seg_cum_area absent when VAA fetch fails."""
+        monkeypatch.setattr(
+            PywatershedDerivation,
+            "_fetch_vaa",
+            staticmethod(lambda: None),
+        )
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1, 2], "hru_segment": [1, 2]},
+            geometry=[
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+                Polygon([(1, 0), (2, 0), (2, 1), (1, 1)]),
+            ],
+            crs="EPSG:4326",
+        )
+        segments = gpd.GeoDataFrame(
+            {"nhm_seg": [1, 2], "tosegment": [2, 0]},
+            geometry=[
+                LineString([(0, 0), (1, 0)]),
+                LineString([(1, 0), (2, 0)]),
+            ],
+            crs="EPSG:4326",
+        )
+        ctx = DerivationContext(
+            sir=sir,
+            fabric=fabric,
+            segments=segments,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        ds = derivation.derive(ctx)
+        assert "seg_cum_area" not in ds
+
 
 class TestDeriveNhruFallback:
     """Test nhru resolution fallback paths in derive()."""
