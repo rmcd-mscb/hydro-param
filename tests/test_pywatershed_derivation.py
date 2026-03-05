@@ -885,9 +885,11 @@ class TestApplyDefaults:
         ds = derivation.derive(ctx)
         nhru = 3  # sir_topography fixture has 3 HRUs
 
-        # Scalar defaults — pywatershed stores these with dims=('scalar',),
-        # shape=(1,), and passes them to inner functions without per-HRU indexing.
-        scalar_params = [
+        # Per-HRU defaults must be 1-D arrays of length nhru.
+        # Snow albedo/density params (albset_*, den_*, settle_const) were
+        # previously scalar but pywatershed parameters.yaml declares (nhru,).
+        # Fixed in #160.
+        per_hru = [
             "albset_rna",
             "albset_rnm",
             "albset_sna",
@@ -895,16 +897,6 @@ class TestApplyDefaults:
             "den_init",
             "den_max",
             "settle_const",
-        ]
-        for name in scalar_params:
-            assert name in ds, f"Missing scalar default: {name}"
-            assert ds[name].dims == ("scalar",), (
-                f"{name}: expected dims=('scalar',), got {ds[name].dims}"
-            )
-            assert ds[name].shape == (1,), f"{name}: expected shape (1,), got {ds[name].shape}"
-
-        # Per-HRU defaults must be 1-D arrays of length nhru
-        per_hru = [
             "emis_noppt",
             "freeh2o_cap",
             "potet_sublim",
