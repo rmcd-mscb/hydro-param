@@ -20,6 +20,8 @@ hydro-param pywatershed run <config>
     Generate a complete pywatershed model setup (two-phase workflow).
 hydro-param pywatershed validate <param_file>
     Validate a pywatershed parameter NetCDF file.
+hydro-param gfv11 download --output-dir <dir> [--items {data-layers,tgf-topo,all}]
+    Download GFv1.1 NHM data layer rasters from ScienceBase.
 
 Notes
 -----
@@ -56,6 +58,7 @@ logger = logging.getLogger(__name__)
 app = App(name="hydro-param", help="Configuration-driven hydrologic parameterization.")
 datasets_app = app.command(App(name="datasets", help="Discover and download datasets."))
 pws_app = app.command(App(name="pywatershed", help="pywatershed model setup."))
+gfv11_app = app.command(App(name="gfv11", help="GFv1.1 NHM data layer utilities."))
 
 
 # ---------------------------------------------------------------------------
@@ -874,6 +877,70 @@ def pws_validate_cmd(
         raise SystemExit(1)
     else:
         print("Validation passed: all checks OK.")
+
+
+# ---------------------------------------------------------------------------
+# gfv11 download
+# ---------------------------------------------------------------------------
+
+
+@gfv11_app.command(name="download")
+def gfv11_download_cmd(
+    *,
+    output_dir: Path,
+    items: str = "all",
+) -> None:
+    """Download GFv1.1 NHM data layer rasters from ScienceBase.
+
+    Stream-download and unzip the original CONUS-wide rasters used to
+    parameterize NHM v1.1 from two public ScienceBase items (~15 GB
+    total).  Files are organised into categorised subdirectories
+    (soils, land_cover, topo, etc.) under *output_dir*.
+
+    Existing extracted files are skipped automatically.  Zip archives
+    are cleaned up after successful extraction.
+
+    Parameters
+    ----------
+    output_dir
+        Shared data directory for downloaded rasters.  Subdirectories
+        (``soils/``, ``land_cover/``, ``topo/``, etc.) are created
+        automatically.
+    items
+        Which ScienceBase item(s) to download.  One of ``"all"``
+        (default), ``"data-layers"``, or ``"tgf-topo"``.
+
+    Raises
+    ------
+    SystemExit
+        If *items* is not a valid choice or a fatal download error
+        occurs (exit code 1).
+
+    See Also
+    --------
+    hydro_param.gfv11 : Download implementation module.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    valid_items = {"all", "data-layers", "tgf-topo"}
+    if items not in valid_items:
+        print(
+            f"Error: --items must be one of {sorted(valid_items)}, got '{items}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    from hydro_param.gfv11 import download_gfv11
+
+    try:
+        download_gfv11(output_dir, items=items)
+    except Exception as exc:
+        logger.exception("GFv1.1 download failed.")
+        raise SystemExit(1) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -997,3 +997,28 @@ def test_pws_run_temporal_load_failure_exits(tmp_path: Path) -> None:
         _run("pywatershed", "run", str(config_path))
 
     assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# gfv11 download
+# ---------------------------------------------------------------------------
+
+
+@patch("hydro_param.gfv11.download_gfv11")
+def test_gfv11_download_calls_module(mock_dl, tmp_path: Path):
+    """CLI wires through to gfv11.download_gfv11."""
+    _run("gfv11", "download", "--output-dir", str(tmp_path))
+    mock_dl.assert_called_once_with(tmp_path, items="all")
+
+
+@patch("hydro_param.gfv11.download_gfv11")
+def test_gfv11_download_with_items_flag(mock_dl, tmp_path: Path):
+    """--items flag is forwarded correctly."""
+    _run("gfv11", "download", "--output-dir", str(tmp_path), "--items", "tgf-topo")
+    mock_dl.assert_called_once_with(tmp_path, items="tgf-topo")
+
+
+def test_gfv11_download_invalid_items(tmp_path: Path):
+    """Invalid --items value exits with code 1."""
+    with pytest.raises(SystemExit, match="1"):
+        _run("gfv11", "download", "--output-dir", str(tmp_path), "--items", "bogus")
