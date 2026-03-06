@@ -37,7 +37,7 @@ datasets:
   # --- Soils ---
   # gNATSGO pre-summarized soil properties (stac_cog via Planetary Computer)
   - name: gnatsgo_rasters
-    variables: [aws0_100, rootznemc, rootznaws]
+    variables: [aws0_30, aws0_100, rootznemc, rootznaws]
     statistics: [mean]
 
   # POLARIS soil texture properties, 30m (local_tiff — these variables have

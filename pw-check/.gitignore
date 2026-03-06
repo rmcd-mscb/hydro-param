@@ -1,0 +1,37 @@
+# hydro-param project
+#
+# Track: .hydro-param marker, configs/
+# Ignore: downloaded data, pipeline output, model exports
+
+# Downloaded data (large raster/vector files)
+data/topography/
+data/land_cover/
+data/soils/
+data/geology/
+data/hydrography/
+data/climate/
+data/snow/
+data/water_bodies/
+data/fabrics/*.tif
+data/fabrics/*.tiff
+
+# Pipeline output
+output/
+
+# Model exports
+models/
+
+# Common large geospatial formats (safety net)
+*.nc
+*.tif
+*.tiff
+*.zarr/
+
+# WSL/Windows download metadata
+*:Zone.Identifier
+
+# Cache
+cache/
+
+# Stray files
+None.csv
