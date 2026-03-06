@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 from cyclopts import App
 
@@ -934,14 +935,21 @@ def gfv11_download_cmd(
         )
         raise SystemExit(1)
 
-    from typing import cast
+    import requests as _requests  # type: ignore[import-untyped]
 
-    from hydro_param.gfv11 import GFv11Items, download_gfv11
+    from hydro_param.gfv11 import DownloadError, GFv11Items, download_gfv11
 
     try:
         download_gfv11(output_dir, items=cast(GFv11Items, items))
-    except Exception as exc:
-        logger.exception("GFv1.1 download failed.")
+    except DownloadError as exc:
+        logger.error("GFv1.1 download incomplete: %s", exc)
+        raise SystemExit(1) from exc
+    except (_requests.RequestException, ValueError) as exc:
+        logger.error("GFv1.1 download failed due to a network/API error: %s", exc)
+        logger.error("Check your internet connection and try again.")
+        raise SystemExit(1) from exc
+    except OSError as exc:
+        logger.error("GFv1.1 download failed due to a filesystem error: %s", exc)
         raise SystemExit(1) from exc
 
 

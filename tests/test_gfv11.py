@@ -13,6 +13,8 @@ from hydro_param.gfv11 import (
     FILE_DIRECTORY_MAP,
     SB_API_URL,
     TGF_TOPO_ITEM_ID,
+    DownloadError,
+    DownloadSummary,
     _unzip_and_clean,
     download_file,
     download_gfv11,
@@ -77,6 +79,27 @@ class TestConstants:
 
 
 # ---------------------------------------------------------------------------
+# DownloadSummary
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadSummary:
+    """Tests for DownloadSummary dataclass."""
+
+    def test_has_failures_false_when_clean(self) -> None:
+        s = DownloadSummary(downloaded=["a.zip"], skipped=["b.zip"])
+        assert s.has_failures is False
+
+    def test_has_failures_true_with_download_failure(self) -> None:
+        s = DownloadSummary(failed=["a.zip"])
+        assert s.has_failures is True
+
+    def test_has_failures_true_with_extract_failure(self) -> None:
+        s = DownloadSummary(extract_failed=["a.zip"])
+        assert s.has_failures is True
+
+
+# ---------------------------------------------------------------------------
 # fetch_item_files
 # ---------------------------------------------------------------------------
 
@@ -133,6 +156,39 @@ class TestFetchItemFiles:
         result = fetch_item_files("fake-id")
         assert result[0][2] == 0
 
+    @patch("hydro_param.gfv11.requests.get")
+    def test_no_files_key_returns_empty(self, mock_get: MagicMock) -> None:
+        """Returns empty list when API response has no 'files' key."""
+        resp = MagicMock()
+        resp.json.return_value = {"title": "Some item"}
+        resp.raise_for_status.return_value = None
+        mock_get.return_value = resp
+        result = fetch_item_files("fake-id")
+        assert result == []
+
+    @patch("hydro_param.gfv11.requests.get")
+    def test_raises_on_http_error(self, mock_get: MagicMock) -> None:
+        """HTTP errors from ScienceBase API propagate as HTTPError."""
+        import requests as req
+
+        resp = MagicMock()
+        resp.raise_for_status.side_effect = req.HTTPError("404 Not Found")
+        mock_get.return_value = resp
+
+        with pytest.raises(req.HTTPError):
+            fetch_item_files("fake-id")
+
+    @patch("hydro_param.gfv11.requests.get")
+    def test_raises_on_non_json_response(self, mock_get: MagicMock) -> None:
+        """Non-JSON responses raise ValueError with descriptive message."""
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.side_effect = ValueError("No JSON")
+        mock_get.return_value = resp
+
+        with pytest.raises(ValueError, match="non-JSON response"):
+            fetch_item_files("fake-id")
+
 
 # ---------------------------------------------------------------------------
 # download_file
@@ -185,7 +241,7 @@ class TestDownloadFile:
 
     @patch("hydro_param.gfv11.time.sleep")
     @patch("hydro_param.gfv11.requests.get")
-    def test_retries_on_failure(
+    def test_raises_after_exhausting_retries(
         self, mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
     ) -> None:
         import requests as req
@@ -193,12 +249,36 @@ class TestDownloadFile:
         mock_get.side_effect = req.ConnectionError("network error")
 
         dest = tmp_path / "fail.zip"
-        result = download_file("https://example.com/fail.zip", dest, retries=2)
+        with pytest.raises(DownloadError, match="after 2 attempts"):
+            download_file("https://example.com/fail.zip", dest, retries=2)
 
-        assert result is False
         assert not dest.exists()
         assert mock_get.call_count == 2
         mock_sleep.assert_called_once_with(2)  # 2^1 = 2 on first retry
+
+    @patch("hydro_param.gfv11.time.sleep")
+    @patch("hydro_param.gfv11.requests.get")
+    def test_retry_succeeds_on_second_attempt(
+        self, mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
+    ) -> None:
+        """Download succeeds after first attempt fails."""
+        import requests as req
+
+        # Second call succeeds
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.headers = {}
+        mock_resp.iter_content.return_value = [b"recovered"]
+
+        mock_get.side_effect = [req.ConnectionError("fail"), mock_resp]
+
+        dest = tmp_path / "retry_ok.zip"
+        result = download_file("https://example.com/retry.zip", dest, retries=3)
+
+        assert result is True
+        assert dest.read_bytes() == b"recovered"
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +295,9 @@ class TestUnzipAndClean:
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("inner.txt", "contents")
 
-        _unzip_and_clean(zip_path, tmp_path)
+        result = _unzip_and_clean(zip_path, tmp_path)
 
+        assert result is True
         assert not zip_path.exists()
         assert (tmp_path / "inner.txt").exists()
         assert (tmp_path / "inner.txt").read_text() == "contents"
@@ -226,9 +307,21 @@ class TestUnzipAndClean:
         bad_zip = tmp_path / "bad.zip"
         bad_zip.write_bytes(b"not a zip at all")
 
-        _unzip_and_clean(bad_zip, tmp_path)
+        result = _unzip_and_clean(bad_zip, tmp_path)
 
+        assert result is False
         assert bad_zip.exists()  # preserved on failure
+
+    def test_rejects_zip_slip(self, tmp_path: Path) -> None:
+        """Archives with path traversal entries are rejected."""
+        zip_path = tmp_path / "evil.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("../../etc/passwd", "pwned")
+
+        result = _unzip_and_clean(zip_path, tmp_path)
+
+        assert result is False
+        assert zip_path.exists()  # preserved, not extracted
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +347,14 @@ class TestDownloadItem:
             ("Clay.zip", "https://example.com/Clay.zip", 200),
         ]
         mock_dl.return_value = True  # simulate successful download
+        mock_unzip.return_value = True
 
-        download_item("fake-id", tmp_path)
+        summary = download_item("fake-id", tmp_path)
 
         mock_dl.assert_any_call("https://example.com/dem.zip", tmp_path / "topo" / "dem.zip")
         mock_dl.assert_any_call("https://example.com/Clay.zip", tmp_path / "soils" / "Clay.zip")
         assert mock_dl.call_count == 2
+        assert len(summary.downloaded) == 2
 
     @patch("hydro_param.gfv11._unzip_and_clean")
     @patch("hydro_param.gfv11.download_file")
@@ -275,6 +370,7 @@ class TestDownloadItem:
             ("dem.zip", "https://example.com/dem.zip", 100),
         ]
         mock_dl.return_value = True
+        mock_unzip.return_value = True
 
         download_item("fake-id", tmp_path)
 
@@ -313,9 +409,10 @@ class TestDownloadItem:
             ("unknown_file.dat", "https://example.com/unknown_file.dat", 10),
         ]
 
-        download_item("fake-id", tmp_path)
+        summary = download_item("fake-id", tmp_path)
 
         mock_dl.assert_not_called()
+        assert summary.unmapped == ["unknown_file.dat"]
 
     @patch("hydro_param.gfv11._unzip_and_clean")
     @patch("hydro_param.gfv11.download_file")
@@ -332,9 +429,55 @@ class TestDownloadItem:
         ]
         mock_dl.return_value = False  # file already existed
 
-        download_item("fake-id", tmp_path)
+        summary = download_item("fake-id", tmp_path)
 
         mock_unzip.assert_not_called()
+        assert summary.skipped == ["dem.zip"]
+
+    @patch("hydro_param.gfv11._unzip_and_clean")
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_accumulates_download_failures(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        mock_unzip: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Failed downloads are accumulated, not raised immediately."""
+        mock_fetch.return_value = [
+            ("dem.zip", "https://example.com/dem.zip", 100),
+            ("Clay.zip", "https://example.com/Clay.zip", 200),
+        ]
+        mock_dl.side_effect = [DownloadError("fail"), True]
+        mock_unzip.return_value = True
+
+        summary = download_item("fake-id", tmp_path)
+
+        assert summary.failed == ["dem.zip"]
+        assert summary.downloaded == ["Clay.zip"]
+
+    @patch("hydro_param.gfv11._unzip_and_clean")
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_tracks_extraction_failures(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        mock_unzip: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Failed extractions are tracked in the summary."""
+        mock_fetch.return_value = [
+            ("dem.zip", "https://example.com/dem.zip", 100),
+        ]
+        mock_dl.return_value = True
+        mock_unzip.return_value = False  # extraction failed
+
+        summary = download_item("fake-id", tmp_path)
+
+        assert summary.downloaded == ["dem.zip"]
+        assert summary.extract_failed == ["dem.zip"]
 
 
 # ---------------------------------------------------------------------------
@@ -347,33 +490,55 @@ class TestDownloadGfv11:
 
     @patch("hydro_param.gfv11.download_item")
     def test_all_downloads_both_items(self, mock_di: MagicMock, tmp_path: Path) -> None:
-        download_gfv11(tmp_path, items="all")
+        mock_di.return_value = DownloadSummary()
+        summary = download_gfv11(tmp_path, items="all")
 
         assert mock_di.call_count == 2
         mock_di.assert_any_call(DATA_LAYERS_ITEM_ID, tmp_path)
         mock_di.assert_any_call(TGF_TOPO_ITEM_ID, tmp_path)
+        assert not summary.has_failures
 
     @patch("hydro_param.gfv11.download_item")
     def test_data_layers_only(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        mock_di.return_value = DownloadSummary()
         download_gfv11(tmp_path, items="data-layers")
 
         mock_di.assert_called_once_with(DATA_LAYERS_ITEM_ID, tmp_path)
 
     @patch("hydro_param.gfv11.download_item")
     def test_tgf_topo_only(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        mock_di.return_value = DownloadSummary()
         download_gfv11(tmp_path, items="tgf-topo")
 
         mock_di.assert_called_once_with(TGF_TOPO_ITEM_ID, tmp_path)
 
     @patch("hydro_param.gfv11.download_item")
     def test_default_is_all(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        mock_di.return_value = DownloadSummary()
         download_gfv11(tmp_path)
 
         assert mock_di.call_count == 2
 
     @patch("hydro_param.gfv11.download_item")
     def test_creates_output_dir(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        mock_di.return_value = DownloadSummary()
         new_dir = tmp_path / "nested" / "output"
         download_gfv11(new_dir)
 
         assert new_dir.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_raises_on_failures(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """DownloadError raised when any files failed."""
+        mock_di.return_value = DownloadSummary(failed=["dem.zip"])
+
+        with pytest.raises(DownloadError, match="1 download"):
+            download_gfv11(tmp_path, items="data-layers")
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_raises_on_extract_failures(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """DownloadError raised when extraction fails."""
+        mock_di.return_value = DownloadSummary(downloaded=["dem.zip"], extract_failed=["dem.zip"])
+
+        with pytest.raises(DownloadError, match="1 extraction"):
+            download_gfv11(tmp_path, items="data-layers")

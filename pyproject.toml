@@ -43,6 +43,7 @@ dependencies = [
     "cyclopts",
     "gdptools>=0.3.10",
     "pynhd>=0.19.4",
+    "requests",
 ]
 
 [project.scripts]
