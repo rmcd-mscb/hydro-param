@@ -8878,7 +8878,7 @@ packages:
 - pypi: ./
   name: hydro-param
   version: 0.1.0.dev0
-  sha256: 422d09ea32fc5357e321b519fc40eb4aab137e26e99578fdf127599b685e0c8c
+  sha256: 15f1c6ea037f12a64f8bde791a8767ea01d99b1070adbe63bfd8700f3a9caf87
   requires_dist:
   - xarray
   - geopandas
@@ -8893,6 +8893,7 @@ packages:
   - cyclopts
   - gdptools>=0.3.10
   - pynhd>=0.19.4
+  - requests
   - pytest ; extra == 'dev'
   - pytest-cov ; extra == 'dev'
   - ruff ; extra == 'dev'
