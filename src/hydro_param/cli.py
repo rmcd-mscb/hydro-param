@@ -934,10 +934,12 @@ def gfv11_download_cmd(
         )
         raise SystemExit(1)
 
-    from hydro_param.gfv11 import download_gfv11
+    from typing import cast
+
+    from hydro_param.gfv11 import GFv11Items, download_gfv11
 
     try:
-        download_gfv11(output_dir, items=items)
+        download_gfv11(output_dir, items=cast(GFv11Items, items))
     except Exception as exc:
         logger.exception("GFv1.1 download failed.")
         raise SystemExit(1) from exc

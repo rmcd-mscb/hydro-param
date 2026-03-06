@@ -32,9 +32,11 @@ import zipfile
 from pathlib import Path
 from typing import Literal
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
+
+GFv11Items = Literal["all", "data-layers", "tgf-topo"]
 
 # ---------------------------------------------------------------------------
 # ScienceBase item IDs
@@ -106,7 +108,8 @@ def fetch_item_files(item_id: str) -> list[tuple[str, str, int]]:
     Parameters
     ----------
     item_id : str
-        ScienceBase item identifier (e.g. ``"5ebb182b82ce25b5136181cf"``).
+        ScienceBase item identifier
+        (e.g. ``"5ebb182b82ce25b5136181cf"``).  # pragma: allowlist secret
 
     Returns
     -------
@@ -299,7 +302,7 @@ def download_item(item_id: str, output_dir: Path) -> None:
 def download_gfv11(
     output_dir: Path,
     *,
-    items: Literal["all", "data-layers", "tgf-topo"] = "all",
+    items: GFv11Items = "all",
 ) -> None:
     """Download GFv1.1 raster data from ScienceBase.
 
