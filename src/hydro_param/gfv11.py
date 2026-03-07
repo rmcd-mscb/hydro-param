@@ -31,6 +31,8 @@ References
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -369,9 +371,66 @@ def _unzip_and_clean(zip_path: Path, extract_dir: Path) -> bool:
         zip_path.unlink()
         logger.info("Extracted and removed %s", zip_path.name)
         return True
+    except NotImplementedError:
+        # Deflate64 and other compression methods unsupported by Python's
+        # zipfile module — fall back to the system ``unzip`` command.
+        return _unzip_with_system(zip_path, extract_dir)
     except (zipfile.BadZipFile, OSError) as exc:
         logger.error("Could not extract %s: %s — preserving zip", zip_path.name, exc)
         return False
+
+
+def _unzip_with_system(zip_path: Path, extract_dir: Path) -> bool:
+    """Extract a zip archive using the system ``unzip`` command.
+
+    Falls back to ``7z`` if ``unzip`` is not available.  Used when Python's
+    :mod:`zipfile` module cannot handle the archive's compression method
+    (e.g., Deflate64 / method 9).
+
+    Parameters
+    ----------
+    zip_path : Path
+        Path to the zip archive.
+    extract_dir : Path
+        Directory into which archive contents are extracted.
+
+    Returns
+    -------
+    bool
+        ``True`` if extraction succeeded, ``False`` otherwise.
+    """
+    unzip_bin = shutil.which("unzip")
+    if unzip_bin:
+        cmd = [unzip_bin, "-o", str(zip_path), "-d", str(extract_dir)]
+    else:
+        sevenz_bin = shutil.which("7z")
+        if sevenz_bin:
+            cmd = [sevenz_bin, "x", str(zip_path), f"-o{extract_dir}", "-y"]
+        else:
+            logger.error(
+                "Cannot extract %s: unsupported compression and neither "
+                "'unzip' nor '7z' found on PATH — preserving zip",
+                zip_path.name,
+            )
+            return False
+
+    logger.info(
+        "Falling back to system extractor for %s (unsupported compression)",
+        zip_path.name,
+    )
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "System extraction failed for %s: %s — preserving zip",
+            zip_path.name,
+            exc.stderr.decode(errors="replace").strip(),
+        )
+        return False
+
+    zip_path.unlink()
+    logger.info("Extracted and removed %s", zip_path.name)
+    return True
 
 
 # ---------------------------------------------------------------------------
