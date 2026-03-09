@@ -479,6 +479,95 @@ class TestDownloadItem:
         assert summary.downloaded == ["dem.zip"]
         assert summary.extract_failed == ["dem.zip"]
 
+    @patch("hydro_param.gfv11._unzip_and_clean")
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_creates_marker_after_successful_extraction(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        mock_unzip: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A .zip.done marker is created after successful zip extraction."""
+        mock_fetch.return_value = [
+            ("dem.zip", "https://example.com/dem.zip", 100),
+        ]
+        mock_dl.return_value = True
+        mock_unzip.return_value = True
+        # download_file is mocked, so create the parent directory manually
+        (tmp_path / "topo").mkdir(parents=True)
+
+        download_item("fake-id", tmp_path)
+
+        marker = tmp_path / "topo" / "dem.zip.done"
+        assert marker.exists()
+
+    @patch("hydro_param.gfv11._unzip_and_clean")
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_no_marker_after_failed_extraction(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        mock_unzip: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """No marker is created when zip extraction fails."""
+        mock_fetch.return_value = [
+            ("dem.zip", "https://example.com/dem.zip", 100),
+        ]
+        mock_dl.return_value = True
+        mock_unzip.return_value = False
+
+        download_item("fake-id", tmp_path)
+
+        marker = tmp_path / "topo" / "dem.zip.done"
+        assert not marker.exists()
+
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_skips_download_when_marker_exists(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Files with an existing .zip.done marker are skipped entirely."""
+        mock_fetch.return_value = [
+            ("dem.zip", "https://example.com/dem.zip", 100),
+        ]
+        # Create the marker file
+        marker_dir = tmp_path / "topo"
+        marker_dir.mkdir(parents=True)
+        (marker_dir / "dem.zip.done").touch()
+
+        summary = download_item("fake-id", tmp_path)
+
+        mock_dl.assert_not_called()
+        assert summary.skipped == ["dem.zip"]
+
+    @patch("hydro_param.gfv11._unzip_and_clean")
+    @patch("hydro_param.gfv11.download_file")
+    @patch("hydro_param.gfv11.fetch_item_files")
+    def test_no_marker_for_non_zip_files(
+        self,
+        mock_fetch: MagicMock,
+        mock_dl: MagicMock,
+        mock_unzip: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Non-zip files do not produce marker files."""
+        mock_fetch.return_value = [
+            ("CrossWalk.xlsx", "https://example.com/CrossWalk.xlsx", 50),
+        ]
+        mock_dl.return_value = True
+
+        download_item("fake-id", tmp_path)
+
+        # No .done marker for non-zip files
+        assert not (tmp_path / "metadata" / "CrossWalk.xlsx.done").exists()
+
 
 # ---------------------------------------------------------------------------
 # download_gfv11
