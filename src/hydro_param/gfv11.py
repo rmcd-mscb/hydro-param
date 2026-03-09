@@ -116,7 +116,7 @@ class DownloadSummary:
     downloaded : list[str]
         Filenames successfully downloaded.
     skipped : list[str]
-        Filenames skipped (already existed on disk).
+        Filenames skipped (already existed on disk or already extracted).
     failed : list[str]
         Filenames that failed after exhausting retries.
     extract_failed : list[str]
@@ -404,6 +404,9 @@ def download_item(item_id: str, output_dir: Path) -> DownloadSummary:
     Notes
     -----
     Existing files are not re-downloaded (see :func:`download_file`).
+    For zip archives, a ``.zip.done`` marker file is written after
+    successful extraction; on subsequent runs, files with an existing
+    marker are skipped without contacting the server.
     Download failures are accumulated and reported in the summary rather
     than stopping the entire batch.
     """
@@ -436,8 +439,15 @@ def download_item(item_id: str, output_dir: Path) -> DownloadSummary:
         if downloaded:
             summary.downloaded.append(name)
             if name.lower().endswith(".zip"):
+                assert marker is not None  # zip guard above guarantees this
                 if _unzip_and_clean(dest, dest.parent):
-                    marker.touch()  # type: ignore[union-attr]
+                    try:
+                        marker.touch()
+                    except OSError:
+                        logger.warning(
+                            "Could not write marker %s — file will be re-downloaded on next run",
+                            marker.name,
+                        )
                 else:
                     summary.extract_failed.append(name)
         else:
