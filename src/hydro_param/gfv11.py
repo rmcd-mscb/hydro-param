@@ -418,6 +418,15 @@ def download_item(item_id: str, output_dir: Path) -> DownloadSummary:
             continue
 
         dest = output_dir / subdir / name
+
+        # For zip files the archive is deleted after extraction, so check
+        # for a marker file that records successful extraction.
+        marker = dest.with_suffix(".zip.done") if name.lower().endswith(".zip") else None
+        if marker and marker.exists():
+            logger.info("Skipping %s (already extracted)", name)
+            summary.skipped.append(name)
+            continue
+
         try:
             downloaded = download_file(url, dest)
         except DownloadError:
@@ -427,7 +436,9 @@ def download_item(item_id: str, output_dir: Path) -> DownloadSummary:
         if downloaded:
             summary.downloaded.append(name)
             if name.lower().endswith(".zip"):
-                if not _unzip_and_clean(dest, dest.parent):
+                if _unzip_and_clean(dest, dest.parent):
+                    marker.touch()  # type: ignore[union-attr]
+                else:
                     summary.extract_failed.append(name)
         else:
             summary.skipped.append(name)
