@@ -1,0 +1,136 @@
+# GFv1.1 static parameter pipeline config — all 21 ScienceBase rasters
+# Produces a SIR with topographic, soils, land cover, and water body data
+# from the NHM Geospatial Fabric v1.1 pre-processed rasters.
+#
+# Prerequisites:
+#   hydro-param gfv11 download /path/to/gfv11/data
+#
+# Usage:
+#   hydro-param run configs/examples/gfv11_static_pipeline.yml
+#
+# NOTE: This config references DRB test fabric files that are not shipped
+# with the repository. Obtain fabric files via pynhd/pygeohydro or from
+# the USGS Geospatial Fabric before running.
+
+target_fabric:
+  path: data/pywatershed_gis/drb_2yr/nhru.gpkg
+  id_field: nhm_id
+
+datasets:
+  topography:
+    # GFv1.1 SRTM 30m DEM — elevation
+    - name: gfv11_dem
+      variables: [elevation]
+      statistics: [mean]
+
+    # GFv1.1 terrain slope (integer-encoded × 100, scale_factor applied by pipeline)
+    - name: gfv11_slope
+      variables: [slope]
+      statistics: [mean]
+
+    # GFv1.1 terrain aspect (integer-encoded × 100, scale_factor applied by pipeline)
+    - name: gfv11_aspect
+      variables: [aspect]
+      statistics: [mean]
+
+    # GFv1.1 topographic wetness index (integer-encoded × 100, scale_factor applied)
+    - name: gfv11_twi
+      variables: [twi]
+      statistics: [mean]
+
+    # GFv1.1 D8 flow direction — categorical majority
+    - name: gfv11_fdr
+      variables: [flow_dir]
+      statistics: [majority]
+
+  soils:
+    # GFv1.1 SoilGrids250m sand percentage
+    - name: gfv11_sand
+      variables: [sand_pct]
+      statistics: [mean]
+
+    # GFv1.1 SoilGrids250m silt percentage
+    - name: gfv11_silt
+      variables: [silt_pct]
+      statistics: [mean]
+
+    # GFv1.1 SoilGrids250m clay percentage
+    - name: gfv11_clay
+      variables: [clay_pct]
+      statistics: [mean]
+
+    # GFv1.1 SoilGrids250m available water capacity
+    - name: gfv11_awc
+      variables: [awc]
+      statistics: [mean]
+
+    # GFv1.1 PRMS soil texture class (categorical)
+    - name: gfv11_text_prms
+      variables: [soil_type]
+      statistics: [majority]
+
+  land_cover:
+    # GFv1.1 NALCMS 2015 → PRMS cover type (categorical)
+    - name: gfv11_lulc
+      variables: [cov_type]
+      statistics: [majority]
+
+    # GFv1.1 GMIS impervious surface percentage
+    - name: gfv11_imperv
+      variables: [imperv_pct]
+      statistics: [mean]
+
+    # GFv1.1 MODIS tree canopy cover percentage
+    - name: gfv11_cnpy
+      variables: [canopy_pct]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed summer cover density
+    - name: gfv11_covden_sum
+      variables: [covden_sum]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed winter cover density
+    - name: gfv11_covden_win
+      variables: [covden_win]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed seasonal cover density loss
+    - name: gfv11_covden_loss
+      variables: [covden_loss]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed summer rain interception
+    - name: gfv11_srain
+      variables: [srain_intcp]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed winter rain interception
+    - name: gfv11_wrain
+      variables: [wrain_intcp]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed snow interception
+    - name: gfv11_snow_intcp
+      variables: [snow_intcp]
+      statistics: [mean]
+
+    # GFv1.1 pre-computed root depth
+    - name: gfv11_root_depth
+      variables: [root_depth]
+      statistics: [mean]
+
+  water_bodies:
+    # GFv1.1 NHD HR waterbody mask (categorical)
+    - name: gfv11_wbg
+      variables: [waterbody]
+      statistics: [majority]
+
+output:
+  path: output
+  format: netcdf
+  sir_name: gfv11_static_sir
+
+processing:
+  batch_size: 240
+  resume: true

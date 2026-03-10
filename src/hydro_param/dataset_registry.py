@@ -92,8 +92,8 @@ class VariableSpec(BaseModel):
         Multiplicative scale factor for integer-encoded rasters (e.g.,
         ``0.01`` for values stored as ``value × 100``).  Follows
         CF-conventions ``scale_factor`` semantics.  When ``None``, no
-        scaling is needed.  The pipeline passes this through as metadata;
-        consumers apply it.
+        scaling is applied.  The pipeline applies this factor after
+        zonal statistics so the SIR contains physically meaningful values.
     """
 
     name: str
@@ -105,6 +105,14 @@ class VariableSpec(BaseModel):
     asset_key: str | None = None
     source_override: str | None = None
     scale_factor: float | None = None
+
+    @field_validator("scale_factor")
+    @classmethod
+    def _nonzero_scale(cls, v: float | None) -> float | None:
+        if v is not None and v == 0.0:
+            msg = "scale_factor must not be zero (would destroy all data)"
+            raise ValueError(msg)
+        return v
 
 
 class DerivedVariableSpec(BaseModel):

@@ -672,6 +672,15 @@ def _process_batch(
                 categorical=var_spec.categorical,
                 band=var_spec.band,
             )
+            # Apply scale factor (same logic as general pathway)
+            if var_spec.scale_factor is not None and not var_spec.categorical:
+                numeric_cols = df.select_dtypes(include="number").columns
+                df[numeric_cols] = df[numeric_cols] * var_spec.scale_factor
+                logger.info(
+                    "Applied scale_factor %.4f to %s",
+                    var_spec.scale_factor,
+                    var_spec.name,
+                )
             results[var_spec.name] = df
         return results
 
@@ -780,6 +789,21 @@ def _process_batch(
             x_coord=entry.x_coord,
             y_coord=entry.y_coord,
         )
+
+        # Apply scale factor for integer-encoded rasters (e.g., slope × 100)
+        if (
+            isinstance(var_spec, VariableSpec)
+            and var_spec.scale_factor is not None
+            and not var_spec.categorical
+        ):
+            numeric_cols = df.select_dtypes(include="number").columns
+            df[numeric_cols] = df[numeric_cols] * var_spec.scale_factor
+            logger.info(
+                "Applied scale_factor %.4f to %s",
+                var_spec.scale_factor,
+                var_spec.name,
+            )
+
         results[var_spec.name] = df
 
         # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical

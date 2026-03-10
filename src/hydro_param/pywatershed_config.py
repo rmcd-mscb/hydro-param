@@ -140,7 +140,7 @@ class SoilsDatasets(BaseModel):
 
 
 class LandcoverDatasets(BaseModel):
-    """Land cover parameters derived from NLCD.
+    """Land cover parameters for vegetation type, density, and interception.
 
     Parameters
     ----------
@@ -150,6 +150,16 @@ class LandcoverDatasets(BaseModel):
         Vegetation cover type.
     hru_percent_imperv : ParameterEntry or None
         Impervious surface fraction.
+    covden_sum : ParameterEntry or None
+        Summer vegetation cover density (0--1 fraction).
+    covden_win : ParameterEntry or None
+        Winter vegetation cover density (0--1 fraction).
+    srain_intcp : ParameterEntry or None
+        Summer rain interception storage capacity (inches).
+    wrain_intcp : ParameterEntry or None
+        Winter rain interception storage capacity (inches).
+    snow_intcp : ParameterEntry or None
+        Snow interception storage capacity (inches).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -157,6 +167,11 @@ class LandcoverDatasets(BaseModel):
     available: list[str] = Field(default_factory=list)
     cov_type: ParameterEntry | None = None
     hru_percent_imperv: ParameterEntry | None = None
+    covden_sum: ParameterEntry | None = None
+    covden_win: ParameterEntry | None = None
+    srain_intcp: ParameterEntry | None = None
+    wrain_intcp: ParameterEntry | None = None
+    snow_intcp: ParameterEntry | None = None
 
 
 class SnowDatasets(BaseModel):
