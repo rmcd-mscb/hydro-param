@@ -799,9 +799,14 @@ class TestDownloadGfv11:
     def test_raises_on_extract_failures(self, mock_di: MagicMock, tmp_path: Path) -> None:
         """DownloadError raised when extraction fails."""
         mock_di.return_value = DownloadSummary(downloaded=["dem.zip"], extract_failed=["dem.zip"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
 
         with pytest.raises(DownloadError, match="1 extraction"):
-            download_gfv11(tmp_path, items="data-layers")
+            download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        # Overlay must NOT be written when there are failures, even if some
+        # files were successfully downloaded.
+        assert not overlay_path.exists()
 
 
 # ---------------------------------------------------------------------------
