@@ -1,9 +1,11 @@
-# GFv1.1 static parameter pipeline config — all 21 ScienceBase rasters
-# Produces a SIR with topographic, soils, land cover, and water body data
-# from the NHM Geospatial Fabric v1.1 pre-processed rasters.
+# GFv1.1 static parameter pipeline config
+# Produces a SIR with topographic, soils, land cover, and water body data.
+# Topography uses 3DEP 1 arc-second (~30m), comparable to GFv1.1 SRTM;
+# soils, land cover, and water bodies use GFv1.1 ScienceBase rasters.
 #
-# Prerequisites:
+# Prerequisites (soils, land cover, water bodies):
 #   hydro-param gfv11 download /path/to/gfv11/data
+# Topography (3DEP) is fetched live via Planetary Computer STAC.
 #
 # Usage:
 #   hydro-param run configs/examples/gfv11_static_pipeline.yml
@@ -18,30 +20,10 @@ target_fabric:
 
 datasets:
   topography:
-    # GFv1.1 SRTM 30m DEM — elevation
-    - name: gfv11_dem
-      variables: [elevation]
+    # 3DEP 1 arc-second (~30m) DEM — comparable resolution to GFv1.1 SRTM
+    - name: dem_3dep_30m
+      variables: [elevation, slope, aspect]
       statistics: [mean]
-
-    # GFv1.1 terrain slope (integer-encoded × 100, scale_factor applied by pipeline)
-    - name: gfv11_slope
-      variables: [slope]
-      statistics: [mean]
-
-    # GFv1.1 terrain aspect (integer-encoded × 100, scale_factor applied by pipeline)
-    - name: gfv11_aspect
-      variables: [aspect]
-      statistics: [mean]
-
-    # GFv1.1 topographic wetness index (integer-encoded × 100, scale_factor applied)
-    - name: gfv11_twi
-      variables: [twi]
-      statistics: [mean]
-
-    # GFv1.1 D8 flow direction — categorical majority
-    - name: gfv11_fdr
-      variables: [flow_dir]
-      statistics: [majority]
 
   soils:
     # GFv1.1 SoilGrids250m sand percentage
