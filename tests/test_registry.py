@@ -1014,3 +1014,82 @@ class TestDerivedCategoricalParsing:
         spec = registry.resolve_variable("test", "soil_texture")
         assert isinstance(spec, DerivedCategoricalSpec)
         assert spec.sources == ["sand", "silt", "clay"]
+
+
+# ---------------------------------------------------------------------------
+# Registry overlay loading
+# ---------------------------------------------------------------------------
+
+
+class TestRegistryOverlay:
+    """Tests for user-local registry overlay loading."""
+
+    def test_load_registry_with_overlay_dir(self, tmp_path: Path) -> None:
+        """Overlay entries appear in merged registry."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        overlay_yaml = {
+            "datasets": {
+                "gfv11_sand": {
+                    "description": "GFv1.1 sand",
+                    "strategy": "local_tiff",
+                    "source": str(tmp_path / "Sand.tif"),
+                    "crs": "EPSG:5070",
+                    "category": "soils",
+                    "variables": [
+                        {"name": "sand_pct", "band": 1, "units": "%"},
+                    ],
+                }
+            }
+        }
+        (overlay_dir / "gfv11.yml").write_text(yaml.dump(overlay_yaml))
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "gfv11_sand" in registry.datasets
+        assert registry.get("gfv11_sand").source == str(tmp_path / "Sand.tif")
+        # Bundled entries still present
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_overlay_replaces_bundled_on_collision(self, tmp_path: Path) -> None:
+        """User-local entry replaces bundled entry with same name."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        overlay_yaml = {
+            "datasets": {
+                "dem_3dep_10m": {
+                    "description": "OVERRIDDEN DEM",
+                    "strategy": "local_tiff",
+                    "source": str(tmp_path / "dem.tif"),
+                    "crs": "EPSG:5070",
+                    "category": "topography",
+                    "variables": [
+                        {"name": "elevation", "band": 1, "units": "m"},
+                    ],
+                }
+            }
+        }
+        (overlay_dir / "override.yml").write_text(yaml.dump(overlay_yaml))
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert registry.get("dem_3dep_10m").description == "OVERRIDDEN DEM"
+
+    def test_overlay_dir_missing_is_ignored(self) -> None:
+        """Non-existent overlay dir is silently skipped."""
+        registry = load_registry(
+            DEFAULT_REGISTRY,
+            overlay_dirs=[Path("/nonexistent/overlay")],
+        )
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_overlay_empty_dir_is_ignored(self, tmp_path: Path) -> None:
+        """Empty overlay dir is silently skipped."""
+        overlay_dir = tmp_path / "empty_overlay"
+        overlay_dir.mkdir()
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_no_overlay_dirs_backward_compatible(self) -> None:
+        """Calling without overlay_dirs works as before."""
+        registry = load_registry(DEFAULT_REGISTRY)
+        assert "dem_3dep_10m" in registry.datasets
