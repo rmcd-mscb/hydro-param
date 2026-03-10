@@ -146,7 +146,7 @@ def datasets_list(*, registry: Path | None = None) -> None:
         cat = entry.category or "uncategorized"
         by_category.setdefault(cat, []).append((name, entry))
 
-    print("  Format: [strategy | years | access]")
+    print("  Format: [strategy | years | access | variables]")
     for category, entries in sorted(by_category.items()):
         print(f"\n{category.replace('_', ' ').title()}:")
         for name, entry in sorted(entries):
@@ -154,7 +154,13 @@ def datasets_list(*, registry: Path | None = None) -> None:
             status = _access_status(entry)
             yr = f"{entry.year_range[0]}-{entry.year_range[1]}" if entry.year_range else "\u2014"
             temporal = f", {entry.time_step}" if entry.temporal and entry.time_step else ""
-            print(f"  {name:<20s} {desc:<50s} [{entry.strategy} | {yr} | {status}{temporal}]")
+            var_names = [v.name for v in (entry.variables or [])]
+            var_names += [v.name for v in (entry.derived_variables or [])]
+            var_list = ", ".join(var_names) if var_names else "\u2014"
+            print(
+                f"  {name:<20s} {desc:<50s} "
+                f"[{entry.strategy} | {yr} | {status}{temporal} | {var_list}]"
+            )
 
 
 # ---------------------------------------------------------------------------

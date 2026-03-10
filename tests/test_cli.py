@@ -148,11 +148,11 @@ def test_datasets_list_header(registry_yaml: Path, capsys: pytest.CaptureFixture
     """datasets list prints a format legend header."""
     _run("datasets", "list", "--registry", str(registry_yaml))
     out = capsys.readouterr().out
-    assert "Format: [strategy | years | access]" in out
+    assert "Format: [strategy | years | access | variables]" in out
 
 
 def test_datasets_list_consistent_brackets(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
-    """Every dataset line uses [strategy | years | access] format."""
+    """Every dataset line uses [strategy | years | access | variables] format."""
     _run("datasets", "list", "--registry", str(registry_yaml))
     out = capsys.readouterr().out
     import re
@@ -162,7 +162,18 @@ def test_datasets_list_consistent_brackets(registry_yaml: Path, capsys: pytest.C
     data_lines = [line for line in bracket_lines if "Format:" not in line]
     assert len(data_lines) > 0
     for line in data_lines:
+        # Expect 4 pipe-separated fields: strategy | years | access | variables
+        assert line.count("|") >= 3, f"Expected 4 fields: {line}"
         assert re.search(r"\[\w+ \| .+ \| \w+", line), f"Bad format: {line}"
+
+
+def test_datasets_list_shows_variables(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
+    """datasets list shows variable names for each dataset."""
+    _run("datasets", "list", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    assert "elevation" in out  # dem_test variable
+    assert "land_cover" in out  # nlcd_single variable
+    assert "SWE" in out  # temporal_ds variable
 
 
 def test_datasets_list_shows_strategy(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
