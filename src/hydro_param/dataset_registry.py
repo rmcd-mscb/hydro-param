@@ -25,11 +25,14 @@ hydro_param.data_access : Functions that use registry entries to fetch data.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class VariableSpec(BaseModel):
@@ -66,6 +69,12 @@ class VariableSpec(BaseModel):
     source_override : str or None
         Per-variable source path or URL override (e.g., individual POLARIS
         VRT files).  When ``None``, uses the dataset-level ``source``.
+    scale_factor : float or None
+        Multiplicative scale factor for integer-encoded rasters (e.g.,
+        ``0.01`` for values stored as ``value × 100``).  Follows
+        CF-conventions ``scale_factor`` semantics.  When ``None``, no
+        scaling is needed.  The pipeline passes this through as metadata;
+        consumers apply it.
     """
 
     name: str
@@ -76,6 +85,7 @@ class VariableSpec(BaseModel):
     categorical: bool = False
     asset_key: str | None = None
     source_override: str | None = None
+    scale_factor: float | None = None
 
 
 class DerivedVariableSpec(BaseModel):
@@ -545,20 +555,34 @@ def get_all_dataset_names(registry: DatasetRegistry) -> set[str]:
     return set(registry.datasets.keys())
 
 
-def load_registry(path: str | Path) -> DatasetRegistry:
-    """Load a dataset registry from a YAML file or directory of YAML files.
+def load_registry(
+    path: str | Path,
+    *,
+    overlay_dirs: list[Path] | None = None,
+) -> DatasetRegistry:
+    """Load a dataset registry from YAML file(s), with optional overlays.
 
     When ``path`` is a directory, all ``*.yml`` and ``*.yaml`` files are
     loaded and merged into a single registry.  Dataset names must be
     unique across all files -- duplicates raise ``ValueError``.
 
+    Overlay directories (e.g., ``~/.hydro-param/datasets/``) are scanned
+    after the primary registry.  Overlay entries are merged into the
+    result; on name collision, the overlay entry replaces the primary
+    entry (no partial merge).  Non-existent or empty overlay directories
+    are silently skipped.
+
     Parameters
     ----------
     path : str or pathlib.Path
         Path to a single registry YAML file, or a directory containing
-        per-category YAML files (e.g., the bundled ``hydro_param.data.datasets``).  Each
-        file must have a top-level ``datasets:`` key mapping dataset
-        names to entries.
+        per-category YAML files (e.g., the bundled
+        ``hydro_param.data.datasets``).  Each file must have a top-level
+        ``datasets:`` key mapping dataset names to entries.
+    overlay_dirs : list[Path] or None
+        Optional list of directories containing user-local registry
+        overlays.  Each directory is scanned for ``*.yml``/``*.yaml``
+        files.  Later directories take precedence over earlier ones.
 
     Returns
     -------
@@ -571,8 +595,9 @@ def load_registry(path: str | Path) -> DatasetRegistry:
         If ``path`` does not exist, is neither file nor directory, or
         the directory contains no YAML files with datasets.
     ValueError
-        If a dataset name appears in more than one YAML file within a
-        directory.
+        If a dataset name appears in more than one YAML file within
+        the *primary* registry directory.  Overlay collisions with the
+        primary registry are resolved silently (overlay wins).
 
     Examples
     --------
@@ -584,10 +609,16 @@ def load_registry(path: str | Path) -> DatasetRegistry:
     if not path.exists():
         raise FileNotFoundError(f"Registry path does not exist: {path}")
     if path.is_file():
-        return _load_registry_file(path)
-    if path.is_dir():
-        return _load_registry_dir(path)
-    raise FileNotFoundError(f"Registry path is neither a file nor directory: {path}")
+        registry = _load_registry_file(path)
+    elif path.is_dir():
+        registry = _load_registry_dir(path)
+    else:
+        raise FileNotFoundError(f"Registry path is neither a file nor directory: {path}")
+
+    if overlay_dirs:
+        registry = _merge_overlays(registry, overlay_dirs)
+
+    return registry
 
 
 def _load_registry_file(path: Path) -> DatasetRegistry:
@@ -651,4 +682,71 @@ def _load_registry_dir(directory: Path) -> DatasetRegistry:
     if not merged:
         raise FileNotFoundError(f"No datasets found in any YAML file in: {directory}")
 
+    return DatasetRegistry(datasets=merged)
+
+
+def _merge_overlays(base: DatasetRegistry, overlay_dirs: list[Path]) -> DatasetRegistry:
+    """Merge user-local overlay datasets into a base registry.
+
+    Scan each overlay directory for YAML files and merge their datasets
+    into *base*.  Overlay entries replace base entries on name collision
+    (no partial merge).  Non-existent or empty directories are silently
+    skipped.
+
+    Parameters
+    ----------
+    base : DatasetRegistry
+        The primary (bundled) registry.
+    overlay_dirs : list[Path]
+        Directories to scan for overlay YAML files.  Later directories
+        take precedence over earlier ones.
+
+    Returns
+    -------
+    DatasetRegistry
+        A new registry with overlay entries merged in.
+    """
+    merged = dict(base.datasets)
+    for overlay_dir in overlay_dirs:
+        if not overlay_dir.is_dir():
+            logger.debug("Overlay directory does not exist, skipping: %s", overlay_dir)
+            continue
+        yaml_files = sorted(list(overlay_dir.glob("*.yml")) + list(overlay_dir.glob("*.yaml")))
+        if not yaml_files:
+            logger.debug("No YAML files in overlay directory: %s", overlay_dir)
+            continue
+        for yaml_file in yaml_files:
+            try:
+                with open(yaml_file) as f:
+                    raw = yaml.safe_load(f)
+            except yaml.YAMLError as exc:
+                logger.warning("Could not parse overlay YAML, skipping: %s\n%s", yaml_file, exc)
+                continue
+            if raw is None:
+                logger.warning("Overlay file is empty, skipping: %s", yaml_file)
+                continue
+            if "datasets" not in raw:
+                logger.warning(
+                    "Overlay file has no 'datasets' key (found keys: %s), skipping: %s",
+                    list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
+                    yaml_file,
+                )
+                continue
+            try:
+                partial = DatasetRegistry(**raw)
+            except ValidationError as exc:
+                logger.warning(
+                    "Overlay file has invalid entries, skipping: %s\n%s",
+                    yaml_file,
+                    exc,
+                )
+                continue
+            for name, entry in partial.datasets.items():
+                if name in merged:
+                    logger.info(
+                        "Overlay dataset '%s' (from %s) replaces existing entry",
+                        name,
+                        yaml_file.name,
+                    )
+                merged[name] = entry
     return DatasetRegistry(datasets=merged)

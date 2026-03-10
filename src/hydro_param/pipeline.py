@@ -85,6 +85,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REGISTRY = Path(str(_pkg_files("hydro_param").joinpath("data/datasets")))
 
+USER_REGISTRY_DIR = Path.home() / ".hydro-param" / "datasets"
+"""User-local registry overlay directory (~/.hydro-param/datasets/).
+
+YAML files in this directory extend the bundled dataset registry.
+Overlay entries replace bundled entries on name collision.
+"""
+
 
 @dataclass
 class Stage4Results:
@@ -1714,7 +1721,7 @@ def run_pipeline(
     config = load_config(config_path)
     if registry_path is None:
         registry_path = DEFAULT_REGISTRY
-    registry = load_registry(registry_path)
+    registry = load_registry(registry_path, overlay_dirs=[USER_REGISTRY_DIR])
 
     return run_pipeline_from_config(config, registry)
 

@@ -7,10 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from hydro_param.gfv11 import (
     DATA_LAYERS_ITEM_ID,
     FILE_DIRECTORY_MAP,
+    GFV11_DATASETS,
     SB_API_URL,
     TGF_TOPO_ITEM_ID,
     DownloadError,
@@ -20,6 +22,7 @@ from hydro_param.gfv11 import (
     download_gfv11,
     download_item,
     fetch_item_files,
+    write_registry_overlay,
 )
 
 # ---------------------------------------------------------------------------
@@ -76,6 +79,85 @@ class TestConstants:
     def test_land_cover_files_count(self) -> None:
         lc = [k for k, v in FILE_DIRECTORY_MAP.items() if v == "land_cover"]
         assert len(lc) == 10
+
+
+# ---------------------------------------------------------------------------
+# GFV11_DATASETS metadata
+# ---------------------------------------------------------------------------
+
+
+class TestGfv11Datasets:
+    """Verify GFV11_DATASETS metadata dict is complete and well-formed."""
+
+    def test_total_count(self) -> None:
+        """All 21 GFv1.1 rasters are registered."""
+        assert len(GFV11_DATASETS) == 21
+
+    def test_required_keys(self) -> None:
+        """Every entry has the required metadata keys."""
+        required = {"description", "category", "filename", "subdir", "variables"}
+        for name, meta in GFV11_DATASETS.items():
+            assert required.issubset(meta.keys()), f"{name} missing keys: {required - meta.keys()}"
+
+    def test_valid_categories(self) -> None:
+        """All categories are from the expected set."""
+        valid = {"soils", "land_cover", "water_bodies", "topography"}
+        for name, meta in GFV11_DATASETS.items():
+            assert meta["category"] in valid, f"{name} has unexpected category: {meta['category']}"
+
+    def test_category_counts(self) -> None:
+        """Category counts match the expected distribution."""
+        cats = [m["category"] for m in GFV11_DATASETS.values()]
+        assert cats.count("soils") == 5
+        assert cats.count("land_cover") == 10
+        assert cats.count("water_bodies") == 1
+        assert cats.count("topography") == 5
+
+    def test_variables_nonempty(self) -> None:
+        """Every dataset has at least one variable."""
+        for name, meta in GFV11_DATASETS.items():
+            assert len(meta["variables"]) >= 1, f"{name} has no variables"
+
+    def test_variable_required_fields(self) -> None:
+        """Every variable has the required fields."""
+        required = {"name", "band", "units", "long_name", "native_name", "categorical"}
+        for name, meta in GFV11_DATASETS.items():
+            for var in meta["variables"]:
+                assert required.issubset(var.keys()), (
+                    f"{name}/{var.get('name', '?')} missing: {required - var.keys()}"
+                )
+
+    def test_filenames_in_file_directory_map(self) -> None:
+        """Every filename maps to an entry in FILE_DIRECTORY_MAP."""
+        for name, meta in GFV11_DATASETS.items():
+            # Zip filename: replace .tif with .zip
+            zip_name = meta["filename"].replace(".tif", ".zip")
+            assert zip_name in FILE_DIRECTORY_MAP, f"{name}: {zip_name} not in FILE_DIRECTORY_MAP"
+
+    def test_scale_factor_on_encoded_rasters(self) -> None:
+        """Integer-encoded rasters (slope, aspect, twi) have scale_factor=0.01."""
+        encoded = {"gfv11_slope", "gfv11_aspect", "gfv11_twi"}
+        for name in encoded:
+            var = GFV11_DATASETS[name]["variables"][0]
+            assert var.get("scale_factor") == 0.01, f"{name} missing scale_factor=0.01"
+
+    def test_no_scale_factor_on_other_rasters(self) -> None:
+        """Non-encoded rasters do not have scale_factor."""
+        encoded = {"gfv11_slope", "gfv11_aspect", "gfv11_twi"}
+        for name, meta in GFV11_DATASETS.items():
+            if name not in encoded:
+                var = meta["variables"][0]
+                assert "scale_factor" not in var, f"{name} should not have scale_factor"
+
+    def test_categorical_datasets(self) -> None:
+        """Categorical flag is set on the correct datasets."""
+        expected_categorical = {"gfv11_text_prms", "gfv11_lulc", "gfv11_wbg", "gfv11_fdr"}
+        for name, meta in GFV11_DATASETS.items():
+            is_cat = meta["variables"][0]["categorical"]
+            if name in expected_categorical:
+                assert is_cat, f"{name} should be categorical"
+            else:
+                assert not is_cat, f"{name} should not be categorical"
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +656,95 @@ class TestDownloadItem:
 # ---------------------------------------------------------------------------
 
 
+class TestWriteRegistryOverlay:
+    """Tests for auto-registration of GFv1.1 datasets."""
+
+    def test_writes_valid_yaml(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        assert overlay_path.exists()
+        raw = yaml.safe_load(overlay_path.read_text())
+        assert "datasets" in raw
+        assert len(raw["datasets"]) == 21
+
+    def test_source_paths_are_absolute(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        for name, entry in raw["datasets"].items():
+            source = entry.get("source", "")
+            assert Path(source).is_absolute(), f"{name}: source is not absolute: {source}"
+
+    def test_source_paths_match_subdir_structure(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        sand = raw["datasets"]["gfv11_sand"]
+        expected = str(data_dir.resolve() / "soils" / "Sand.tif")
+        assert sand["source"] == expected
+
+    def test_all_entries_have_strategy_local_tiff(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        for name, entry in raw["datasets"].items():
+            assert entry["strategy"] == "local_tiff", f"{name}: strategy != local_tiff"
+
+    def test_entries_parseable_as_dataset_entries(self, tmp_path: Path) -> None:
+        """Generated YAML can be loaded by the registry loader."""
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        from hydro_param.dataset_registry import load_registry
+
+        registry = load_registry(overlay_path)
+        assert len(registry.datasets) == 21
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "nested" / "dir" / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        assert overlay_path.exists()
+
+    def test_scale_factor_preserved_in_yaml(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        slope_vars = raw["datasets"]["gfv11_slope"]["variables"]
+        assert slope_vars[0]["scale_factor"] == 0.01
+
+
+# ---------------------------------------------------------------------------
+# download_gfv11
+# ---------------------------------------------------------------------------
+
+
 class TestDownloadGfv11:
     """Tests for download_gfv11() dispatch logic."""
 
@@ -631,3 +802,102 @@ class TestDownloadGfv11:
 
         with pytest.raises(DownloadError, match="1 extraction"):
             download_gfv11(tmp_path, items="data-layers")
+
+
+# ---------------------------------------------------------------------------
+# Auto-registration after download
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadGfv11AutoRegistration:
+    """Tests for auto-registration after download."""
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_writes_overlay_after_successful_download(
+        self, mock_di: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_writes_overlay_when_all_skipped(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """Overlay is written even when all files were already downloaded."""
+        mock_di.return_value = DownloadSummary(skipped=["Sand.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_no_overlay_on_total_failure(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """No overlay written when all downloads fail."""
+        mock_di.return_value = DownloadSummary(failed=["Sand.tif"], extract_failed=["Clay.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        with pytest.raises(DownloadError):
+            download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert not overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_no_overlay_when_nothing_happened(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """No overlay when downloaded and skipped are both empty."""
+        mock_di.return_value = DownloadSummary()
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert not overlay_path.exists()
+
+    @patch("hydro_param.gfv11.write_registry_overlay")
+    @patch("hydro_param.gfv11.download_item")
+    def test_overlay_write_failure_does_not_crash_download(
+        self, mock_di: MagicMock, mock_write: MagicMock, tmp_path: Path
+    ) -> None:
+        """Overlay write failure logs warning but returns summary."""
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        mock_write.side_effect = OSError("Permission denied")
+
+        summary = download_gfv11(tmp_path, items="data-layers")
+
+        assert summary.downloaded == ["Sand.tif"]
+        assert not summary.has_failures
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration
+# ---------------------------------------------------------------------------
+
+
+class TestGfv11EndToEnd:
+    """Integration test: download -> register -> load."""
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_download_then_load_registry(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """Downloaded datasets are visible through registry overlay."""
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        overlay_dir = tmp_path / "overlay"
+        overlay_path = overlay_dir / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        from hydro_param.dataset_registry import load_registry
+        from hydro_param.pipeline import DEFAULT_REGISTRY
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+
+        # GFv1.1 datasets present
+        assert "gfv11_sand" in registry.datasets
+        assert "gfv11_slope" in registry.datasets
+        # Bundled datasets still present
+        assert "dem_3dep_10m" in registry.datasets
+        # Source path is resolved
+        sand = registry.get("gfv11_sand")
+        assert sand.source is not None
+        assert "soils" in sand.source
+        assert "Sand.tif" in sand.source

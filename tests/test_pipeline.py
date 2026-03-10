@@ -2614,3 +2614,15 @@ def test_process_batch_derived_categorical_missing_source(tmp_path: Path) -> Non
     # Only DerivedCategoricalSpec in var_specs, no source GeoTIFFs on disk
     with pytest.raises(FileNotFoundError, match="missing source GeoTIFFs"):
         _process_batch(fabric, entry, ds_req, [dc_spec], config, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# USER_REGISTRY_DIR constant
+# ---------------------------------------------------------------------------
+
+
+def test_user_registry_dir_constant() -> None:
+    """USER_REGISTRY_DIR points to expected path."""
+    from hydro_param.pipeline import USER_REGISTRY_DIR
+
+    assert USER_REGISTRY_DIR == Path.home() / ".hydro-param" / "datasets"
