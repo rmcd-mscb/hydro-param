@@ -65,9 +65,11 @@ def config_yaml(tmp_path: Path, fabric_gpkg: Path) -> Path:
             "id_field": "featureid",
         },
         "domain": {"type": "bbox", "bbox": [-1.0, -1.0, 3.0, 3.0]},
-        "datasets": [
-            {"name": "dem_test", "variables": ["elevation", "slope"], "statistics": ["mean"]},
-        ],
+        "datasets": {
+            "topography": [
+                {"name": "dem_test", "variables": ["elevation", "slope"], "statistics": ["mean"]},
+            ],
+        },
         "output": {
             "path": str(tmp_path / "output"),
             "format": "netcdf",
@@ -131,7 +133,7 @@ def test_stage1_missing_fabric_raises(tmp_path: Path):
 
     cfg_dict = {
         "target_fabric": {"path": str(tmp_path / "nonexistent.gpkg"), "id_field": "fid"},
-        "datasets": [],
+        "datasets": {},
         "output": {"path": str(tmp_path / "output")},
     }
     config = PipelineConfig(**cfg_dict)
@@ -157,7 +159,7 @@ def test_stage1_bbox_filter_clips_fabric(tmp_path: Path):
     raw = {
         "target_fabric": {"path": str(gpkg_path), "id_field": "featureid"},
         "domain": {"type": "bbox", "bbox": [-0.5, -0.5, 2.5, 1.5]},
-        "datasets": [],
+        "datasets": {},
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(raw))
@@ -181,7 +183,7 @@ def test_stage1_bbox_filter_empty_raises(tmp_path: Path):
     raw = {
         "target_fabric": {"path": str(gpkg_path), "id_field": "featureid"},
         "domain": {"type": "bbox", "bbox": [50.0, 50.0, 51.0, 51.0]},
-        "datasets": [],
+        "datasets": {},
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(raw))
@@ -204,7 +206,7 @@ def test_stage1_rejects_missing_id_field(config_yaml: Path, tmp_path: Path):
     raw = {
         "target_fabric": {"path": str(bad_gpkg), "id_field": "featureid"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [],
+        "datasets": {},
     }
     cfg_path = tmp_path / "bad_config.yml"
     cfg_path.write_text(yaml.dump(raw))
@@ -248,9 +250,11 @@ def test_stage2_applies_source_override(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
-        ],
+        "datasets": {
+            "land_cover": [
+                {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -280,9 +284,11 @@ def test_stage2_source_override_does_not_mutate_registry(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
-        ],
+        "datasets": {
+            "land_cover": [
+                {"name": "nlcd_2021", "source": "/user/override.tif", "variables": ["land_cover"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -312,9 +318,11 @@ def test_stage2_missing_source_for_local_tiff_raises(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "nlcd_2021", "variables": ["land_cover"]},
-        ],
+        "datasets": {
+            "land_cover": [
+                {"name": "nlcd_2021", "variables": ["land_cover"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -492,7 +500,7 @@ def test_write_temporal_file_netcdf(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output"), "format": "netcdf"},
     )
 
@@ -512,7 +520,7 @@ def test_write_temporal_file_parquet(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output"), "format": "parquet"},
     )
 
@@ -540,7 +548,7 @@ def test_resolve_bbox_unsupported_type():
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "id"},
         domain={"type": "huc2", "id": "02"},
-        datasets=[],
+        datasets={},
     )
     with pytest.raises(NotImplementedError, match="not yet supported"):
         resolve_bbox(config)
@@ -550,7 +558,7 @@ def test_resolve_bbox_no_domain():
     """resolve_bbox raises ValueError when domain is None."""
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "id"},
-        datasets=[],
+        datasets={},
     )
     assert config.domain is None
     with pytest.raises(ValueError, match="No domain configured"):
@@ -679,7 +687,7 @@ def test_process_batch_nhgf_stac_dispatch(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"majority": [11, 21]}, index=["a", "b"])
@@ -718,7 +726,7 @@ def test_process_batch_nhgf_stac_rejects_derived(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(NotImplementedError, match="Derived variables not supported"):
@@ -749,7 +757,7 @@ def test_process_batch_nhgf_stac_passes_year(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"majority": [11]}, index=["a"])
@@ -783,7 +791,7 @@ def test_process_batch_nhgf_stac_year_none(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"majority": [11]}, index=["a"])
@@ -822,7 +830,7 @@ def test_process_batch_nhgf_stac_passes_statistics(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"mean": [0.5], "median": [0.4]}, index=["a"])
@@ -856,7 +864,7 @@ def test_process_batch_temporal_nhgf_stac_raises(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(NotImplementedError, match="Temporal nhgf_stac"):
@@ -961,9 +969,11 @@ def test_temporal_requires_time_period(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "snodas", "variables": ["SWE"]},  # no time_period
-        ],
+        "datasets": {
+            "climate": [
+                {"name": "snodas", "variables": ["SWE"]},  # no time_period
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1000,13 +1010,15 @@ def test_time_period_outside_year_range(tmp_path: Path):
 
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
-        "datasets": [
-            {
-                "name": "snodas",
-                "variables": ["SWE"],
-                "time_period": ["1980-01-01", "2025-12-31"],
-            },
-        ],
+        "datasets": {
+            "climate": [
+                {
+                    "name": "snodas",
+                    "variables": ["SWE"],
+                    "time_period": ["1980-01-01", "2025-12-31"],
+                },
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1038,13 +1050,15 @@ def test_time_period_end_outside_year_range(tmp_path: Path):
 
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
-        "datasets": [
-            {
-                "name": "snodas",
-                "variables": ["SWE"],
-                "time_period": ["2020-01-01", "2030-12-31"],
-            },
-        ],
+        "datasets": {
+            "climate": [
+                {
+                    "name": "snodas",
+                    "variables": ["SWE"],
+                    "time_period": ["2020-01-01", "2030-12-31"],
+                },
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1076,13 +1090,15 @@ def test_year_outside_year_range(tmp_path: Path):
 
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
-        "datasets": [
-            {
-                "name": "nlcd",
-                "variables": ["LndCov"],
-                "year": [1980, 2021],
-            },
-        ],
+        "datasets": {
+            "land_cover": [
+                {
+                    "name": "nlcd",
+                    "variables": ["LndCov"],
+                    "year": [1980, 2021],
+                },
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1114,13 +1130,15 @@ def test_no_year_range_skips_validation(tmp_path: Path):
 
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
-        "datasets": [
-            {
-                "name": "snodas",
-                "variables": ["SWE"],
-                "time_period": ["1900-01-01", "2099-12-31"],
-            },
-        ],
+        "datasets": {
+            "climate": [
+                {
+                    "name": "snodas",
+                    "variables": ["SWE"],
+                    "time_period": ["1900-01-01", "2099-12-31"],
+                },
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1153,13 +1171,15 @@ def test_time_period_within_range_passes(tmp_path: Path):
 
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
-        "datasets": [
-            {
-                "name": "snodas",
-                "variables": ["SWE"],
-                "time_period": ["2020-01-01", "2021-12-31"],
-            },
-        ],
+        "datasets": {
+            "climate": [
+                {
+                    "name": "snodas",
+                    "variables": ["SWE"],
+                    "time_period": ["2020-01-01", "2021-12-31"],
+                },
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1202,7 +1222,7 @@ def test_process_temporal_nhgf_stac_dispatch(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0, 2.0]])})
@@ -1249,7 +1269,7 @@ def test_process_temporal_climr_cat_dispatch(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_ds = xr.Dataset({"pr": (["time", "hru_id"], [[1.0, 2.0]])})
@@ -1292,7 +1312,7 @@ def test_process_temporal_rejects_derived():
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(NotImplementedError, match="Derived variables not supported"):
@@ -1328,7 +1348,7 @@ def test_process_temporal_unsupported_strategy():
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(NotImplementedError, match="Temporal processing not supported"):
@@ -1398,7 +1418,7 @@ def test_stage4_multi_year_produces_suffixed_keys(tmp_path: Path, fake_gpkg: Pat
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
     )
 
@@ -1445,7 +1465,7 @@ def test_stage4_single_year_produces_suffixed_key(tmp_path: Path, fake_gpkg: Pat
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
     )
 
@@ -1487,7 +1507,7 @@ def test_stage4_no_year_produces_unsuffixed_key(tmp_path: Path, fake_gpkg: Path)
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
     )
 
@@ -1526,7 +1546,7 @@ def test_stage4_duplicate_var_key_raises(tmp_path: Path, fake_gpkg: Path):
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
     )
 
@@ -1572,7 +1592,7 @@ def test_process_temporal_empty_statistics_raises():
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(ValueError, match="no statistics specified"):
@@ -1610,7 +1630,7 @@ def test_process_temporal_multi_statistics_warns(caplog: pytest.LogCaptureFixtur
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     mock_ds = xr.Dataset({"SWE": (["time", "hru_id"], [[1.0]])})
@@ -1665,9 +1685,11 @@ def test_stage2_allows_local_tiff_with_per_variable_sources(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "polaris_30m", "variables": ["sand", "clay"], "statistics": ["mean"]},
-        ],
+        "datasets": {
+            "soils": [
+                {"name": "polaris_30m", "variables": ["sand", "clay"], "statistics": ["mean"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1704,9 +1726,11 @@ def test_stage2_rejects_local_tiff_mixed_sources(tmp_path: Path):
     cfg_raw = {
         "target_fabric": {"path": "test.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {"name": "polaris_30m", "variables": ["sand", "theta_r"]},
-        ],
+        "datasets": {
+            "soils": [
+                {"name": "polaris_30m", "variables": ["sand", "theta_r"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "config.yml"
     cfg_path.write_text(yaml.dump(cfg_raw))
@@ -1739,7 +1763,7 @@ def test_process_batch_local_tiff_passes_variable_source(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"mean": [50.0, 60.0]}, index=["a", "b"])
@@ -1793,7 +1817,7 @@ def test_process_batch_stac_cog_passes_asset_key(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"mean": [1.0, 2.0]}, index=["a", "b"])
@@ -1847,7 +1871,7 @@ def test_process_batch_stac_cog_no_asset_key_passes_none(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
     )
 
     mock_df = pd.DataFrame({"mean": [100.0, 200.0]}, index=["a", "b"])
@@ -1925,7 +1949,7 @@ def test_stage4_resume_skips_completed_dataset(tmp_path: Path, fake_gpkg: Path):
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
-        datasets=[],
+        datasets={},
         output={"path": str(output_dir)},
         processing={"resume": True},
     )
@@ -1988,7 +2012,7 @@ def test_stage4_resume_reprocesses_on_config_change(tmp_path: Path, fake_gpkg: P
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(output_dir)},
         processing={"resume": True},
     )
@@ -2046,7 +2070,7 @@ def test_stage4_resume_disabled_by_default(tmp_path: Path, fake_gpkg: Path):
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
     )
 
@@ -2098,7 +2122,7 @@ def test_stage4_resume_reprocesses_on_fabric_change(tmp_path: Path, fake_gpkg: P
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
         output={"path": str(output_dir)},
         processing={"resume": True},
     )
@@ -2155,7 +2179,7 @@ def test_stage4_always_writes_manifest(tmp_path: Path, fake_gpkg: Path) -> None:
 
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
         processing={"resume": False},
     )
@@ -2210,7 +2234,7 @@ def test_stage4_resume_false_does_not_skip(tmp_path: Path, fake_gpkg: Path) -> N
 
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
-        datasets=[],
+        datasets={},
         output={"path": str(output_dir)},
         processing={"resume": False},
     )
@@ -2431,15 +2455,17 @@ def test_process_batch_releases_source_cache(tmp_path: Path):
     config_raw = {
         "target_fabric": {"path": "dummy.gpkg", "id_field": "nhm_id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 2, 2]},
-        "datasets": [
-            {"name": "test_ds", "variables": ["var_a", "var_b"], "statistics": ["mean"]},
-        ],
+        "datasets": {
+            "topography": [
+                {"name": "test_ds", "variables": ["var_a", "var_b"], "statistics": ["mean"]},
+            ],
+        },
     }
     cfg_path = tmp_path / "cfg.yml"
     cfg_path.write_text(yaml.dump(config_raw))
     config = load_config(cfg_path)
 
-    ds_req = config.datasets[0]
+    ds_req = config.flatten_datasets()[0]
 
     var_specs: list = [
         VariableSpec(name="var_a", band=1, units="cm", categorical=False, asset_key="var_a"),
@@ -2473,7 +2499,7 @@ def test_run_pipeline_sets_gdal_http_timeout(tmp_path: Path, fake_gpkg: Path) ->
 
     config = PipelineConfig(
         target_fabric={"path": str(fake_gpkg), "id_field": "hru_id"},
-        datasets=[],
+        datasets={},
         output={"path": str(tmp_path / "output")},
         processing={"network_timeout": 300},
     )
@@ -2546,13 +2572,15 @@ def test_stage2_auto_includes_derived_categorical_sources() -> None:
     # User requests only soil_texture and ksat — sand/silt/clay should be auto-included
     config = PipelineConfig(
         target_fabric={"path": "/tmp/test.gpkg", "id_field": "nhm_id"},
-        datasets=[
-            DatasetRequest(
-                name="test_ds",
-                variables=["soil_texture", "ksat"],
-                statistics=["mean"],
-            )
-        ],
+        datasets={
+            "soils": [
+                DatasetRequest(
+                    name="test_ds",
+                    variables=["soil_texture", "ksat"],
+                    statistics=["mean"],
+                )
+            ],
+        },
         output={"path": "/tmp/out"},
     )
 
@@ -2601,7 +2629,7 @@ def test_process_batch_derived_categorical_missing_source(tmp_path: Path) -> Non
     )
     config = PipelineConfig(
         target_fabric={"path": "/tmp/test.gpkg", "id_field": "nhm_id"},
-        datasets=[ds_req],
+        datasets={"soils": [ds_req]},
         output={"path": "/tmp/out"},
     )
 

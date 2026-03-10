@@ -426,9 +426,10 @@ def stage2_resolve_datasets(
         If a dataset name is not found in the registry (raised by
         ``registry.get()``).
     """
-    logger.info("Stage 2: Resolving %d datasets from registry", len(config.datasets))
+    flat_datasets = config.flatten_datasets()
+    logger.info("Stage 2: Resolving %d datasets from registry", len(flat_datasets))
     resolved = []
-    for ds_req in config.datasets:
+    for ds_req in flat_datasets:
         entry = registry.get(ds_req.name)
 
         # Apply pipeline config source override
@@ -1591,7 +1592,7 @@ def run_pipeline_from_config(
     )
     logger.info(
         "  Datasets: %d, Engine: %s, Batch size: %d",
-        len(config.datasets),
+        len(config.flatten_datasets()),
         config.processing.engine,
         config.processing.batch_size,
     )
