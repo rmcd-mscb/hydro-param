@@ -2864,7 +2864,7 @@ class TestGfv11Config:
         assert config.target_fabric.id_field == "nhm_id"
 
         total_datasets = sum(len(ds) for ds in config.datasets.values())
-        assert total_datasets == 21
+        assert total_datasets == 17
 
     def test_gfv11_static_pywatershed_loads(self) -> None:
         """Load gfv11_static_pywatershed.yml and verify structure."""

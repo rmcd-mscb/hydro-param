@@ -43,3 +43,45 @@ datasets:
         method: horn
         units: "unitless"
         long_name: "Cosine of terrain aspect"
+
+  dem_3dep_30m:
+    description: "USGS 3DEP Seamless DEM, 1 arc-second (~30m)"
+    strategy: stac_cog
+    catalog_url: "https://planetarycomputer.microsoft.com/api/stac/v1"
+    collection: "3dep-seamless"
+    asset_key: "data"
+    gsd: 30
+    crs: "EPSG:4326"
+    x_coord: "x"
+    y_coord: "y"
+    sign: planetary_computer
+    category: topography
+    temporal: false
+    variables:
+      - name: elevation
+        band: 1
+        units: "m"
+        long_name: "Surface elevation above NAVD88"
+        native_name: "elevation"
+        categorical: false
+    derived_variables:
+      - name: slope
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain slope"
+      - name: aspect
+        source: elevation
+        method: horn
+        units: "degrees"
+        long_name: "Terrain aspect (clockwise from north)"
+      - name: sin_aspect
+        source: elevation
+        method: horn
+        units: "unitless"
+        long_name: "Sine of terrain aspect"
+      - name: cos_aspect
+        source: elevation
+        method: horn
+        units: "unitless"
+        long_name: "Cosine of terrain aspect"
