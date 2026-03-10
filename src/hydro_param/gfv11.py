@@ -965,6 +965,9 @@ def download_gfv11(
         raise DownloadError(
             f"{len(combined.failed)} download(s) and "
             f"{len(combined.extract_failed)} extraction(s) failed. "
+            f"Successfully downloaded files are in {output_dir} but were NOT "
+            f"registered. Re-run the download to retry failed files, or call "
+            f"write_registry_overlay() manually after resolving failures. "
             f"See log output above for details."
         )
 

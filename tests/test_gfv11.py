@@ -804,6 +804,10 @@ class TestDownloadGfv11:
         with pytest.raises(DownloadError, match="1 extraction"):
             download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
 
+        # Overlay must NOT be written when there are failures, even if some
+        # files were successfully downloaded.
+        assert not overlay_path.exists()
+
 
 # ---------------------------------------------------------------------------
 # Auto-registration after download
