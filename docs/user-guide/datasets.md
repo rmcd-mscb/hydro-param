@@ -8,7 +8,7 @@ by category.
 | Category | Description |
 |---|---|
 | topography | DEM, slope, aspect |
-| land_cover | NLCD legacy epochs, NLCD annual products |
+| land_cover | NLCD via NHGF STAC (land cover, impervious, change) |
 | soils | POLARIS, gSSURGO |
 | climate | gridMET, Daymet |
 | hydrography | NHDPlus |

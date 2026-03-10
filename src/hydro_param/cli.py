@@ -306,7 +306,7 @@ def datasets_download(
     ----------
     name
         Dataset name as it appears in the registry (e.g.,
-        ``"polaris_30m"``, ``"nlcd_osn_lndcov"``).
+        ``"polaris_30m"``).
     dest
         Destination directory for downloaded files.  When omitted inside
         an initialised project, files are routed to ``data/<category>/``

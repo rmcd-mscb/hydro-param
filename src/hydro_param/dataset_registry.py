@@ -219,7 +219,7 @@ class DownloadFile(BaseModel):
 class DownloadInfo(BaseModel):
     """Describe download provenance for datasets requiring local staging.
 
-    Some datasets (e.g., POLARIS soil data, NLCD legacy GeoTIFFs) cannot be
+    Some datasets (e.g., POLARIS soil data, GFv1.1 rasters) cannot be
     accessed through STAC or OPeNDAP and must be downloaded to local disk
     before processing.  ``DownloadInfo`` records where to get the data,
     how large it is, and whether requester-pays access is needed.
@@ -345,7 +345,7 @@ class DatasetEntry(BaseModel):
     The ``strategy`` field determines which data access pathway is used:
 
     - ``"stac_cog"`` -- STAC COG via Planetary Computer (3DEP, gNATSGO).
-    - ``"local_tiff"`` -- local GeoTIFF files (POLARIS, NLCD legacy).
+    - ``"local_tiff"`` -- local GeoTIFF files (POLARIS, GFv1.1).
     - ``"nhgf_stac"`` -- NHGF STAC catalog (NLCD Annual on OSN).
     - ``"climr_cat"`` -- ClimateR-Catalog via OPeNDAP (gridMET).
     - ``"native_zarr"`` / ``"converted_zarr"`` -- Zarr stores (planned).
