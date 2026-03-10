@@ -78,6 +78,14 @@ class DerivationContext:
     config : dict
         Plugin-specific configuration dict passed through from the pipeline
         YAML.
+    precomputed : dict[str, dict[str, str]] or None
+        Declared pre-computed parameters from the consumer config.  Each key
+        is a PRMS parameter name (e.g., ``"covden_sum"``); the value is a
+        dict with at least ``"source"`` (dataset name) and ``"variable"``
+        (SIR variable name) entries.  When a derivation step finds a matching
+        entry here AND the variable exists in the SIR, it uses the
+        pre-computed value instead of deriving from scratch.  When ``None``,
+        all parameters are derived normally.
     lookup_tables_dir : pathlib.Path or None
         Override path to lookup table YAML files.  When ``None``, defaults
         to the package-bundled tables under ``hydro_param/data/pywatershed/lookup_tables/``
@@ -107,6 +115,7 @@ class DerivationContext:
     fabric_id_field: str = "nhm_id"
     segment_id_field: str | None = None
     config: dict = field(default_factory=dict)
+    precomputed: dict[str, dict[str, str]] | None = None
     lookup_tables_dir: Path | None = None
 
     def __post_init__(self) -> None:

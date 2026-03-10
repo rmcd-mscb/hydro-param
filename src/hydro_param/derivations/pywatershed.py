@@ -352,6 +352,122 @@ class PywatershedDerivation:
     def __init__(self) -> None:
         self._lookup_cache: dict[str, dict] = {}
 
+    @staticmethod
+    def _try_precomputed(
+        ctx: DerivationContext,
+        param_name: str,
+        *,
+        categorical: bool = False,
+    ) -> np.ndarray | None:
+        """Load a pre-computed parameter from the SIR if declared.
+
+        Check whether ``ctx.precomputed`` declares a pre-computed source
+        for ``param_name``.  If so, resolve the SIR variable name from
+        the declaration and load it.  For categorical parameters, load
+        the full dataset and extract the majority class via argmax.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context with ``precomputed`` map and ``sir``.
+        param_name : str
+            PRMS parameter name (e.g., ``"covden_sum"``).
+        categorical : bool
+            If ``True``, the SIR variable is a categorical fraction file
+            and the majority class index is extracted via argmax.
+
+        Returns
+        -------
+        np.ndarray or None
+            Pre-computed values if found and loaded, ``None`` otherwise.
+
+        Notes
+        -----
+        Logs at INFO level when a pre-computed value is used, and at
+        DEBUG level when no declaration is found or the SIR variable
+        is missing.
+        """
+        if ctx.precomputed is None or param_name not in ctx.precomputed:
+            return None
+
+        decl = ctx.precomputed[param_name]
+        sir_var = decl["variable"]
+        source = decl["source"]
+        sir = ctx.sir
+
+        if categorical:
+            # Categorical fraction file: load full dataset, extract majority.
+            # Try "{var}_frac" first (SIR convention), then "{var}" as-is.
+            frac_key = sir.find_variable(f"{sir_var}_frac")
+            if frac_key is None:
+                frac_key = sir.find_variable(sir_var)
+            if frac_key is None:
+                logger.debug(
+                    "Pre-computed '%s' declared (source=%s) but '%s_frac' "
+                    "not found in SIR; falling back to derivation.",
+                    param_name,
+                    source,
+                    sir_var,
+                )
+                return None
+            frac_ds = sir.load_dataset(frac_key)
+            # Fraction columns end with _<digit> (e.g. cov_type_frac_0).
+            # Exclude _count columns and the bare anchor key.
+            frac_cols = sorted(str(v) for v in frac_ds.data_vars if re.search(r"_\d+$", str(v)))
+            if len(frac_cols) < 2:
+                logger.debug(
+                    "Pre-computed '%s': fraction file has < 2 class columns; "
+                    "falling back to derivation.",
+                    param_name,
+                )
+                return None
+            # Extract class indices from column names (e.g., "soil_type_frac_1" → 1)
+            class_indices: list[int] = []
+            for col in frac_cols:
+                parts = str(col).rsplit("_", 1)
+                try:
+                    class_indices.append(int(parts[-1]))
+                except (ValueError, IndexError):
+                    class_indices.append(0)
+            fractions = np.column_stack([frac_ds[col].values for col in frac_cols])
+            majority_pos = np.argmax(fractions, axis=1)
+            result = np.array([class_indices[i] for i in majority_pos])
+            logger.info(
+                "Using pre-computed '%s' from %s (categorical majority, %d classes)",
+                param_name,
+                source,
+                len(frac_cols),
+            )
+            return result
+
+        # Continuous variable: try multiple SIR name patterns
+        candidates = [sir_var]
+        # Also try common SIR naming conventions
+        stat = decl.get("statistic", "mean")
+        if f"_{stat}" not in sir_var:
+            candidates.append(f"{sir_var}_{stat}")
+
+        for candidate in candidates:
+            found = sir.find_variable(candidate)
+            if found is not None:
+                values = sir[found].values
+                logger.info(
+                    "Using pre-computed '%s' from %s (SIR variable: %s)",
+                    param_name,
+                    source,
+                    found,
+                )
+                return values
+
+        logger.debug(
+            "Pre-computed '%s' declared (source=%s, variable=%s) but "
+            "not found in SIR; falling back to derivation.",
+            param_name,
+            source,
+            sir_var,
+        )
+        return None
+
     def derive(self, context: DerivationContext) -> xr.Dataset:
         """Derive all pywatershed parameters from the SIR.
 
@@ -1943,28 +2059,27 @@ class PywatershedDerivation:
         _compute_grouped_majority : Group fractions by target category.
         """
         sir = ctx.sir
-        nlcd_table = self._load_lookup_table(
-            "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
-        )
-        mapping: dict[int, int] = nlcd_table["mapping"]
 
-        # Try categorical fractions first (e.g., LndCov_11, LndCov_21, ...)
-        # Group fractions by cov_type BEFORE argmax so that multiple NLCD
-        # classes mapping to the same cov_type (e.g., 41+42+43 → forest)
-        # contribute their combined fraction instead of competing individually.
-        cov_type: np.ndarray | None = None
-        extracted = self._extract_nlcd_fractions(sir, valid_codes=self._VALID_NLCD_CLASSES)
+        # --- cov_type: try pre-computed first, then NLCD derivation ---
+        cov_type: np.ndarray | None = self._try_precomputed(ctx, "cov_type", categorical=True)
 
-        if extracted is not None:
-            class_codes, fractions_list = extracted
-            cov_type = self._compute_grouped_majority(class_codes, fractions_list, mapping)
-        else:
-            # Fallback to single majority value
-            for candidate in ("land_cover", "land_cover_majority"):
-                if candidate in sir:
-                    nlcd_values_lc = sir[candidate].values.astype(int)
-                    cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
-                    break
+        if cov_type is None:
+            # NLCD derivation path
+            nlcd_table = self._load_lookup_table(
+                "nlcd_to_prms_cov_type", ctx.resolved_lookup_tables_dir
+            )
+            mapping: dict[int, int] = nlcd_table["mapping"]
+
+            extracted = self._extract_nlcd_fractions(sir, valid_codes=self._VALID_NLCD_CLASSES)
+            if extracted is not None:
+                class_codes, fractions_list = extracted
+                cov_type = self._compute_grouped_majority(class_codes, fractions_list, mapping)
+            else:
+                for candidate in ("land_cover", "land_cover_majority"):
+                    if candidate in sir:
+                        nlcd_values_lc = sir[candidate].values.astype(int)
+                        cov_type = np.array([mapping.get(int(v), 0) for v in nlcd_values_lc])
+                        break
 
         if cov_type is not None:
             ds["cov_type"] = xr.DataArray(
@@ -1973,32 +2088,56 @@ class PywatershedDerivation:
                 attrs={"units": "integer", "long_name": "Vegetation cover type"},
             )
 
-        canopy_key = sir.find_variable("tree_canopy_pct_mean")
-        if canopy_key is not None:
-            # Continuous canopy cover (0-100%) -> fraction (0-1)
+        # --- covden_sum: try pre-computed, then canopy %, then lookup ---
+        covden_sum = self._try_precomputed(ctx, "covden_sum")
+        if covden_sum is not None:
             ds["covden_sum"] = xr.DataArray(
-                np.clip(sir[canopy_key].values / 100.0, 0.0, 1.0),
+                np.clip(covden_sum, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
             )
-        elif "cov_type" in ds:
-            # Fallback: simple lookup-based canopy density
-            _covden_lookup = {0: 0.0, 1: 0.3, 2: 0.4, 3: 0.7, 4: 0.8}
-            covden = np.array([_covden_lookup.get(int(v), 0.3) for v in ds["cov_type"].values])
-            ds["covden_sum"] = xr.DataArray(
-                covden,
-                dims="nhru",
-                attrs={"units": "decimal_fraction", "long_name": "Summer vegetation cover density"},
-            )
+        else:
+            canopy_key = sir.find_variable("tree_canopy_pct_mean")
+            if canopy_key is not None:
+                ds["covden_sum"] = xr.DataArray(
+                    np.clip(sir[canopy_key].values / 100.0, 0.0, 1.0),
+                    dims="nhru",
+                    attrs={
+                        "units": "decimal_fraction",
+                        "long_name": "Summer vegetation cover density",
+                    },
+                )
+            elif "cov_type" in ds:
+                _covden_lookup = {0: 0.0, 1: 0.3, 2: 0.4, 3: 0.7, 4: 0.8}
+                covden = np.array([_covden_lookup.get(int(v), 0.3) for v in ds["cov_type"].values])
+                ds["covden_sum"] = xr.DataArray(
+                    covden,
+                    dims="nhru",
+                    attrs={
+                        "units": "decimal_fraction",
+                        "long_name": "Summer vegetation cover density",
+                    },
+                )
 
-        fctimp_key = sir.find_variable("fctimp_pct_mean")
-        if fctimp_key is not None:
-            # Percent (0-100) -> fraction (0-1)
+        # --- hru_percent_imperv: try pre-computed, then NLCD imperviousness ---
+        imperv = self._try_precomputed(ctx, "hru_percent_imperv")
+        if imperv is not None:
+            # Pre-computed may be 0-100% or 0-1 fraction; normalize
+            if np.nanmax(imperv) > 1.0:
+                imperv = imperv / 100.0
             ds["hru_percent_imperv"] = xr.DataArray(
-                np.clip(sir[fctimp_key].values / 100.0, 0.0, 1.0),
+                np.clip(imperv, 0.0, 1.0),
                 dims="nhru",
                 attrs={"units": "decimal_fraction", "long_name": "HRU impervious fraction"},
             )
+        else:
+            fctimp_key = sir.find_variable("fctimp_pct_mean")
+            if fctimp_key is not None:
+                ds["hru_percent_imperv"] = xr.DataArray(
+                    np.clip(sir[fctimp_key].values / 100.0, 0.0, 1.0),
+                    dims="nhru",
+                    attrs={"units": "decimal_fraction", "long_name": "HRU impervious fraction"},
+                )
 
         return ds
 
@@ -2307,8 +2446,10 @@ class PywatershedDerivation:
         """
         sir = ctx.sir
 
-        # --- soil_type ---
-        soil_type = self._compute_soil_type(sir, ctx)
+        # --- soil_type: try pre-computed first, then texture derivation ---
+        soil_type = self._try_precomputed(ctx, "soil_type", categorical=True)
+        if soil_type is None:
+            soil_type = self._compute_soil_type(sir, ctx)
         if soil_type is not None:
             ds["soil_type"] = xr.DataArray(
                 soil_type,
@@ -2851,30 +2992,63 @@ class PywatershedDerivation:
 
         tables_dir = ctx.resolved_lookup_tables_dir
         cov_type_vals = ds["cov_type"].values.astype(int)
+        nhru = len(cov_type_vals)
 
-        # Interception capacities
-        intcp_table = self._load_lookup_table("cov_type_to_interception", tables_dir)
-        columns = intcp_table["columns"]  # [srain_intcp, wrain_intcp, snow_intcp]
-        mapping = intcp_table["mapping"]
+        # --- Interception capacities: try pre-computed, then lookup ---
+        intcp_params = ("srain_intcp", "wrain_intcp", "snow_intcp")
+        precomputed_intcp = {name: self._try_precomputed(ctx, name) for name in intcp_params}
+        any_missing = any(v is None for v in precomputed_intcp.values())
 
-        for i, col_name in enumerate(columns):
-            values = np.array([mapping.get(int(ct), [0.0, 0.0, 0.0])[i] for ct in cov_type_vals])
-            ds[col_name] = xr.DataArray(
-                values,
-                dims="nhru",
-                attrs={"units": "inches", "long_name": f"{col_name.replace('_', ' ').title()}"},
-            )
+        if any_missing:
+            # Need lookup table for at least one interception param
+            intcp_table = self._load_lookup_table("cov_type_to_interception", tables_dir)
+            columns = intcp_table["columns"]
+            mapping_intcp = intcp_table["mapping"]
+
+        for i, col_name in enumerate(intcp_params):
+            if precomputed_intcp[col_name] is not None:
+                ds[col_name] = xr.DataArray(
+                    precomputed_intcp[col_name],
+                    dims="nhru",
+                    attrs={
+                        "units": "inches",
+                        "long_name": f"{col_name.replace('_', ' ').title()}",
+                    },
+                )
+            elif any_missing:
+                # Derive from cov_type lookup
+                col_idx = columns.index(col_name) if col_name in columns else i
+                values = np.array(
+                    [mapping_intcp.get(int(ct), [0.0, 0.0, 0.0])[col_idx] for ct in cov_type_vals]
+                )
+                ds[col_name] = xr.DataArray(
+                    values,
+                    dims="nhru",
+                    attrs={
+                        "units": "inches",
+                        "long_name": f"{col_name.replace('_', ' ').title()}",
+                    },
+                )
 
         # Imperv storage max (uniform default)
-        nhru = len(cov_type_vals)
         ds["imperv_stor_max"] = xr.DataArray(
             np.full(nhru, _IMPERV_STOR_MAX_DEFAULT),
             dims="nhru",
             attrs={"units": "inches", "long_name": "Maximum impervious retention storage"},
         )
 
-        # Winter cover density
-        if "covden_sum" in ds:
+        # --- Winter cover density: try pre-computed, then reduction factor ---
+        covden_win = self._try_precomputed(ctx, "covden_win")
+        if covden_win is not None:
+            ds["covden_win"] = xr.DataArray(
+                np.clip(covden_win, 0.0, 1.0),
+                dims="nhru",
+                attrs={
+                    "units": "decimal_fraction",
+                    "long_name": "Winter vegetation cover density",
+                },
+            )
+        elif "covden_sum" in ds:
             winter_table = self._load_lookup_table("cov_type_winter_reduction", tables_dir)
             winter_mapping = winter_table["mapping"]
             reduction = np.array([winter_mapping.get(int(ct), 0.5) for ct in cov_type_vals])

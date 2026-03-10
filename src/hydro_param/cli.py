@@ -45,7 +45,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from cyclopts import App
 
@@ -53,6 +53,9 @@ from hydro_param.config import load_config
 from hydro_param.dataset_registry import DatasetEntry, DatasetRegistry, load_registry
 from hydro_param.pipeline import DEFAULT_REGISTRY, run_pipeline_from_config
 from hydro_param.project import find_project_root, init_project
+
+if TYPE_CHECKING:
+    from hydro_param.pywatershed_config import PywatershedRunConfig
 
 logger = logging.getLogger(__name__)
 
@@ -575,6 +578,48 @@ def init_cmd(
 # ---------------------------------------------------------------------------
 
 
+def _build_precomputed_map(
+    pws_config: PywatershedRunConfig,
+) -> dict[str, dict[str, str]]:
+    """Build a precomputed parameter map from config static_datasets entries.
+
+    Walk the ``static_datasets`` categories and collect entries whose
+    ``source`` references a pipeline dataset and whose ``variable`` names
+    a SIR variable.  The derivation plugin uses this map to load
+    pre-computed values from the SIR instead of deriving them.
+
+    Parameters
+    ----------
+    pws_config : PywatershedRunConfig
+        Parsed pywatershed configuration.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Mapping from PRMS parameter name to ``{"source": ..., "variable": ...}``.
+        Empty dict if no pre-computed entries are declared.
+    """
+    result: dict[str, dict[str, str]] = {}
+    for category in (
+        pws_config.static_datasets.topography,
+        pws_config.static_datasets.soils,
+        pws_config.static_datasets.landcover,
+        pws_config.static_datasets.snow,
+        pws_config.static_datasets.waterbodies,
+    ):
+        for field_name in type(category).model_fields:
+            if field_name == "available":
+                continue
+            entry = getattr(category, field_name)
+            if entry is not None and entry.source and entry.variable:
+                result[field_name] = {
+                    "source": entry.source,
+                    "variable": entry.variable,
+                    "statistic": entry.statistic or "mean",
+                }
+    return result
+
+
 @pws_app.command(name="run")
 def pws_run_cmd(config: Path) -> None:
     """Generate a complete pywatershed model setup from existing SIR output.
@@ -761,6 +806,12 @@ def pws_run_cmd(config: Path) -> None:
                 "values": pws_config.parameter_overrides.values,
             }
 
+        # Build precomputed map from static_datasets declared entries.
+        # This tells the derivation plugin which parameters have pre-computed
+        # SIR values (e.g., GFv1.1 rasters) that should be used directly
+        # instead of being derived from source datasets.
+        precomputed = _build_precomputed_map(pws_config)
+
         ctx = DerivationContext(
             sir=sir,
             fabric=fabric,
@@ -769,6 +820,7 @@ def pws_run_cmd(config: Path) -> None:
             fabric_id_field=pws_config.domain.id_field,
             segment_id_field=pws_config.domain.segment_id_field,
             config=derivation_config,
+            precomputed=precomputed or None,
             temporal=temporal,
         )
 

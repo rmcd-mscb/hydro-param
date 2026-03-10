@@ -4583,3 +4583,212 @@ class TestParamDimsConsistency:
 
         missing = (set(_DEFAULTS) - _DEFAULTS_SPECIAL) - set(_PARAM_DIMS)
         assert not missing, f"_DEFAULTS keys missing from _PARAM_DIMS: {sorted(missing)}"
+
+
+class TestPrecomputedPassthrough:
+    """Tests for pre-computed parameter pass-through from SIR."""
+
+    def test_precomputed_covden_sum(self, derivation: PywatershedDerivation) -> None:
+        """covden_sum loaded from SIR when declared in precomputed."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "covden_sum_fraction_mean": ("nhm_id", np.array([0.85, 0.42, 0.91])),
+                    "_dummy": ("nhm_id", np.array([0.0, 0.0, 0.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        precomputed = {
+            "covden_sum": {
+                "source": "gfv11_covden_sum",
+                "variable": "covden_sum_fraction_mean",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "covden_sum" in ds
+        np.testing.assert_allclose(ds["covden_sum"].values, [0.85, 0.42, 0.91])
+
+    def test_precomputed_imperv(self, derivation: PywatershedDerivation) -> None:
+        """hru_percent_imperv loaded from SIR (percent → fraction)."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "imperv_pct_pct_mean": ("nhm_id", np.array([5.0, 30.0])),
+                    "_dummy": ("nhm_id", np.array([0.0, 0.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "hru_percent_imperv": {
+                "source": "gfv11_imperv",
+                "variable": "imperv_pct_pct_mean",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "hru_percent_imperv" in ds
+        np.testing.assert_allclose(ds["hru_percent_imperv"].values, [0.05, 0.30])
+
+    def test_precomputed_interception(self, derivation: PywatershedDerivation) -> None:
+        """srain_intcp, wrain_intcp, snow_intcp from pre-computed SIR."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                    "srain_intcp_inches_mean": ("nhm_id", np.array([0.04, 0.01])),
+                    "wrain_intcp_inches_mean": ("nhm_id", np.array([0.03, 0.005])),
+                    "snow_intcp_inches_mean": ("nhm_id", np.array([0.05, 0.02])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "srain_intcp": {
+                "source": "gfv11_srain",
+                "variable": "srain_intcp_inches_mean",
+                "statistic": "mean",
+            },
+            "wrain_intcp": {
+                "source": "gfv11_wrain",
+                "variable": "wrain_intcp_inches_mean",
+                "statistic": "mean",
+            },
+            "snow_intcp": {
+                "source": "gfv11_snow_intcp",
+                "variable": "snow_intcp_inches_mean",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        # Step 4 to get cov_type, then step 8
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "cov_type" in ds
+        ds = derivation._apply_lookup_tables(ctx, ds)
+        np.testing.assert_allclose(ds["srain_intcp"].values, [0.04, 0.01])
+        np.testing.assert_allclose(ds["wrain_intcp"].values, [0.03, 0.005])
+        np.testing.assert_allclose(ds["snow_intcp"].values, [0.05, 0.02])
+
+    def test_precomputed_covden_win(self, derivation: PywatershedDerivation) -> None:
+        """covden_win loaded from pre-computed SIR instead of reduction factor."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                    "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0])),
+                    "covden_win_fraction_mean": ("nhm_id", np.array([0.75, 0.05])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "covden_win": {
+                "source": "gfv11_covden_win",
+                "variable": "covden_win_fraction_mean",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        ds = derivation._apply_lookup_tables(ctx, ds)
+        np.testing.assert_allclose(ds["covden_win"].values, [0.75, 0.05])
+
+    def test_precomputed_cov_type_categorical(self, derivation: PywatershedDerivation) -> None:
+        """cov_type from pre-computed categorical fraction file.
+
+        The real SIR has a single key ``cov_type_frac`` resolving to a
+        multi-column CSV.  The mock needs a ``cov_type_frac`` entry for
+        ``find_variable`` to match; ``load_dataset`` then returns all
+        ``cov_type_frac*`` columns via prefix matching.
+        """
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # Anchor key for find_variable resolution
+                    "cov_type_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "cov_type_frac_0": ("nhm_id", np.array([0.1, 0.0])),
+                    "cov_type_frac_1": ("nhm_id", np.array([0.2, 0.6])),
+                    "cov_type_frac_2": ("nhm_id", np.array([0.0, 0.1])),
+                    "cov_type_frac_3": ("nhm_id", np.array([0.3, 0.2])),
+                    "cov_type_frac_4": ("nhm_id", np.array([0.4, 0.1])),
+                    "cov_type_frac_count": ("nhm_id", np.array([1000, 500])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "cov_type": {
+                "source": "gfv11_lulc",
+                "variable": "cov_type",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "cov_type" in ds
+        # HRU 1: class 4 has highest fraction (0.4)
+        assert ds["cov_type"].values[0] == 4
+        # HRU 2: class 1 has highest fraction (0.6)
+        assert ds["cov_type"].values[1] == 1
+
+    def test_precomputed_soil_type_categorical(self, derivation: PywatershedDerivation) -> None:
+        """soil_type from pre-computed categorical fraction file."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "soil_type_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "soil_type_frac_0": ("nhm_id", np.array([0.01, 0.0])),
+                    "soil_type_frac_1": ("nhm_id", np.array([0.85, 0.3])),
+                    "soil_type_frac_2": ("nhm_id", np.array([0.12, 0.6])),
+                    "soil_type_frac_3": ("nhm_id", np.array([0.02, 0.1])),
+                    "soil_type_frac_count": ("nhm_id", np.array([992, 500])),
+                    "awc_mm_mean": ("nhm_id", np.array([150.0, 200.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "soil_type": {
+                "source": "gfv11_text_prms",
+                "variable": "soil_type",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_soils(ctx, ds)
+        assert "soil_type" in ds
+        # HRU 1: class 1 (sand) has 0.85 majority
+        assert ds["soil_type"].values[0] == 1
+        # HRU 2: class 2 (loam) has 0.6 majority
+        assert ds["soil_type"].values[1] == 2
+
+    def test_no_precomputed_falls_through(self, derivation: PywatershedDerivation) -> None:
+        """Without precomputed, derivation uses normal NLCD path."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                    "tree_canopy_pct_mean": ("nhm_id", np.array([80.0, 10.0])),
+                    "fctimp_pct_mean": ("nhm_id", np.array([5.0, 20.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=None)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "cov_type" in ds
+        assert "covden_sum" in ds
+        assert "hru_percent_imperv" in ds
+        # NLCD 42 = Evergreen → cov_type 4
+        assert ds["cov_type"].values[0] == 4
