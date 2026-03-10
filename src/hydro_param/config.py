@@ -105,9 +105,10 @@ class DomainConfig(BaseModel):
 class DatasetRequest(BaseModel):
     """Request a dataset and its variables for pipeline processing.
 
-    Each entry in the ``datasets:`` list of a pipeline YAML config becomes one
-    ``DatasetRequest``.  The ``name`` is resolved against the dataset registry
-    to obtain fetch strategy, STAC collection, CRS, and variable metadata.
+    Each entry within a category list in the ``datasets:`` dict of a pipeline
+    YAML config becomes one ``DatasetRequest``.  The ``name`` is resolved
+    against the dataset registry to obtain fetch strategy, STAC collection,
+    CRS, and variable metadata.
 
     Attributes
     ----------
@@ -294,11 +295,23 @@ class PipelineConfig(BaseModel):
     def flatten_datasets(self) -> list[DatasetRequest]:
         """Flatten themed dataset dict into a single list for pipeline stages.
 
+        Bridge the category-keyed config format to pipeline stages that expect
+        a flat iterable of dataset requests.  This allows pipeline internals to
+        remain agnostic to the themed grouping while the config YAML stays
+        organized by domain category.
+
         Returns
         -------
         list[DatasetRequest]
             All dataset requests from all categories, preserving order
             within each category.
+
+        Notes
+        -----
+        Dict insertion order (guaranteed since Python 3.7) preserves
+        intra-category order.  Cross-category order follows YAML key order
+        but is not semantically meaningful -- pipeline stages process each
+        dataset independently.
         """
         return [ds for ds_list in self.datasets.values() for ds in ds_list]
 
