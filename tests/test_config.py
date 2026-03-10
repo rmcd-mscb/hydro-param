@@ -60,7 +60,6 @@ def test_config_full_yaml(tmp_path: Path):
             "sir_name": "delaware_test",
         },
         "processing": {
-            "engine": "serial",
             "batch_size": 200,
         },
     }
@@ -71,7 +70,6 @@ def test_config_full_yaml(tmp_path: Path):
     assert config.target_fabric.crs == "EPSG:5070"
     assert config.output.format == "parquet"
     assert config.output.sir_name == "delaware_test"
-    assert config.processing.engine == "serial"
     assert config.processing.batch_size == 200
 
 
@@ -84,8 +82,8 @@ def test_config_defaults():
     assert config.output.path == Path("./output")
     assert config.output.format == "netcdf"
     assert config.output.sir_name == "result"
-    assert config.processing.engine == "exactextract"
     assert config.processing.batch_size == 500
+    assert config.processing.resume is False
 
 
 def test_dataset_request_defaults():
@@ -166,11 +164,6 @@ def test_domain_huc_with_id():
 def test_output_rejects_unknown_format():
     with pytest.raises(ValidationError):
         OutputConfig(format="csv")
-
-
-def test_processing_rejects_unknown_engine():
-    with pytest.raises(ValidationError):
-        ProcessingConfig(engine="dask")
 
 
 def test_processing_rejects_zero_batch_size():

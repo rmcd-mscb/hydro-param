@@ -236,9 +236,8 @@ output:
   sir_name: "{project_name}"             # Name for the output file
 
 # --- Processing ---
-# Engine and batching options.
+# Batching and fault-tolerance options.
 processing:
-  engine: exactextract                    # exactextract or serial
   batch_size: 500                         # Number of features per spatial batch
   resume: true                            # Skip already-completed datasets on re-run
 """

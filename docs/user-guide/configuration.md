@@ -39,7 +39,6 @@ output:
   sir_name: "delaware_params"
 
 processing:
-  engine: exactextract
   batch_size: 500
 ```
 

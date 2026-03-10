@@ -211,15 +211,10 @@ class OutputConfig(BaseModel):
 
 
 class ProcessingConfig(BaseModel):
-    """Control processing engine, batching, fault tolerance, and networking.
+    """Control batching, fault tolerance, and networking.
 
     Attributes
     ----------
-    engine : {"exactextract", "serial"}
-        Zonal statistics engine.  ``"exactextract"`` uses the
-        exactextract C++ library via gdptools for fast, coverage-weighted
-        statistics.  ``"serial"`` is a pure-Python fallback.  Defaults to
-        ``"exactextract"``.
     batch_size : int
         Maximum number of features per spatial batch.  KD-tree recursive
         bisection groups nearby features to minimize data fetch extent.
@@ -240,7 +235,6 @@ class ProcessingConfig(BaseModel):
 
     """
 
-    engine: Literal["exactextract", "serial"] = "exactextract"
     batch_size: int = Field(default=500, gt=0)
     resume: bool = False
     sir_validation: Literal["tolerant", "strict"] = "tolerant"

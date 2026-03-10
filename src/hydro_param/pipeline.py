@@ -616,7 +616,7 @@ def _process_batch(
         ``DerivedCategoricalSpec`` entries are processed in a second
         pass after all source variables.
     config : PipelineConfig
-        Pipeline configuration (engine, id_field, etc.).
+        Pipeline configuration (id_field, batch size, etc.).
     work_dir : Path
         Temporary directory for intermediate GeoTIFF files.  Cleaned up
         by the caller (``tempfile.TemporaryDirectory``).
@@ -668,7 +668,6 @@ def _process_batch(
                 variable_name=var_spec.name,
                 id_field=config.target_fabric.id_field,
                 year=cast(int | None, ds_req.year),
-                engine=config.processing.engine,
                 statistics=ds_req.statistics,
                 categorical=var_spec.categorical,
                 band=var_spec.band,
@@ -775,7 +774,6 @@ def _process_batch(
             tiff_path=tiff_path,
             variable_name=var_spec.name,
             id_field=config.target_fabric.id_field,
-            engine=config.processing.engine,
             statistics=ds_req.statistics,
             categorical=categorical,
             source_crs=entry.crs,
@@ -870,7 +868,6 @@ def _process_batch(
             tiff_path=classified_tiff,
             variable_name=dc_spec.name,
             id_field=config.target_fabric.id_field,
-            engine=config.processing.engine,
             statistics=ds_req.statistics,
             categorical=True,
             source_crs=entry.crs,
@@ -1252,7 +1249,7 @@ def stage4_process(
     resolved : list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         Resolved dataset entries from :func:`stage2_resolve_datasets`.
     config : PipelineConfig
-        Pipeline configuration (output path, engine, batch size, resume
+        Pipeline configuration (output path, batch size, resume
         flag, etc.).
 
     Returns
@@ -1621,9 +1618,8 @@ def run_pipeline_from_config(
         "  Fabric: %s (id_field=%s)", config.target_fabric.path, config.target_fabric.id_field
     )
     logger.info(
-        "  Datasets: %d, Engine: %s, Batch size: %d",
+        "  Datasets: %d, Batch size: %d",
         len(config.flatten_datasets()),
-        config.processing.engine,
         config.processing.batch_size,
     )
     logger.info("  Output: %s (%s)", config.output.path, config.output.format)

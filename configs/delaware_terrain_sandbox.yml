@@ -41,5 +41,4 @@ output:
   sir_name: "delaware_terrain_sandbox"
 
 processing:
-  engine: exactextract
   batch_size: 200
