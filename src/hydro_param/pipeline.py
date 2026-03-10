@@ -428,9 +428,27 @@ def stage2_resolve_datasets(
     """
     flat_datasets = config.flatten_datasets()
     logger.info("Stage 2: Resolving %d datasets from registry", len(flat_datasets))
+
+    # Build dataset-name → config-category lookup for cross-validation
+    ds_category_map: dict[str, str] = {}
+    for category_key, ds_list in config.datasets.items():
+        for _ds_req in ds_list:
+            ds_category_map[_ds_req.name] = category_key
+
     resolved = []
     for ds_req in flat_datasets:
         entry = registry.get(ds_req.name)
+
+        # Cross-validate config category vs registry category
+        config_cat = ds_category_map.get(ds_req.name, "")
+        if entry.category and config_cat and entry.category != config_cat:
+            logger.warning(
+                "Category mismatch for dataset '%s': config key is '%s' "
+                "but registry category is '%s'",
+                ds_req.name,
+                config_cat,
+                entry.category,
+            )
 
         # Apply pipeline config source override
         if ds_req.source is not None:

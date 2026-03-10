@@ -2649,6 +2649,35 @@ def test_process_batch_derived_categorical_missing_source(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
+def test_stage2_warns_on_category_mismatch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Stage 2 warns when a dataset's registry category doesn't match its config key."""
+    # Create a config where dem_3dep_10m (topography) is under "soils"
+    raw = {
+        "target_fabric": {"path": str(tmp_path / "fabric.gpkg"), "id_field": "nhm_id"},
+        "datasets": {
+            "soils": [
+                {"name": "dem_3dep_10m", "variables": ["elevation"], "statistics": ["mean"]},
+            ],
+        },
+    }
+    cfg_path = tmp_path / "cfg.yml"
+    cfg_path.write_text(yaml.dump(raw))
+    config = load_config(cfg_path)
+
+    from hydro_param.pipeline import DEFAULT_REGISTRY
+
+    registry = load_registry(DEFAULT_REGISTRY)
+
+    with caplog.at_level(logging.WARNING, logger="hydro_param.pipeline"):
+        resolved = stage2_resolve_datasets(config, registry)
+
+    assert any("category mismatch" in msg.lower() for msg in caplog.messages)
+    # Still resolves successfully despite mismatch
+    assert len(resolved) == 1
+
+
 def test_user_registry_dir_constant() -> None:
     """USER_REGISTRY_DIR points to expected path."""
     from hydro_param.pipeline import USER_REGISTRY_DIR
