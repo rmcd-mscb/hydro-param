@@ -472,10 +472,7 @@ def test_flatten_datasets():
     )
     flat = config.flatten_datasets()
     assert len(flat) == 3
-    names = [ds.name for ds in flat]
-    assert "dem" in names
-    assert "gnatsgo" in names
-    assert "polaris" in names
+    assert [ds.name for ds in flat] == ["dem", "gnatsgo", "polaris"]
 
 
 def test_themed_datasets_empty_dict():

@@ -2678,6 +2678,42 @@ def test_stage2_warns_on_category_mismatch(
     assert len(resolved) == 1
 
 
+def test_stage2_rejects_duplicate_dataset_across_categories(tmp_path):
+    """Stage 2 raises ValueError if same dataset appears in multiple categories."""
+    raw = {
+        "target_fabric": {
+            "path": str(tmp_path / "fabric.gpkg"),
+            "id_field": "nhm_id",
+        },
+        "datasets": {
+            "topography": [
+                {
+                    "name": "dem_3dep_10m",
+                    "variables": ["elevation"],
+                    "statistics": ["mean"],
+                },
+            ],
+            "soils": [
+                {
+                    "name": "dem_3dep_10m",
+                    "variables": ["elevation"],
+                    "statistics": ["mean"],
+                },
+            ],
+        },
+    }
+    cfg_path = tmp_path / "cfg.yml"
+    cfg_path.write_text(yaml.dump(raw))
+    config = load_config(cfg_path)
+
+    from hydro_param.pipeline import DEFAULT_REGISTRY
+
+    registry = load_registry(DEFAULT_REGISTRY)
+
+    with pytest.raises(ValueError, match="multiple categories"):
+        stage2_resolve_datasets(config, registry)
+
+
 def test_user_registry_dir_constant() -> None:
     """USER_REGISTRY_DIR points to expected path."""
     from hydro_param.pipeline import USER_REGISTRY_DIR

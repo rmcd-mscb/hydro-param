@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
+from pathlib import Path
+
 from hydro_param.dataset_registry import VALID_CATEGORIES
 
 
@@ -20,3 +23,10 @@ def test_valid_categories_is_frozenset():
             "water_bodies",
         }
     )
+
+
+def test_valid_categories_matches_yaml_files():
+    """VALID_CATEGORIES matches actual YAML files in data/datasets/."""
+    datasets_dir = Path(str(files("hydro_param").joinpath("data/datasets")))
+    yaml_categories = {p.stem for p in datasets_dir.glob("*.yml")}
+    assert VALID_CATEGORIES == yaml_categories

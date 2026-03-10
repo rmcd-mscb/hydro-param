@@ -368,7 +368,8 @@ def _resolve_paths(config: PipelineConfig) -> PipelineConfig:
     """Resolve all relative paths in a PipelineConfig to absolute.
 
     Convert ``target_fabric.path``, ``output.path``, and per-dataset
-    ``source`` fields from relative to absolute using
+    ``source`` fields (across all category lists in ``datasets``) from
+    relative to absolute using
     ``Path.resolve()`` (which anchors to the current working directory).
     Absolute paths remain absolute.
 

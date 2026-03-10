@@ -404,7 +404,7 @@ def stage2_resolve_datasets(
     Parameters
     ----------
     config : PipelineConfig
-        Pipeline configuration containing the ``datasets`` list.
+        Pipeline configuration containing the ``datasets`` dict (keyed by category).
     registry : DatasetRegistry
         Dataset registry mapping names to entries and variable specs.
 
@@ -433,6 +433,12 @@ def stage2_resolve_datasets(
     ds_category_map: dict[str, str] = {}
     for category_key, ds_list in config.datasets.items():
         for _ds_req in ds_list:
+            if _ds_req.name in ds_category_map:
+                raise ValueError(
+                    f"Dataset '{_ds_req.name}' appears in multiple categories: "
+                    f"'{ds_category_map[_ds_req.name]}' and '{category_key}'. "
+                    f"Each dataset should appear in exactly one category."
+                )
             ds_category_map[_ds_req.name] = category_key
 
     resolved = []
@@ -440,8 +446,13 @@ def stage2_resolve_datasets(
         entry = registry.get(ds_req.name)
 
         # Cross-validate config category vs registry category
-        config_cat = ds_category_map.get(ds_req.name, "")
-        if entry.category and config_cat and entry.category != config_cat:
+        config_cat = ds_category_map[ds_req.name]
+        if not entry.category:
+            logger.debug(
+                "Skipping category cross-validation for '%s': no category set in registry",
+                ds_req.name,
+            )
+        elif entry.category != config_cat:
             logger.warning(
                 "Category mismatch for dataset '%s': config key is '%s' "
                 "but registry category is '%s'",
@@ -496,8 +507,9 @@ def stage2_resolve_datasets(
                 msg += (
                     f"\n\nThen set 'source' in your pipeline config:\n"
                     f"  datasets:\n"
-                    f"    - name: {ds_req.name}\n"
-                    f"      source: /path/to/downloaded/file.tif"
+                    f"    {config_cat}:\n"
+                    f"      - name: {ds_req.name}\n"
+                    f"        source: /path/to/downloaded/file.tif"
                 )
                 raise ValueError(msg)
 
