@@ -28,10 +28,10 @@ datasets:
   - name: dem_3dep_10m
     variables: [elevation, slope, aspect]
     statistics: [mean]
-  - name: nlcd_annual
-    source: "data/land_cover/Annual_NLCD_LndCov_2021_CU_C1V0.tif"
+  - name: nlcd_osn_lndcov
     variables: [LndCov]
-    statistics: [majority]
+    statistics: [categorical]
+    year: [2021]
 
 output:
   path: "./output"

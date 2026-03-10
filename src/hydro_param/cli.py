@@ -90,10 +90,9 @@ def _load_registry(registry: Path | None) -> DatasetRegistry:
 def _access_status(entry: DatasetEntry) -> str:
     """Return a human-readable access status string for a dataset entry.
 
-    Classify the dataset's availability as one of ``"local"``,
-    ``"download required"``, ``"not configured"``, ``"remote"``, or
-    ``"not yet available"`` based on its access strategy and source
-    configuration.
+    Classify the dataset's availability as one of ``"remote"``,
+    ``"local"``, or ``"setup needed"`` based on its access strategy and
+    source configuration.
 
     Parameters
     ----------
@@ -103,22 +102,16 @@ def _access_status(entry: DatasetEntry) -> str:
     Returns
     -------
     str
-        One of ``"local"``, ``"download required"``, ``"not configured"``,
-        ``"remote"``, ``"not yet available"``, or the raw strategy name
-        as a fallback.
+        One of ``"remote"``, ``"local"``, or ``"setup needed"``.
     """
     if entry.strategy == "local_tiff":
         if entry.source is not None:
             return "local"
-        if entry.download and (
-            entry.download.url or entry.download.files or entry.download.url_template
-        ):
-            return "download required"
-        return "not configured"
+        return "setup needed"
     if entry.strategy in ("stac_cog", "native_zarr", "climr_cat", "nhgf_stac"):
-        return "remote (no download needed)"
+        return "remote"
     if entry.strategy == "converted_zarr":
-        return "not yet available"
+        return "setup needed"
     return entry.strategy
 
 
@@ -150,16 +143,15 @@ def datasets_list(*, registry: Path | None = None) -> None:
         cat = entry.category or "uncategorized"
         by_category.setdefault(cat, []).append((name, entry))
 
+    print("  Format: [strategy | years | access]")
     for category, entries in sorted(by_category.items()):
         print(f"\n{category.replace('_', ' ').title()}:")
         for name, entry in sorted(entries):
             desc = entry.description or ""
             status = _access_status(entry)
-            temporal_tag = ""
-            if entry.temporal and entry.time_step:
-                yr = f", {entry.year_range[0]}-{entry.year_range[1]}" if entry.year_range else ""
-                temporal_tag = f", {entry.time_step}{yr}"
-            print(f"  {name:<20s} {desc:<50s} [{entry.strategy}{temporal_tag}, {status}]")
+            yr = f"{entry.year_range[0]}-{entry.year_range[1]}" if entry.year_range else "\u2014"
+            temporal = f", {entry.time_step}" if entry.temporal and entry.time_step else ""
+            print(f"  {name:<20s} {desc:<50s} [{entry.strategy} | {yr} | {status}{temporal}]")
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +298,7 @@ def datasets_download(
     ----------
     name
         Dataset name as it appears in the registry (e.g.,
-        ``"polaris_30m"``, ``"nlcd_legacy"``).
+        ``"polaris_30m"``).
     dest
         Destination directory for downloaded files.  When omitted inside
         an initialised project, files are routed to ``data/<category>/``

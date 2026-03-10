@@ -125,7 +125,7 @@ class DatasetRequest(BaseModel):
         ``["mean"]``.  Common values: ``"mean"``, ``"majority"``,
         ``"minority"``, ``"sum"``, ``"min"``, ``"max"``, ``"median"``.
     year : int or list[int] or None
-        Year(s) for multi-year static datasets (e.g., NLCD annual).  When a
+        Year(s) for multi-year static datasets (e.g., NLCD on OSN).  When a
         list is provided, the pipeline iterates over each year and produces
         year-suffixed output keys (e.g., ``"land_cover_2019"``).  Valid range:
         1900--2100.

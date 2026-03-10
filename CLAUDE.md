@@ -25,7 +25,7 @@ hydro-param is a configuration-driven hydrologic parameterization system. It gen
 | Strategy | gdptools Class | Datasets |
 |----------|---------------|----------|
 | `stac_cog` | UserTiffData → ZonalGen | 3DEP, gNATSGO |
-| `local_tiff` | UserTiffData → ZonalGen | NLCD legacy, POLARIS |
+| `local_tiff` | UserTiffData → ZonalGen | POLARIS, GFv1.1 |
 | `nhgf_stac` (static) | NHGFStacTiffData → ZonalGen | NLCD OSN (6 collections) |
 | `nhgf_stac` (temporal) | NHGFStacData → WeightGen → AggGen | SNODAS, CONUS404-BA |
 | `climr_cat` | ClimRCatData → WeightGen → AggGen | gridMET (OPeNDAP) |

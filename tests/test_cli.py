@@ -144,6 +144,27 @@ def test_datasets_list(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
     assert "Land Cover" in out
 
 
+def test_datasets_list_header(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
+    """datasets list prints a format legend header."""
+    _run("datasets", "list", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    assert "Format: [strategy | years | access]" in out
+
+
+def test_datasets_list_consistent_brackets(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
+    """Every dataset line uses [strategy | years | access] format."""
+    _run("datasets", "list", "--registry", str(registry_yaml))
+    out = capsys.readouterr().out
+    import re
+
+    bracket_lines = [line for line in out.splitlines() if "[" in line and "|" in line]
+    # Exclude the header line
+    data_lines = [line for line in bracket_lines if "Format:" not in line]
+    assert len(data_lines) > 0
+    for line in data_lines:
+        assert re.search(r"\[\w+ \| .+ \| \w+", line), f"Bad format: {line}"
+
+
 def test_datasets_list_shows_strategy(registry_yaml: Path, capsys: pytest.CaptureFixture[str]):
     _run("datasets", "list", "--registry", str(registry_yaml))
     out = capsys.readouterr().out

@@ -14,7 +14,7 @@ Every hydrologic modeling project requires the same tedious workflow: download l
 
 - **Config-driven:** Declare what you want in YAML — target fabric, datasets, parameters, output format — and the engine handles the rest.
 - **Fabric-agnostic:** Works with NHM GFv1.1, NOAA NextGen hydrofabric, HUC12 watersheds, regular grids, or any polygon/grid mesh.
-- **Multi-source data access:** Five strategies — STAC COG (3DEP, gNATSGO), NHGF STAC (NLCD on OSN), ClimR OPeNDAP (gridMET), local GeoTIFF (NLCD legacy, POLARIS), and temporal NHGF STAC (SNODAS, CONUS404-BA).
+- **Multi-source data access:** Five strategies — STAC COG (3DEP, gNATSGO), NHGF STAC (NLCD on OSN), ClimR OPeNDAP (gridMET), local GeoTIFF (POLARIS, GFv1.1), and temporal NHGF STAC (SNODAS, CONUS404-BA).
 - **Dask for lazy I/O only:** Uses Dask for efficient spatial subsetting of large stores. All computation uses numpy and gdptools.
 
 ## Key Design Decisions
