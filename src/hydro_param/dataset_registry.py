@@ -66,6 +66,12 @@ class VariableSpec(BaseModel):
     source_override : str or None
         Per-variable source path or URL override (e.g., individual POLARIS
         VRT files).  When ``None``, uses the dataset-level ``source``.
+    scale_factor : float or None
+        Multiplicative scale factor for integer-encoded rasters (e.g.,
+        ``0.01`` for values stored as ``value × 100``).  Follows
+        CF-conventions ``scale_factor`` semantics.  When ``None``, no
+        scaling is needed.  The pipeline passes this through as metadata;
+        consumers apply it.
     """
 
     name: str
@@ -76,6 +82,7 @@ class VariableSpec(BaseModel):
     categorical: bool = False
     asset_key: str | None = None
     source_override: str | None = None
+    scale_factor: float | None = None
 
 
 class DerivedVariableSpec(BaseModel):

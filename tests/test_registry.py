@@ -787,6 +787,28 @@ def test_dataset_entry_year_range_invalid_order():
         DatasetEntry(strategy="local_tiff", year_range=[2024, 1985])
 
 
+class TestVariableSpecScaleFactor:
+    """Tests for VariableSpec.scale_factor field."""
+
+    def test_scale_factor_defaults_to_none(self) -> None:
+        v = VariableSpec(name="elev", band=1)
+        assert v.scale_factor is None
+
+    def test_scale_factor_accepts_float(self) -> None:
+        v = VariableSpec(name="slope", band=1, scale_factor=0.01)
+        assert v.scale_factor == 0.01
+
+    def test_scale_factor_in_dict_output(self) -> None:
+        v = VariableSpec(name="slope", band=1, scale_factor=0.01)
+        d = v.model_dump()
+        assert d["scale_factor"] == 0.01
+
+    def test_scale_factor_none_excluded_from_yaml(self) -> None:
+        v = VariableSpec(name="elev", band=1)
+        d = v.model_dump(exclude_none=True)
+        assert "scale_factor" not in d
+
+
 def test_dataset_entry_year_range_wrong_length():
     """year_range rejects lists that are not exactly 2 elements."""
     with pytest.raises(ValidationError, match="2-element list"):
