@@ -19,6 +19,7 @@ sir_path: "../../output"
 domain:
   fabric_path: data/pywatershed_gis/drb_2yr/nhru.gpkg
   segment_path: data/pywatershed_gis/drb_2yr/nsegment.gpkg
+  waterbody_path: data/fabrics/waterbodies.gpkg
   id_field: nhm_id
   segment_id_field: nhm_seg
 

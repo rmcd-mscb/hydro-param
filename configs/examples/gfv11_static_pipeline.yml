@@ -1,9 +1,10 @@
 # GFv1.1 static parameter pipeline config
 # Produces a SIR with topographic, soils, land cover, and water body data.
 # Topography uses 3DEP 1 arc-second (~30m), comparable to GFv1.1 SRTM;
-# soils, land cover, and water bodies use GFv1.1 ScienceBase rasters.
+# soils and land cover use GFv1.1 ScienceBase rasters.
+# Water bodies use the NHD waterbody fabric overlay (pywatershed config).
 #
-# Prerequisites (soils, land cover, water bodies):
+# Prerequisites (soils, land cover):
 #   hydro-param gfv11 download /path/to/gfv11/data
 # Topography (3DEP) is fetched live via Planetary Computer STAC.
 #
@@ -101,12 +102,6 @@ datasets:
     - name: gfv11_root_depth
       variables: [root_depth]
       statistics: [mean]
-
-  water_bodies:
-    # GFv1.1 NHD HR waterbody mask (categorical)
-    - name: gfv11_wbg
-      variables: [waterbody]
-      statistics: [majority]
 
 output:
   path: output
