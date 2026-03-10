@@ -963,7 +963,14 @@ def download_gfv11(
 
     # Auto-register datasets if any downloads or skips succeeded
     if combined.downloaded or combined.skipped:
-        write_registry_overlay(output_dir, overlay_path)
+        try:
+            write_registry_overlay(output_dir, overlay_path)
+        except OSError as exc:
+            logger.warning(
+                "Downloaded files are intact, but auto-registration failed: %s — "
+                "create the overlay manually or check directory permissions.",
+                exc,
+            )
 
     if combined.has_failures:
         raise DownloadError(

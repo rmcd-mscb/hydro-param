@@ -854,6 +854,20 @@ class TestDownloadGfv11AutoRegistration:
 
         assert not overlay_path.exists()
 
+    @patch("hydro_param.gfv11.write_registry_overlay")
+    @patch("hydro_param.gfv11.download_item")
+    def test_overlay_write_failure_does_not_crash_download(
+        self, mock_di: MagicMock, mock_write: MagicMock, tmp_path: Path
+    ) -> None:
+        """Overlay write failure logs warning but returns summary."""
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        mock_write.side_effect = OSError("Permission denied")
+
+        summary = download_gfv11(tmp_path, items="data-layers")
+
+        assert summary.downloaded == ["Sand.tif"]
+        assert not summary.has_failures
+
 
 # ---------------------------------------------------------------------------
 # End-to-end integration

@@ -1093,3 +1093,49 @@ class TestRegistryOverlay:
         """Calling without overlay_dirs works as before."""
         registry = load_registry(DEFAULT_REGISTRY)
         assert "dem_3dep_10m" in registry.datasets
+
+    def test_malformed_yaml_skipped_with_warning(self, tmp_path: Path) -> None:
+        """Malformed YAML overlay file is skipped, bundled registry still loads."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        (overlay_dir / "bad.yml").write_text("{{invalid yaml content")
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_overlay_missing_datasets_key_skipped(self, tmp_path: Path) -> None:
+        """Overlay file without 'datasets' key is skipped with warning."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        (overlay_dir / "no_datasets.yml").write_text(yaml.dump({"other_key": "value"}))
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_overlay_empty_file_skipped(self, tmp_path: Path) -> None:
+        """Empty YAML overlay file is skipped with warning."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        (overlay_dir / "empty.yml").write_text("")
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "dem_3dep_10m" in registry.datasets
+
+    def test_overlay_invalid_entries_skipped(self, tmp_path: Path) -> None:
+        """Overlay with invalid Pydantic entries is skipped, bundled registry loads."""
+        overlay_dir = tmp_path / "overlay"
+        overlay_dir.mkdir()
+        bad_yaml = {
+            "datasets": {
+                "bad_entry": {
+                    "description": "Bad",
+                    "strategy": "nonexistent_strategy",
+                    "variables": [],
+                }
+            }
+        }
+        (overlay_dir / "invalid.yml").write_text(yaml.dump(bad_yaml))
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+        assert "dem_3dep_10m" in registry.datasets
+        assert "bad_entry" not in registry.datasets

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -716,15 +716,35 @@ def _merge_overlays(base: DatasetRegistry, overlay_dirs: list[Path]) -> DatasetR
             logger.debug("No YAML files in overlay directory: %s", overlay_dir)
             continue
         for yaml_file in yaml_files:
-            with open(yaml_file) as f:
-                raw = yaml.safe_load(f)
-            if raw is None or "datasets" not in raw:
+            try:
+                with open(yaml_file) as f:
+                    raw = yaml.safe_load(f)
+            except yaml.YAMLError as exc:
+                logger.warning("Could not parse overlay YAML, skipping: %s\n%s", yaml_file, exc)
                 continue
-            partial = DatasetRegistry(**raw)
+            if raw is None:
+                logger.warning("Overlay file is empty, skipping: %s", yaml_file)
+                continue
+            if "datasets" not in raw:
+                logger.warning(
+                    "Overlay file has no 'datasets' key (found keys: %s), skipping: %s",
+                    list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
+                    yaml_file,
+                )
+                continue
+            try:
+                partial = DatasetRegistry(**raw)
+            except ValidationError as exc:
+                logger.warning(
+                    "Overlay file has invalid entries, skipping: %s\n%s",
+                    yaml_file,
+                    exc,
+                )
+                continue
             for name, entry in partial.datasets.items():
                 if name in merged:
                     logger.info(
-                        "Overlay dataset '%s' (from %s) replaces bundled entry",
+                        "Overlay dataset '%s' (from %s) replaces existing entry",
                         name,
                         yaml_file.name,
                     )
