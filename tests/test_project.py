@@ -159,7 +159,9 @@ class TestGeneratePipelineTemplate:
         """Template covers all 5 access strategies via 7 dataset entries."""
         content = generate_pipeline_template("test_project")
         parsed = yaml.safe_load(content)
-        dataset_names = [d["name"] for d in parsed["datasets"]]
+        # Flatten themed dict to list
+        all_datasets = [d for entries in parsed["datasets"].values() for d in entries]
+        dataset_names = [d["name"] for d in all_datasets]
         expected = [
             "dem_3dep_10m",  # stac_cog
             "gnatsgo_rasters",  # stac_cog
@@ -175,7 +177,8 @@ class TestGeneratePipelineTemplate:
         """SNODAS and gridMET entries include time_period."""
         content = generate_pipeline_template("test_project")
         parsed = yaml.safe_load(content)
-        datasets_by_name = {d["name"]: d for d in parsed["datasets"]}
+        all_datasets = [d for entries in parsed["datasets"].values() for d in entries]
+        datasets_by_name = {d["name"]: d for d in all_datasets}
         assert "time_period" in datasets_by_name["snodas"]
         assert "time_period" in datasets_by_name["gridmet"]
 
@@ -183,7 +186,8 @@ class TestGeneratePipelineTemplate:
         """NLCD entries include year field."""
         content = generate_pipeline_template("test_project")
         parsed = yaml.safe_load(content)
-        datasets_by_name = {d["name"]: d for d in parsed["datasets"]}
+        all_datasets = [d for entries in parsed["datasets"].values() for d in entries]
+        datasets_by_name = {d["name"]: d for d in all_datasets}
         assert "year" in datasets_by_name["nlcd_osn_lndcov"]
         assert "year" in datasets_by_name["nlcd_osn_fctimp"]
 

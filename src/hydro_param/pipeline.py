@@ -404,7 +404,7 @@ def stage2_resolve_datasets(
     Parameters
     ----------
     config : PipelineConfig
-        Pipeline configuration containing the ``datasets`` list.
+        Pipeline configuration containing the ``datasets`` dict (keyed by category).
     registry : DatasetRegistry
         Dataset registry mapping names to entries and variable specs.
 
@@ -426,10 +426,40 @@ def stage2_resolve_datasets(
         If a dataset name is not found in the registry (raised by
         ``registry.get()``).
     """
-    logger.info("Stage 2: Resolving %d datasets from registry", len(config.datasets))
+    flat_datasets = config.flatten_datasets()
+    logger.info("Stage 2: Resolving %d datasets from registry", len(flat_datasets))
+
+    # Build dataset-name → config-category lookup for cross-validation
+    ds_category_map: dict[str, str] = {}
+    for category_key, ds_list in config.datasets.items():
+        for _ds_req in ds_list:
+            if _ds_req.name in ds_category_map:
+                raise ValueError(
+                    f"Dataset '{_ds_req.name}' appears in multiple categories: "
+                    f"'{ds_category_map[_ds_req.name]}' and '{category_key}'. "
+                    f"Each dataset should appear in exactly one category."
+                )
+            ds_category_map[_ds_req.name] = category_key
+
     resolved = []
-    for ds_req in config.datasets:
+    for ds_req in flat_datasets:
         entry = registry.get(ds_req.name)
+
+        # Cross-validate config category vs registry category
+        config_cat = ds_category_map[ds_req.name]
+        if not entry.category:
+            logger.debug(
+                "Skipping category cross-validation for '%s': no category set in registry",
+                ds_req.name,
+            )
+        elif entry.category != config_cat:
+            logger.warning(
+                "Category mismatch for dataset '%s': config key is '%s' "
+                "but registry category is '%s'",
+                ds_req.name,
+                config_cat,
+                entry.category,
+            )
 
         # Apply pipeline config source override
         if ds_req.source is not None:
@@ -477,8 +507,9 @@ def stage2_resolve_datasets(
                 msg += (
                     f"\n\nThen set 'source' in your pipeline config:\n"
                     f"  datasets:\n"
-                    f"    - name: {ds_req.name}\n"
-                    f"      source: /path/to/downloaded/file.tif"
+                    f"    {config_cat}:\n"
+                    f"      - name: {ds_req.name}\n"
+                    f"        source: /path/to/downloaded/file.tif"
                 )
                 raise ValueError(msg)
 
@@ -1591,7 +1622,7 @@ def run_pipeline_from_config(
     )
     logger.info(
         "  Datasets: %d, Engine: %s, Batch size: %d",
-        len(config.datasets),
+        len(config.flatten_datasets()),
         config.processing.engine,
         config.processing.batch_size,
     )

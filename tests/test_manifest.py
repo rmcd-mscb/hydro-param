@@ -33,7 +33,7 @@ def test_fabric_fingerprint(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": str(gpkg), "id_field": "id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     fp = fabric_fingerprint(config)
@@ -54,12 +54,12 @@ def test_fabric_fingerprint_changes_on_id_field(tmp_path: Path):
     config_a = PipelineConfig(
         target_fabric={"path": str(gpkg), "id_field": "nhm_id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
     config_b = PipelineConfig(
         target_fabric={"path": str(gpkg), "id_field": "nhru_v1_1"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     assert fabric_fingerprint(config_a) != fabric_fingerprint(config_b)
@@ -70,7 +70,7 @@ def test_fabric_fingerprint_missing_file(tmp_path: Path):
     config = PipelineConfig(
         target_fabric={"path": str(tmp_path / "nonexistent.gpkg"), "id_field": "id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
 
     with pytest.raises(FileNotFoundError, match="Cannot compute fabric fingerprint"):

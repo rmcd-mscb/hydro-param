@@ -34,6 +34,25 @@ from pydantic import BaseModel, ValidationError, field_validator, model_validato
 
 logger = logging.getLogger(__name__)
 
+VALID_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "climate",
+        "geology",
+        "hydrography",
+        "land_cover",
+        "snow",
+        "soils",
+        "topography",
+        "water_bodies",
+    }
+)
+"""Valid dataset registry categories.
+
+These correspond to the per-category YAML files bundled in
+``hydro_param/data/datasets/``.  Used by :class:`~hydro_param.config.PipelineConfig`
+to validate category keys in the ``datasets:`` config section.
+"""
+
 
 class VariableSpec(BaseModel):
     """Describe a variable available directly in a source dataset.

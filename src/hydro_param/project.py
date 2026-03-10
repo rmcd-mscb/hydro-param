@@ -175,58 +175,58 @@ target_fabric:
 #   bbox: [-76.5, 38.5, -74.0, 42.6]    # [west, south, east, north] in EPSG:4326
 
 # --- Datasets ---
-# Each entry references a dataset from the registry by name.
-# Use 'hydro-param datasets list' to see available datasets.
-# Remove or comment out datasets you don't need.
+# Organized by thematic category. Each entry references a dataset from the
+# registry by name. Use 'hydro-param datasets list' to see available datasets.
+# Remove or comment out categories/datasets you don't need.
 datasets:
-  # --- Topography ---
-  # 3DEP 10m DEM — elevation, slope, aspect (stac_cog via Planetary Computer)
-  - name: dem_3dep_10m
-    variables: [elevation, slope, aspect]
-    statistics: [mean]
+  topography:
+    # 3DEP 10m DEM — elevation, slope, aspect (stac_cog via Planetary Computer)
+    - name: dem_3dep_10m
+      variables: [elevation, slope, aspect]
+      statistics: [mean]
 
-  # --- Soils ---
-  # gNATSGO pre-summarized soil properties (stac_cog via Planetary Computer)
-  - name: gnatsgo_rasters
-    variables: [aws0_100, rootznemc, rootznaws]
-    statistics: [mean]
+  soils:
+    # gNATSGO pre-summarized soil properties (stac_cog via Planetary Computer)
+    - name: gnatsgo_rasters
+      variables: [aws0_100, rootznemc, rootznaws]
+      statistics: [mean]
 
-  # POLARIS soil texture properties, 30m (local_tiff — these variables have
-  # remote VRT source_overrides in the registry, so no local download needed.
-  # Adding other POLARIS variables may require a 'source:' path or download.)
-  - name: polaris_30m
-    variables: [sand, silt, clay, theta_s, ksat]
-    statistics: [mean]
+    # POLARIS soil texture properties, 30m (local_tiff — these variables have
+    # remote VRT source_overrides in the registry, so no local download needed.
+    # Adding other POLARIS variables may require a 'source:' path or download.)
+    - name: polaris_30m
+      variables: [sand, silt, clay, theta_s, ksat]
+      statistics: [mean]
 
-  # --- Land Cover ---
-  # NLCD Land Cover via NHGF STAC OSN (nhgf_stac)
-  # LndCov is categorical — class fractions are computed automatically
-  # based on the registry's categorical flag; statistics is not used.
-  - name: nlcd_osn_lndcov
-    variables: [LndCov]
-    statistics: [categorical]
-    year: [2021]
+  land_cover:
+    # NLCD Land Cover via NHGF STAC OSN (nhgf_stac)
+    # LndCov is categorical — class fractions are computed automatically
+    # based on the registry's categorical flag; statistics is not used.
+    - name: nlcd_osn_lndcov
+      variables: [LndCov]
+      statistics: [categorical]
+      year: [2021]
 
-  # NLCD Fractional Impervious via NHGF STAC OSN (nhgf_stac)
-  - name: nlcd_osn_fctimp
-    variables: [FctImp]
-    statistics: [mean]
-    year: [2021]
+    # NLCD Fractional Impervious via NHGF STAC OSN (nhgf_stac)
+    - name: nlcd_osn_fctimp
+      variables: [FctImp]
+      statistics: [mean]
+      year: [2021]
 
-  # --- Snow ---
-  # SNODAS daily snow — historical SWE (nhgf_stac temporal)
-  - name: snodas
-    variables: [SWE]
-    statistics: [mean]
-    time_period: ["2020-01-01", "2021-12-31"]
+  snow:
+    # SNODAS daily snow — historical SWE (nhgf_stac temporal)
+    - name: snodas
+      variables: [SWE]
+      statistics: [mean]
+      time_period: ["2020-01-01", "2021-12-31"]
 
-  # --- Climate ---
-  # gridMET daily climate via OPeNDAP (climr_cat)
-  # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
-  - name: gridmet
-    variables: [pr, tmmx, tmmn, srad, pet, vs]
-    statistics: [mean]
-    time_period: ["2020-01-01", "2021-12-31"]
+  climate:
+    # gridMET daily climate via OPeNDAP (climr_cat)
+    # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
+    - name: gridmet
+      variables: [pr, tmmx, tmmn, srad, pet, vs]
+      statistics: [mean]
+      time_period: ["2020-01-01", "2021-12-31"]
 
 # --- Output ---
 # Where and how to write results.

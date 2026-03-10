@@ -24,9 +24,11 @@ def test_load_config_from_yaml(tmp_path: Path):
             "id_field": "featureid",
         },
         "domain": {"type": "bbox", "bbox": [0, 0, 2, 2]},
-        "datasets": [
-            {"name": "dem_3dep_10m", "variables": ["elevation", "slope"]},
-        ],
+        "datasets": {
+            "topography": [
+                {"name": "dem_3dep_10m", "variables": ["elevation", "slope"]},
+            ],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
@@ -34,9 +36,9 @@ def test_load_config_from_yaml(tmp_path: Path):
     config = load_config(str(path))
     assert isinstance(config, PipelineConfig)
     assert config.target_fabric.id_field == "featureid"
-    assert len(config.datasets) == 1
-    assert config.datasets[0].name == "dem_3dep_10m"
-    assert config.datasets[0].variables == ["elevation", "slope"]
+    assert len(config.flatten_datasets()) == 1
+    assert config.datasets["topography"][0].name == "dem_3dep_10m"
+    assert config.datasets["topography"][0].variables == ["elevation", "slope"]
 
 
 def test_config_full_yaml(tmp_path: Path):
@@ -47,9 +49,11 @@ def test_config_full_yaml(tmp_path: Path):
             "crs": "EPSG:5070",
         },
         "domain": {"type": "bbox", "bbox": [-76.5, 38.5, -74.0, 42.6]},
-        "datasets": [
-            {"name": "dem", "variables": ["elevation"], "statistics": ["mean", "std"]},
-        ],
+        "datasets": {
+            "topography": [
+                {"name": "dem", "variables": ["elevation"], "statistics": ["mean", "std"]},
+            ],
+        },
         "output": {
             "path": "./results",
             "format": "parquet",
@@ -75,7 +79,7 @@ def test_config_defaults():
     config = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
     assert config.output.path == Path("./output")
     assert config.output.format == "netcdf"
@@ -100,22 +104,24 @@ def test_dataset_request_source_from_yaml(tmp_path: Path):
     raw = {
         "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {
-                "name": "nlcd_2021",
-                "source": "data/nlcd.tif",
-                "variables": ["land_cover"],
-                "statistics": ["majority"],
-            },
-        ],
+        "datasets": {
+            "land_cover": [
+                {
+                    "name": "nlcd_2021",
+                    "source": "data/nlcd.tif",
+                    "variables": ["land_cover"],
+                    "statistics": ["majority"],
+                },
+            ],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
-    assert config.datasets[0].source is not None
-    assert config.datasets[0].source.is_absolute()
-    assert config.datasets[0].source.name == "nlcd.tif"
+    assert config.datasets["land_cover"][0].source is not None
+    assert config.datasets["land_cover"][0].source.is_absolute()
+    assert config.datasets["land_cover"][0].source.name == "nlcd.tif"
 
 
 def test_target_fabric_requires_path_and_id():
@@ -127,7 +133,9 @@ def test_domain_optional(tmp_path: Path):
     """Pipeline config without domain uses full fabric extent."""
     raw = {
         "target_fabric": {"path": "data/catchments.gpkg", "id_field": "featureid"},
-        "datasets": [{"name": "dem_3dep_10m", "variables": ["elevation"]}],
+        "datasets": {
+            "topography": [{"name": "dem_3dep_10m", "variables": ["elevation"]}],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
@@ -211,20 +219,22 @@ def test_dataset_request_year_list_from_yaml(tmp_path: Path):
     raw = {
         "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {
-                "name": "nlcd",
-                "variables": ["LndCov"],
-                "statistics": ["categorical"],
-                "year": [2020, 2021],
-            },
-        ],
+        "datasets": {
+            "land_cover": [
+                {
+                    "name": "nlcd",
+                    "variables": ["LndCov"],
+                    "statistics": ["categorical"],
+                    "year": [2020, 2021],
+                },
+            ],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
-    assert config.datasets[0].year == [2020, 2021]
+    assert config.datasets["land_cover"][0].year == [2020, 2021]
 
 
 # ---------------------------------------------------------------------------
@@ -267,20 +277,22 @@ def test_dataset_request_time_period_from_yaml(tmp_path: Path):
     raw = {
         "target_fabric": {"path": "data/fabric.gpkg", "id_field": "id"},
         "domain": {"type": "bbox", "bbox": [0, 0, 1, 1]},
-        "datasets": [
-            {
-                "name": "snodas",
-                "variables": ["SWE"],
-                "statistics": ["mean"],
-                "time_period": ["2020-01-01", "2020-12-31"],
-            },
-        ],
+        "datasets": {
+            "snow": [
+                {
+                    "name": "snodas",
+                    "variables": ["SWE"],
+                    "statistics": ["mean"],
+                    "time_period": ["2020-01-01", "2020-12-31"],
+                },
+            ],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
-    assert config.datasets[0].time_period == ["2020-01-01", "2020-12-31"]
+    assert config.datasets["snow"][0].time_period == ["2020-01-01", "2020-12-31"]
 
 
 # ---------------------------------------------------------------------------
@@ -337,9 +349,11 @@ def test_load_config_resolves_relative_paths(tmp_path: Path):
     """load_config resolves relative paths to absolute against CWD."""
     raw = {
         "target_fabric": {"path": "data/catchments.gpkg", "id_field": "id"},
-        "datasets": [
-            {"name": "dem", "variables": ["elevation"]},
-        ],
+        "datasets": {
+            "topography": [
+                {"name": "dem", "variables": ["elevation"]},
+            ],
+        },
         "output": {"path": "output"},
     }
     path = tmp_path / "config.yml"
@@ -356,7 +370,7 @@ def test_load_config_resolves_dotdot_paths(tmp_path: Path):
     """Paths with '..' components are fully resolved."""
     raw = {
         "target_fabric": {"path": "../sibling/catchments.gpkg", "id_field": "id"},
-        "datasets": [],
+        "datasets": {},
         "output": {"path": "sub/../output"},
     }
     path = tmp_path / "config.yml"
@@ -373,7 +387,7 @@ def test_load_config_preserves_absolute_paths(tmp_path: Path):
     """load_config does not modify already-absolute paths."""
     raw = {
         "target_fabric": {"path": "/abs/data/catchments.gpkg", "id_field": "id"},
-        "datasets": [],
+        "datasets": {},
         "output": {"path": "/abs/output"},
     }
     path = tmp_path / "config.yml"
@@ -388,15 +402,92 @@ def test_load_config_resolves_dataset_source(tmp_path: Path):
     """load_config resolves relative dataset source paths to absolute."""
     raw = {
         "target_fabric": {"path": "fabric.gpkg", "id_field": "id"},
-        "datasets": [
-            {"name": "nlcd", "source": "data/nlcd.tif", "variables": ["lc"]},
-            {"name": "dem", "variables": ["elevation"]},
-        ],
+        "datasets": {
+            "land_cover": [
+                {"name": "nlcd", "source": "data/nlcd.tif", "variables": ["lc"]},
+            ],
+            "topography": [
+                {"name": "dem", "variables": ["elevation"]},
+            ],
+        },
     }
     path = tmp_path / "config.yml"
     path.write_text(yaml.dump(raw))
 
     config = load_config(str(path))
-    assert config.datasets[0].source is not None
-    assert config.datasets[0].source.is_absolute()
-    assert config.datasets[1].source is None
+    assert config.datasets["land_cover"][0].source is not None
+    assert config.datasets["land_cover"][0].source.is_absolute()
+    assert config.datasets["topography"][0].source is None
+
+
+# ---------------------------------------------------------------------------
+# Themed datasets (dict keyed by category)
+# ---------------------------------------------------------------------------
+
+
+def test_themed_datasets_from_yaml(tmp_path: Path):
+    """Pipeline config accepts datasets organized by category."""
+    raw = {
+        "target_fabric": {"path": "data/catchments.gpkg", "id_field": "featureid"},
+        "datasets": {
+            "topography": [
+                {"name": "dem_3dep_10m", "variables": ["elevation"]},
+            ],
+            "soils": [
+                {"name": "gnatsgo_rasters", "variables": ["aws0_100"]},
+            ],
+        },
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert "topography" in config.datasets
+    assert "soils" in config.datasets
+    assert config.datasets["topography"][0].name == "dem_3dep_10m"
+
+
+def test_themed_datasets_rejects_unknown_category():
+    """Unknown category key raises ValidationError."""
+    with pytest.raises(ValidationError, match="not_a_category"):
+        PipelineConfig(
+            target_fabric={"path": "test.gpkg", "id_field": "id"},
+            datasets={"not_a_category": [{"name": "dem", "variables": ["elevation"]}]},
+        )
+
+
+def test_flatten_datasets():
+    """flatten_datasets() merges all categories into a flat list."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={
+            "topography": [
+                DatasetRequest(name="dem", variables=["elevation"]),
+            ],
+            "soils": [
+                DatasetRequest(name="gnatsgo", variables=["aws0_100"]),
+                DatasetRequest(name="polaris", variables=["sand"]),
+            ],
+        },
+    )
+    flat = config.flatten_datasets()
+    assert len(flat) == 3
+    assert [ds.name for ds in flat] == ["dem", "gnatsgo", "polaris"]
+
+
+def test_themed_datasets_empty_dict():
+    """Empty datasets dict is valid."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={},
+    )
+    assert config.flatten_datasets() == []
+
+
+def test_themed_datasets_empty_category_list():
+    """Category with empty list is valid."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={"topography": []},
+    )
+    assert config.flatten_datasets() == []

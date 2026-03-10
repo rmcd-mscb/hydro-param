@@ -13,50 +13,50 @@ target_fabric:
   id_field: nhm_id
 
 datasets:
-  # --- Topography ---
-  # 3DEP 10m DEM — elevation, slope, aspect
-  - name: dem_3dep_10m
-    variables: [elevation, slope, aspect]
-    statistics: [mean]
+  topography:
+    # 3DEP 10m DEM — elevation, slope, aspect
+    - name: dem_3dep_10m
+      variables: [elevation, slope, aspect]
+      statistics: [mean]
 
-  # --- Soils ---
-  # gNATSGO pre-summarized soil properties (Planetary Computer)
-  - name: gnatsgo_rasters
-    variables: [aws0_100, rootznemc, rootznaws]
-    statistics: [mean]
+  soils:
+    # gNATSGO pre-summarized soil properties (Planetary Computer)
+    - name: gnatsgo_rasters
+      variables: [aws0_100, rootznemc, rootznaws]
+      statistics: [mean]
 
-  # POLARIS soil texture properties, 30m (remote VRT, no download needed)
-  - name: polaris_30m
-    variables: [sand, silt, clay, theta_s, ksat, soil_texture]
-    statistics: [mean]
+    # POLARIS soil texture properties, 30m (remote VRT, no download needed)
+    - name: polaris_30m
+      variables: [sand, silt, clay, theta_s, ksat, soil_texture]
+      statistics: [mean]
 
-  # --- Land Cover ---
-  # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
-  - name: nlcd_osn_lndcov
-    variables: [LndCov]
-    statistics: [categorical]
-    year: [2020, 2021]
+  land_cover:
+    # NLCD Land Cover via NHGF STAC OSN — categorical fractions (multi-year)
+    - name: nlcd_osn_lndcov
+      variables: [LndCov]
+      statistics: [categorical]
+      year: [2020, 2021]
 
-  # NLCD Fractional Impervious via NHGF STAC OSN — for hru_percent_imperv
-  - name: nlcd_osn_fctimp
-    variables: [FctImp]
-    statistics: [mean]
-    year: [2020, 2021]
+    # NLCD Fractional Impervious via NHGF STAC OSN — for hru_percent_imperv
+    - name: nlcd_osn_fctimp
+      variables: [FctImp]
+      statistics: [mean]
+      year: [2020, 2021]
 
-  # --- Snow ---
-  # SNODAS daily snow — historical SWE for snarea_thresh calibration seed
-  - name: snodas
-    variables: [SWE]
-    statistics: [mean]
-    time_period: ["2020-01-01", "2021-12-31"]
+  snow:
+    # SNODAS daily snow — historical SWE for snarea_thresh calibration seed
+    - name: snodas
+      variables: [SWE]
+      statistics: [mean]
+      time_period: ["2020-01-01", "2021-12-31"]
 
-  # --- Climate ---
-  # gridMET daily climate (OPeNDAP via ClimateR catalog)
-  # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
-  - name: gridmet
-    variables: [pr, tmmx, tmmn, srad, pet, vs]
-    statistics: [mean]
-    time_period: ["2020-01-01", "2021-12-31"]
+  climate:
+    # gridMET daily climate (OPeNDAP via ClimateR catalog)
+    # pr/tmmx/tmmn for forcing; srad/pet/vs for radiation and PET derivation
+    - name: gridmet
+      variables: [pr, tmmx, tmmn, srad, pet, vs]
+      statistics: [mean]
+      time_period: ["2020-01-01", "2021-12-31"]
 
 output:
   path: output
