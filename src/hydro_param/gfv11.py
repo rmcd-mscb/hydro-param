@@ -101,6 +101,363 @@ FILE_DIRECTORY_MAP: dict[str, str] = {
 Files not listed here are skipped at download time with a warning.
 """
 
+# ---------------------------------------------------------------------------
+# GFv1.1 dataset metadata
+# ---------------------------------------------------------------------------
+
+GFV11_DATASETS: dict[str, dict] = {
+    # --- Soils (5) ---
+    "gfv11_sand": {
+        "description": "GFv1.1 SoilGrids250m sand %, 250m, CONUS",
+        "category": "soils",
+        "filename": "Sand.tif",
+        "subdir": "soils",
+        "variables": [
+            {
+                "name": "sand_pct",
+                "band": 1,
+                "units": "%",
+                "long_name": "Depth-weighted sand percentage (SoilGrids250m)",
+                "native_name": "sand_pct",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_clay": {
+        "description": "GFv1.1 SoilGrids250m clay %, 250m, CONUS",
+        "category": "soils",
+        "filename": "Clay.tif",
+        "subdir": "soils",
+        "variables": [
+            {
+                "name": "clay_pct",
+                "band": 1,
+                "units": "%",
+                "long_name": "Depth-weighted clay percentage (SoilGrids250m)",
+                "native_name": "clay_pct",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_silt": {
+        "description": "GFv1.1 SoilGrids250m silt %, 250m, CONUS",
+        "category": "soils",
+        "filename": "Silt.tif",
+        "subdir": "soils",
+        "variables": [
+            {
+                "name": "silt_pct",
+                "band": 1,
+                "units": "%",
+                "long_name": "Silt percentage (derived: 100 - sand - clay)",
+                "native_name": "silt_pct",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_awc": {
+        "description": "GFv1.1 SoilGrids250m available water capacity, 250m, CONUS",
+        "category": "soils",
+        "filename": "AWC.tif",
+        "subdir": "soils",
+        "variables": [
+            {
+                "name": "awc",
+                "band": 1,
+                "units": "mm",
+                "long_name": "Available water capacity (SoilGrids250m)",
+                "native_name": "awc",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_text_prms": {
+        "description": "GFv1.1 USDA texture class -> PRMS soil_type codes, 250m, CONUS",
+        "category": "soils",
+        "filename": "TEXT_PRMS.tif",
+        "subdir": "soils",
+        "variables": [
+            {
+                "name": "soil_type",
+                "band": 1,
+                "units": "class",
+                "long_name": "PRMS soil type (1=sand, 2=loam, 3=clay)",
+                "native_name": "soil_type",
+                "categorical": True,
+            }
+        ],
+    },
+    # --- Land Cover (10) ---
+    "gfv11_lulc": {
+        "description": "GFv1.1 NALCMS 2015 -> PRMS cov_type, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "LULC.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "cov_type",
+                "band": 1,
+                "units": "class",
+                "long_name": "PRMS cover type (0=bare, 1=grasses, 2=shrubs, 3=trees, 4=coniferous)",
+                "native_name": "cov_type",
+                "categorical": True,
+            }
+        ],
+    },
+    "gfv11_imperv": {
+        "description": "GFv1.1 GMIS impervious surface %, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "Imperv.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "imperv_pct",
+                "band": 1,
+                "units": "%",
+                "long_name": "Impervious surface percentage (GMIS)",
+                "native_name": "imperv_pct",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_cnpy": {
+        "description": "GFv1.1 MODIS tree canopy cover %, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "CNPY.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "canopy_pct",
+                "band": 1,
+                "units": "%",
+                "long_name": "Tree canopy cover percentage (MODIS MOD44B)",
+                "native_name": "canopy_pct",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_srain": {
+        "description": "GFv1.1 pre-computed summer rain interception, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "SRain.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "srain_intcp",
+                "band": 1,
+                "units": "inches",
+                "long_name": "Summer rain interception (pre-computed from NALCMS + lookup)",
+                "native_name": "srain_intcp",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_wrain": {
+        "description": "GFv1.1 pre-computed winter rain interception, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "WRain.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "wrain_intcp",
+                "band": 1,
+                "units": "inches",
+                "long_name": "Winter rain interception (pre-computed from NALCMS + lookup)",
+                "native_name": "wrain_intcp",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_snow_intcp": {
+        "description": "GFv1.1 pre-computed snow interception, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "Snow.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "snow_intcp",
+                "band": 1,
+                "units": "inches",
+                "long_name": "Snow interception (pre-computed from NALCMS + lookup)",
+                "native_name": "snow_intcp",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_covden_win": {
+        "description": "GFv1.1 pre-computed winter cover density, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "keep.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "covden_win",
+                "band": 1,
+                "units": "fraction",
+                "long_name": "Winter vegetation cover density (pre-computed from NALCMS + lookup)",
+                "native_name": "covden_win",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_covden_loss": {
+        "description": "GFv1.1 pre-computed seasonal cover density loss, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "loss.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "covden_loss",
+                "band": 1,
+                "units": "fraction",
+                "long_name": "Seasonal cover density loss (covden_sum - covden_win)",
+                "native_name": "covden_loss",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_covden_sum": {
+        "description": "GFv1.1 pre-computed summer cover density, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "CV_INT.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "covden_sum",
+                "band": 1,
+                "units": "fraction",
+                "long_name": "Summer vegetation cover density (pre-computed from NALCMS + lookup)",
+                "native_name": "covden_sum",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_root_depth": {
+        "description": "GFv1.1 pre-computed root depth, 30m, CONUS",
+        "category": "land_cover",
+        "filename": "RootDepth.tif",
+        "subdir": "land_cover",
+        "variables": [
+            {
+                "name": "root_depth",
+                "band": 1,
+                "units": "inches",
+                "long_name": "Root depth (pre-computed from NALCMS + lookup)",
+                "native_name": "root_depth",
+                "categorical": False,
+            }
+        ],
+    },
+    # --- Water Bodies (1) ---
+    "gfv11_wbg": {
+        "description": "GFv1.1 NHD HR waterbody mask, 30m, CONUS",
+        "category": "water_bodies",
+        "filename": "wbg.tif",
+        "subdir": "water_bodies",
+        "variables": [
+            {
+                "name": "waterbody",
+                "band": 1,
+                "units": "class",
+                "long_name": "NHD HR waterbody presence mask",
+                "native_name": "waterbody",
+                "categorical": True,
+            }
+        ],
+    },
+    # --- Topography (5) ---
+    "gfv11_dem": {
+        "description": "GFv1.1 SRTM 30m DEM, TGF domain",
+        "category": "topography",
+        "filename": "dem.tif",
+        "subdir": "topo",
+        "variables": [
+            {
+                "name": "elevation",
+                "band": 1,
+                "units": "m",
+                "long_name": "Surface elevation (SRTM 30m)",
+                "native_name": "elevation",
+                "categorical": False,
+            }
+        ],
+    },
+    "gfv11_slope": {
+        "description": "GFv1.1 TGF terrain slope, 30m (integer-encoded x 100)",
+        "category": "topography",
+        "filename": "slope100X.tif",
+        "subdir": "topo",
+        "variables": [
+            {
+                "name": "slope",
+                "band": 1,
+                "units": "degrees",
+                "long_name": "Terrain slope (stored as value x 100)",
+                "native_name": "slope",
+                "categorical": False,
+                "scale_factor": 0.01,
+            }
+        ],
+    },
+    "gfv11_aspect": {
+        "description": "GFv1.1 TGF terrain aspect, 30m (integer-encoded x 100)",
+        "category": "topography",
+        "filename": "asp100X.tif",
+        "subdir": "topo",
+        "variables": [
+            {
+                "name": "aspect",
+                "band": 1,
+                "units": "degrees",
+                "long_name": "Terrain aspect clockwise from north (stored as value x 100)",
+                "native_name": "aspect",
+                "categorical": False,
+                "scale_factor": 0.01,
+            }
+        ],
+    },
+    "gfv11_twi": {
+        "description": "GFv1.1 TGF topographic wetness index, 30m (integer-encoded x 100)",
+        "category": "topography",
+        "filename": "twi100X.tif",
+        "subdir": "topo",
+        "variables": [
+            {
+                "name": "twi",
+                "band": 1,
+                "units": "unitless",
+                "long_name": "Topographic wetness index (stored as value x 100)",
+                "native_name": "twi",
+                "categorical": False,
+                "scale_factor": 0.01,
+            }
+        ],
+    },
+    "gfv11_fdr": {
+        "description": "GFv1.1 TGF D8 flow direction, 30m",
+        "category": "topography",
+        "filename": "fdr.tif",
+        "subdir": "topo",
+        "variables": [
+            {
+                "name": "flow_dir",
+                "band": 1,
+                "units": "class",
+                "long_name": "D8 flow direction",
+                "native_name": "flow_dir",
+                "categorical": True,
+            }
+        ],
+    },
+}
+"""GFv1.1 dataset metadata for all 21 ScienceBase rasters.
+
+Maps registry dataset names to their metadata (description, category,
+source filename, subdirectory, and variable specifications).  Used by
+:func:`write_registry_overlay` to generate user-local registry entries
+with resolved ``source`` paths after download.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Download result tracking

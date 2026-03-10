@@ -11,6 +11,7 @@ import pytest
 from hydro_param.gfv11 import (
     DATA_LAYERS_ITEM_ID,
     FILE_DIRECTORY_MAP,
+    GFV11_DATASETS,
     SB_API_URL,
     TGF_TOPO_ITEM_ID,
     DownloadError,
@@ -76,6 +77,85 @@ class TestConstants:
     def test_land_cover_files_count(self) -> None:
         lc = [k for k, v in FILE_DIRECTORY_MAP.items() if v == "land_cover"]
         assert len(lc) == 10
+
+
+# ---------------------------------------------------------------------------
+# GFV11_DATASETS metadata
+# ---------------------------------------------------------------------------
+
+
+class TestGfv11Datasets:
+    """Verify GFV11_DATASETS metadata dict is complete and well-formed."""
+
+    def test_total_count(self) -> None:
+        """All 21 GFv1.1 rasters are registered."""
+        assert len(GFV11_DATASETS) == 21
+
+    def test_required_keys(self) -> None:
+        """Every entry has the required metadata keys."""
+        required = {"description", "category", "filename", "subdir", "variables"}
+        for name, meta in GFV11_DATASETS.items():
+            assert required.issubset(meta.keys()), f"{name} missing keys: {required - meta.keys()}"
+
+    def test_valid_categories(self) -> None:
+        """All categories are from the expected set."""
+        valid = {"soils", "land_cover", "water_bodies", "topography"}
+        for name, meta in GFV11_DATASETS.items():
+            assert meta["category"] in valid, f"{name} has unexpected category: {meta['category']}"
+
+    def test_category_counts(self) -> None:
+        """Category counts match the expected distribution."""
+        cats = [m["category"] for m in GFV11_DATASETS.values()]
+        assert cats.count("soils") == 5
+        assert cats.count("land_cover") == 10
+        assert cats.count("water_bodies") == 1
+        assert cats.count("topography") == 5
+
+    def test_variables_nonempty(self) -> None:
+        """Every dataset has at least one variable."""
+        for name, meta in GFV11_DATASETS.items():
+            assert len(meta["variables"]) >= 1, f"{name} has no variables"
+
+    def test_variable_required_fields(self) -> None:
+        """Every variable has the required fields."""
+        required = {"name", "band", "units", "long_name", "native_name", "categorical"}
+        for name, meta in GFV11_DATASETS.items():
+            for var in meta["variables"]:
+                assert required.issubset(var.keys()), (
+                    f"{name}/{var.get('name', '?')} missing: {required - var.keys()}"
+                )
+
+    def test_filenames_in_file_directory_map(self) -> None:
+        """Every filename maps to an entry in FILE_DIRECTORY_MAP."""
+        for name, meta in GFV11_DATASETS.items():
+            # Zip filename: replace .tif with .zip
+            zip_name = meta["filename"].replace(".tif", ".zip")
+            assert zip_name in FILE_DIRECTORY_MAP, f"{name}: {zip_name} not in FILE_DIRECTORY_MAP"
+
+    def test_scale_factor_on_encoded_rasters(self) -> None:
+        """Integer-encoded rasters (slope, aspect, twi) have scale_factor=0.01."""
+        encoded = {"gfv11_slope", "gfv11_aspect", "gfv11_twi"}
+        for name in encoded:
+            var = GFV11_DATASETS[name]["variables"][0]
+            assert var.get("scale_factor") == 0.01, f"{name} missing scale_factor=0.01"
+
+    def test_no_scale_factor_on_other_rasters(self) -> None:
+        """Non-encoded rasters do not have scale_factor."""
+        encoded = {"gfv11_slope", "gfv11_aspect", "gfv11_twi"}
+        for name, meta in GFV11_DATASETS.items():
+            if name not in encoded:
+                var = meta["variables"][0]
+                assert "scale_factor" not in var, f"{name} should not have scale_factor"
+
+    def test_categorical_datasets(self) -> None:
+        """Categorical flag is set on the correct datasets."""
+        expected_categorical = {"gfv11_text_prms", "gfv11_lulc", "gfv11_wbg", "gfv11_fdr"}
+        for name, meta in GFV11_DATASETS.items():
+            is_cat = meta["variables"][0]["categorical"]
+            if name in expected_categorical:
+                assert is_cat, f"{name} should be categorical"
+            else:
+                assert not is_cat, f"{name} should not be categorical"
 
 
 # ---------------------------------------------------------------------------
