@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from hydro_param.gfv11 import (
     DATA_LAYERS_ITEM_ID,
@@ -21,6 +22,7 @@ from hydro_param.gfv11 import (
     download_gfv11,
     download_item,
     fetch_item_files,
+    write_registry_overlay,
 )
 
 # ---------------------------------------------------------------------------
@@ -647,6 +649,95 @@ class TestDownloadItem:
 
         # No .done marker for non-zip files
         assert not (tmp_path / "metadata" / "CrossWalk.xlsx.done").exists()
+
+
+# ---------------------------------------------------------------------------
+# download_gfv11
+# ---------------------------------------------------------------------------
+
+
+class TestWriteRegistryOverlay:
+    """Tests for auto-registration of GFv1.1 datasets."""
+
+    def test_writes_valid_yaml(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        assert overlay_path.exists()
+        raw = yaml.safe_load(overlay_path.read_text())
+        assert "datasets" in raw
+        assert len(raw["datasets"]) == 21
+
+    def test_source_paths_are_absolute(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        for name, entry in raw["datasets"].items():
+            source = entry.get("source", "")
+            assert Path(source).is_absolute(), f"{name}: source is not absolute: {source}"
+
+    def test_source_paths_match_subdir_structure(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        sand = raw["datasets"]["gfv11_sand"]
+        expected = str(data_dir.resolve() / "soils" / "Sand.tif")
+        assert sand["source"] == expected
+
+    def test_all_entries_have_strategy_local_tiff(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        for name, entry in raw["datasets"].items():
+            assert entry["strategy"] == "local_tiff", f"{name}: strategy != local_tiff"
+
+    def test_entries_parseable_as_dataset_entries(self, tmp_path: Path) -> None:
+        """Generated YAML can be loaded by the registry loader."""
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        from hydro_param.dataset_registry import load_registry
+
+        registry = load_registry(overlay_path)
+        assert len(registry.datasets) == 21
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "nested" / "dir" / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        assert overlay_path.exists()
+
+    def test_scale_factor_preserved_in_yaml(self, tmp_path: Path) -> None:
+        overlay_path = tmp_path / "gfv11.yml"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        write_registry_overlay(data_dir, overlay_path)
+
+        raw = yaml.safe_load(overlay_path.read_text())
+        slope_vars = raw["datasets"]["gfv11_slope"]["variables"]
+        assert slope_vars[0]["scale_factor"] == 0.01
 
 
 # ---------------------------------------------------------------------------
