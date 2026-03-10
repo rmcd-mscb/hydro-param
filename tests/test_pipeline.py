@@ -32,6 +32,7 @@ from hydro_param.pipeline import (
     stage2_resolve_datasets,
 )
 from hydro_param.processing import TemporalProcessor, ZonalProcessor, get_processor
+from hydro_param.pywatershed_config import load_pywatershed_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -2841,3 +2842,37 @@ class TestScaleFactor:
         df = results["elevation"]
         assert df["mean"].iloc[0] == pytest.approx(4500.0)
         assert df["mean"].iloc[1] == pytest.approx(3200.0)
+
+
+# ---------------------------------------------------------------------------
+# GFv1.1 config loading tests
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class TestGfv11Config:
+    """Validate that GFv1.1 example config files parse correctly."""
+
+    def test_gfv11_static_pipeline_loads(self) -> None:
+        """Load gfv11_static_pipeline.yml and verify structure."""
+        config_path = _REPO_ROOT / "configs" / "examples" / "gfv11_static_pipeline.yml"
+        if not config_path.exists():
+            pytest.skip(f"Config file not found: {config_path}")
+
+        config = load_config(config_path)
+        assert config.target_fabric.id_field == "nhm_id"
+
+        total_datasets = sum(len(ds) for ds in config.datasets.values())
+        assert total_datasets == 21
+
+    def test_gfv11_static_pywatershed_loads(self) -> None:
+        """Load gfv11_static_pywatershed.yml and verify structure."""
+        config_path = _REPO_ROOT / "configs" / "examples" / "gfv11_static_pywatershed.yml"
+        if not config_path.exists():
+            pytest.skip(f"Config file not found: {config_path}")
+
+        config = load_pywatershed_config(config_path)
+        assert config.domain.id_field == "nhm_id"
+        for category in ("topography", "soils", "landcover"):
+            assert hasattr(config.static_datasets, category)

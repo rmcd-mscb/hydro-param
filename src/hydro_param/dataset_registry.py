@@ -92,8 +92,8 @@ class VariableSpec(BaseModel):
         Multiplicative scale factor for integer-encoded rasters (e.g.,
         ``0.01`` for values stored as ``value × 100``).  Follows
         CF-conventions ``scale_factor`` semantics.  When ``None``, no
-        scaling is needed.  The pipeline passes this through as metadata;
-        consumers apply it.
+        scaling is applied.  The pipeline applies this factor after
+        zonal statistics so the SIR contains physically meaningful values.
     """
 
     name: str
