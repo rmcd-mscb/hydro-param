@@ -802,3 +802,54 @@ class TestDownloadGfv11:
 
         with pytest.raises(DownloadError, match="1 extraction"):
             download_gfv11(tmp_path, items="data-layers")
+
+
+# ---------------------------------------------------------------------------
+# Auto-registration after download
+# ---------------------------------------------------------------------------
+
+
+class TestDownloadGfv11AutoRegistration:
+    """Tests for auto-registration after download."""
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_writes_overlay_after_successful_download(
+        self, mock_di: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_writes_overlay_when_all_skipped(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """Overlay is written even when all files were already downloaded."""
+        mock_di.return_value = DownloadSummary(skipped=["Sand.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_no_overlay_on_total_failure(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """No overlay written when all downloads fail."""
+        mock_di.return_value = DownloadSummary(failed=["Sand.tif"], extract_failed=["Clay.tif"])
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        with pytest.raises(DownloadError):
+            download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert not overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_no_overlay_when_nothing_happened(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """No overlay when downloaded and skipped are both empty."""
+        mock_di.return_value = DownloadSummary()
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        assert not overlay_path.exists()

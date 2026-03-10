@@ -902,12 +902,17 @@ def download_gfv11(
     output_dir: Path,
     *,
     items: GFv11Items = "all",
+    overlay_path: Path | None = None,
 ) -> DownloadSummary:
     """Download GFv1.1 raster data from ScienceBase.
 
     This is the top-level entry point for downloading NHM v1.1 data
     layer rasters and/or topographic derivatives.  Files are organized
     into thematic subdirectories under *output_dir*.
+
+    After a successful download (at least one file downloaded or skipped),
+    a registry overlay YAML is written so the datasets become visible
+    to the pipeline via :func:`~hydro_param.dataset_registry.load_registry`.
 
     Parameters
     ----------
@@ -916,6 +921,9 @@ def download_gfv11(
     items : {"all", "data-layers", "tgf-topo"}, optional
         Which ScienceBase items to download.  ``"all"`` downloads both data
         layers and topographic derivatives.  Default is ``"all"``.
+    overlay_path : Path or None
+        Where to write the registry overlay YAML.  Defaults to
+        ``~/.hydro-param/datasets/gfv11.yml``.
 
     Returns
     -------
@@ -952,6 +960,10 @@ def download_gfv11(
         _merge(download_item(TGF_TOPO_ITEM_ID, output_dir))
 
     combined.log_summary()
+
+    # Auto-register datasets if any downloads or skips succeeded
+    if combined.downloaded or combined.skipped:
+        write_registry_overlay(output_dir, overlay_path)
 
     if combined.has_failures:
         raise DownloadError(
