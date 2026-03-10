@@ -106,6 +106,14 @@ class VariableSpec(BaseModel):
     source_override: str | None = None
     scale_factor: float | None = None
 
+    @field_validator("scale_factor")
+    @classmethod
+    def _nonzero_scale(cls, v: float | None) -> float | None:
+        if v is not None and v == 0.0:
+            msg = "scale_factor must not be zero (would destroy all data)"
+            raise ValueError(msg)
+        return v
+
 
 class DerivedVariableSpec(BaseModel):
     """Describe a variable derived from another variable in the same dataset.

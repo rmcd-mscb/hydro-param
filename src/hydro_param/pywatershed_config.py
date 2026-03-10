@@ -140,7 +140,7 @@ class SoilsDatasets(BaseModel):
 
 
 class LandcoverDatasets(BaseModel):
-    """Land cover parameters from NLCD or pre-computed GFv1.1 rasters.
+    """Land cover parameters for vegetation type, density, and interception.
 
     Parameters
     ----------
@@ -151,15 +151,15 @@ class LandcoverDatasets(BaseModel):
     hru_percent_imperv : ParameterEntry or None
         Impervious surface fraction.
     covden_sum : ParameterEntry or None
-        Summer vegetation cover density (GFv1.1 pre-computed).
+        Summer vegetation cover density (0--1 fraction).
     covden_win : ParameterEntry or None
-        Winter vegetation cover density (GFv1.1 pre-computed).
+        Winter vegetation cover density (0--1 fraction).
     srain_intcp : ParameterEntry or None
-        Summer rain interception (GFv1.1 pre-computed, inches).
+        Summer rain interception storage capacity (inches).
     wrain_intcp : ParameterEntry or None
-        Winter rain interception (GFv1.1 pre-computed, inches).
+        Winter rain interception storage capacity (inches).
     snow_intcp : ParameterEntry or None
-        Snow interception (GFv1.1 pre-computed, inches).
+        Snow interception storage capacity (inches).
     """
 
     model_config = ConfigDict(extra="forbid")
