@@ -58,7 +58,6 @@ output:
   sir_name: "delaware_terrain"
 
 processing:
-  engine: exactextract
   batch_size: 500
 ```
 

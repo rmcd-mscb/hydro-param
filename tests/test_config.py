@@ -83,7 +83,7 @@ def test_config_defaults():
     assert config.output.format == "netcdf"
     assert config.output.sir_name == "result"
     assert config.processing.batch_size == 500
-    assert config.processing.batch_size == 500
+    assert config.processing.resume is False
 
 
 def test_dataset_request_defaults():

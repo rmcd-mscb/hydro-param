@@ -279,7 +279,7 @@ flowchart TD
 
 **Derived variables** (`data_access.py:66–166`): `derive_slope()` and `derive_aspect()` compute terrain derivatives from elevation using Horn's method via `numpy.gradient`. Registered in `DERIVATION_FUNCTIONS` at `data_access.py:163–166`.
 
-**Zonal statistics** (`processing.py:41–154`): `ZonalProcessor.process()` wraps gdptools `UserTiffData` + `ZonalGen`. It reads CRS from the registry (or the GeoTIFF if not specified), constructs a `ZonalGen` with the configured engine (default `exactextract`), and computes either continuous statistics or categorical class fractions.
+**Zonal statistics** (`processing.py:41–154`): `ZonalProcessor.process()` wraps gdptools `UserTiffData` + `ZonalGen`. It reads CRS from the registry (or the GeoTIFF if not specified), constructs a `ZonalGen` with the `exactextract` engine, and computes either continuous statistics or categorical class fractions.
 
 ### Resume Support
 
