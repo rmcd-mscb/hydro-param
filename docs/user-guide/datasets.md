@@ -27,15 +27,15 @@ hydro-param datasets list
 Get details for a specific dataset:
 
 ```bash
-hydro-param datasets info nlcd_annual
+hydro-param datasets info nlcd_osn_lndcov
 ```
 
 ## Downloading Data
 
-Some datasets require local files. Use the download command:
+Some datasets (e.g., GFv1.1) require local files. Use the download command:
 
 ```bash
-hydro-param datasets download nlcd_annual --years 2021 --variables LndCov
+hydro-param gfv11 download --output-dir /path/to/data/gfv11
 ```
 
 When inside an initialized project, files are automatically routed to the

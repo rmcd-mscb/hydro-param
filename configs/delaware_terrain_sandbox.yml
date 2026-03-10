@@ -26,14 +26,11 @@ datasets:
       - aspect
     statistics:
       - mean
-  # Uncomment to include NLCD land cover (requires local download).
-  # Run: hydro-param datasets info nlcd_legacy
-  # - name: nlcd_legacy
-  #   source: data/nlcd_2021_land_cover_l48_20230630.tif
-  #   variables:
-  #     - land_cover
-  #   statistics:
-  #     - majority
+  # Uncomment to include NLCD land cover (via NHGF STAC, free access).
+  # - name: nlcd_osn_lndcov
+  #   variables: [LndCov]
+  #   statistics: [categorical]
+  #   year: [2021]
 
 output:
   path: "./output"

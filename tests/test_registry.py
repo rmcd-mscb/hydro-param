@@ -528,43 +528,9 @@ def test_load_real_registry():
     assert "dem_3dep_10m" in registry.datasets
     assert "polaris_30m" in registry.datasets
     assert "gnatsgo_rasters" in registry.datasets
-    assert "nlcd_legacy" in registry.datasets
-    assert "nlcd_annual" in registry.datasets
+    assert "nlcd_osn_lndcov" in registry.datasets
     assert "gridmet" in registry.datasets
     assert "snodas" in registry.datasets
-
-
-def test_real_registry_nlcd_legacy_has_download():
-    """Verify NLCD legacy entry in real registry has multi-file download block."""
-    registry = load_registry(DEFAULT_REGISTRY)
-    nlcd = registry.get("nlcd_legacy")
-    assert nlcd.strategy == "local_tiff"
-    assert nlcd.source is None
-    assert nlcd.download is not None
-    assert len(nlcd.download.files) > 0
-    # Verify multi-file structure
-    years = {f.year for f in nlcd.download.files}
-    variables = {f.variable for f in nlcd.download.files}
-    assert 2021 in years
-    assert "land_cover" in variables
-    assert "impervious" in variables
-
-
-def test_real_registry_nlcd_annual_has_template():
-    """Verify NLCD annual entry in real registry has template download."""
-    registry = load_registry(DEFAULT_REGISTRY)
-    nlcd = registry.get("nlcd_annual")
-    assert nlcd.strategy == "local_tiff"
-    assert nlcd.download is not None
-    assert nlcd.download.url_template != ""
-    assert nlcd.download.year_range == [1985, 2024]
-    assert "LndCov" in nlcd.download.variables_available
-    assert nlcd.download.requester_pays is True
-    # Verify expand_files works
-    files = nlcd.download.expand_files(years={2020}, variables={"LndCov"})
-    assert len(files) == 1
-    assert "2020" in files[0].url
-    assert "LndCov" in files[0].url
 
 
 def test_real_registry_gridmet():
