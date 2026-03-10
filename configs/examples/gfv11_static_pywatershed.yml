@@ -1,5 +1,5 @@
 # GFv1.1 static-only pywatershed config — validates GFv1.1 rasters against DRB
-# Generates parameters.nc from GFv1.1 ScienceBase sources (Phase A: no forcing).
+# Generates parameters.nc from 3DEP topography + GFv1.1 ScienceBase sources (Phase A: no forcing).
 #
 # Prerequisites:
 #   hydro-param run configs/examples/gfv11_static_pipeline.yml
@@ -37,17 +37,17 @@ static_datasets:
       source: dem_3dep_30m
       variable: elevation
       statistic: mean
-      description: "Mean HRU elevation (3DEP 1 arc-second, 30m)"
+      description: "Mean HRU elevation (3DEP 1 arc-second, ~30m)"
     hru_slope:
       source: dem_3dep_30m
       variable: slope
       statistic: mean
-      description: "Mean land surface slope (Horn from 3DEP 30m)"
+      description: "Mean land surface slope (Horn method, derived from 3DEP ~30m DEM)"
     hru_aspect:
       source: dem_3dep_30m
       variable: aspect
       statistic: mean
-      description: "Mean HRU aspect (Horn from 3DEP 30m)"
+      description: "Mean HRU aspect (Horn method, derived from 3DEP ~30m DEM)"
 
   soils:
     available: [gfv11_sand, gfv11_silt, gfv11_clay, gfv11_awc, gfv11_text_prms]
