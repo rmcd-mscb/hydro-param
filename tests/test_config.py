@@ -400,3 +400,79 @@ def test_load_config_resolves_dataset_source(tmp_path: Path):
     assert config.datasets[0].source is not None
     assert config.datasets[0].source.is_absolute()
     assert config.datasets[1].source is None
+
+
+# ---------------------------------------------------------------------------
+# Themed datasets (dict keyed by category)
+# ---------------------------------------------------------------------------
+
+
+def test_themed_datasets_from_yaml(tmp_path: Path):
+    """Pipeline config accepts datasets organized by category."""
+    raw = {
+        "target_fabric": {"path": "data/catchments.gpkg", "id_field": "featureid"},
+        "datasets": {
+            "topography": [
+                {"name": "dem_3dep_10m", "variables": ["elevation"]},
+            ],
+            "soils": [
+                {"name": "gnatsgo_rasters", "variables": ["aws0_100"]},
+            ],
+        },
+    }
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.dump(raw))
+
+    config = load_config(str(path))
+    assert "topography" in config.datasets
+    assert "soils" in config.datasets
+    assert config.datasets["topography"][0].name == "dem_3dep_10m"
+
+
+def test_themed_datasets_rejects_unknown_category():
+    """Unknown category key raises ValidationError."""
+    with pytest.raises(ValidationError, match="not_a_category"):
+        PipelineConfig(
+            target_fabric={"path": "test.gpkg", "id_field": "id"},
+            datasets={"not_a_category": [{"name": "dem", "variables": ["elevation"]}]},
+        )
+
+
+def test_flatten_datasets():
+    """flatten_datasets() merges all categories into a flat list."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={
+            "topography": [
+                DatasetRequest(name="dem", variables=["elevation"]),
+            ],
+            "soils": [
+                DatasetRequest(name="gnatsgo", variables=["aws0_100"]),
+                DatasetRequest(name="polaris", variables=["sand"]),
+            ],
+        },
+    )
+    flat = config.flatten_datasets()
+    assert len(flat) == 3
+    names = [ds.name for ds in flat]
+    assert "dem" in names
+    assert "gnatsgo" in names
+    assert "polaris" in names
+
+
+def test_themed_datasets_empty_dict():
+    """Empty datasets dict is valid."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={},
+    )
+    assert config.flatten_datasets() == []
+
+
+def test_themed_datasets_empty_category_list():
+    """Category with empty list is valid."""
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "id"},
+        datasets={"topography": []},
+    )
+    assert config.flatten_datasets() == []

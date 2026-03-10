@@ -24,6 +24,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from hydro_param.dataset_registry import VALID_CATEGORIES
+
 
 class TargetFabricConfig(BaseModel):
     """Specify the target polygon fabric to parameterize.
@@ -257,8 +259,10 @@ class PipelineConfig(BaseModel):
     domain : DomainConfig or None
         Optional spatial subsetting.  When ``None``, the full fabric
         extent is used.
-    datasets : list[DatasetRequest]
-        One or more datasets to process.
+    datasets : dict[str, list[DatasetRequest]]
+        Datasets organized by category (e.g., ``"topography"``, ``"soils"``).
+        Category keys must be members of
+        :data:`~hydro_param.dataset_registry.VALID_CATEGORIES`.
     output : OutputConfig
         Output location and format.
     processing : ProcessingConfig
@@ -272,9 +276,31 @@ class PipelineConfig(BaseModel):
 
     target_fabric: TargetFabricConfig
     domain: DomainConfig | None = None
-    datasets: list[DatasetRequest]
+    datasets: dict[str, list[DatasetRequest]]
     output: OutputConfig = OutputConfig()
     processing: ProcessingConfig = ProcessingConfig()
+
+    @model_validator(mode="after")
+    def _validate_dataset_categories(self) -> PipelineConfig:
+        """Validate that all dataset category keys are known registry categories."""
+        unknown = set(self.datasets.keys()) - VALID_CATEGORIES
+        if unknown:
+            raise ValueError(
+                f"Unknown dataset categories: {sorted(unknown)}. "
+                f"Valid categories: {sorted(VALID_CATEGORIES)}"
+            )
+        return self
+
+    def flatten_datasets(self) -> list[DatasetRequest]:
+        """Flatten themed dataset dict into a single list for pipeline stages.
+
+        Returns
+        -------
+        list[DatasetRequest]
+            All dataset requests from all categories, preserving order
+            within each category.
+        """
+        return [ds for ds_list in self.datasets.values() for ds in ds_list]
 
 
 def load_config(path: str | Path) -> PipelineConfig:
@@ -350,7 +376,8 @@ def _resolve_paths(config: PipelineConfig) -> PipelineConfig:
     """
     config.target_fabric.path = config.target_fabric.path.resolve()
     config.output.path = config.output.path.resolve()
-    for ds in config.datasets:
-        if ds.source is not None:
-            ds.source = ds.source.resolve()
+    for ds_list in config.datasets.values():
+        for ds in ds_list:
+            if ds.source is not None:
+                ds.source = ds.source.resolve()
     return config
