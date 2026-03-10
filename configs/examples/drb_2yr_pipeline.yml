@@ -64,6 +64,5 @@ output:
   sir_name: drb_2yr_sir
 
 processing:
-  engine: exactextract
   batch_size: 240
   resume: true

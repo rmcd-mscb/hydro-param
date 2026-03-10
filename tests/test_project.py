@@ -204,7 +204,6 @@ class TestGeneratePipelineTemplate:
         content = generate_pipeline_template("test_project")
         parsed = yaml.safe_load(content)
         config = PipelineConfig(**parsed)
-        assert config.processing.engine == "exactextract"
         assert config.processing.batch_size == 500
         assert config.processing.resume is True
         assert config.output.format == "netcdf"

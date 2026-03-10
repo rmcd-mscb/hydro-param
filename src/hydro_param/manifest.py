@@ -436,7 +436,7 @@ def dataset_fingerprint(
         Resolved variable specifications (band numbers, categorical
         flags) and derived variable specifications (source, method).
     processing
-        Processing config (engine type, batch size).
+        Processing config (batch size).
 
     Returns
     -------
@@ -476,7 +476,6 @@ def dataset_fingerprint(
         },
         "var_specs": [_serialize_var_spec(v) for v in var_specs],
         "processing": {
-            "engine": processing.engine,
             "batch_size": processing.batch_size,
         },
     }
