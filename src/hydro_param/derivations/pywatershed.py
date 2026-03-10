@@ -383,9 +383,14 @@ class PywatershedDerivation:
 
         Notes
         -----
-        Logs at INFO level when a pre-computed value is used, and at
-        DEBUG level when no declaration is found or the SIR variable
-        is missing.
+        Logs at INFO level when a pre-computed value is successfully loaded.
+        Logs at WARNING level when a declaration exists but the SIR variable
+        cannot be found (indicating a config/pipeline mismatch).
+
+        For categorical variables, fraction columns are identified by the
+        ``_<digit>`` suffix pattern.  All-NaN rows (HRUs outside raster
+        coverage) are detected and warned about; ``nanargmax`` assigns
+        them to the first class index.
         """
         if ctx.precomputed is None or param_name not in ctx.precomputed:
             return None
@@ -402,7 +407,7 @@ class PywatershedDerivation:
             if frac_key is None:
                 frac_key = sir.find_variable(sir_var)
             if frac_key is None:
-                logger.debug(
+                logger.warning(
                     "Pre-computed '%s' declared (source=%s) but '%s_frac' "
                     "not found in SIR; falling back to derivation.",
                     param_name,
@@ -415,23 +420,29 @@ class PywatershedDerivation:
             # Exclude _count columns and the bare anchor key.
             frac_cols = sorted(str(v) for v in frac_ds.data_vars if re.search(r"_\d+$", str(v)))
             if len(frac_cols) < 2:
-                logger.debug(
+                logger.warning(
                     "Pre-computed '%s': fraction file has < 2 class columns; "
                     "falling back to derivation.",
                     param_name,
                 )
                 return None
-            # Extract class indices from column names (e.g., "soil_type_frac_1" → 1)
-            class_indices: list[int] = []
-            for col in frac_cols:
-                parts = str(col).rsplit("_", 1)
-                try:
-                    class_indices.append(int(parts[-1]))
-                except (ValueError, IndexError):
-                    class_indices.append(0)
+            # Extract class indices from column names (e.g., "soil_type_frac_1" → 1).
+            # The regex filter guarantees each column ends with _<digits>.
+            class_indices = np.array([int(str(col).rsplit("_", 1)[-1]) for col in frac_cols])
             fractions = np.column_stack([frac_ds[col].values for col in frac_cols])
-            majority_pos = np.argmax(fractions, axis=1)
-            result = np.array([class_indices[i] for i in majority_pos])
+            # Warn on all-NaN rows (HRUs outside raster coverage).
+            nan_rows = np.all(np.isnan(fractions), axis=1)
+            if np.any(nan_rows):
+                logger.warning(
+                    "Pre-computed '%s': %d/%d HRUs have all-NaN fractions; "
+                    "these will be assigned class index %d (first class).",
+                    param_name,
+                    int(np.sum(nan_rows)),
+                    len(fractions),
+                    int(class_indices[0]),
+                )
+            majority_pos = np.nanargmax(fractions, axis=1)
+            result = class_indices[majority_pos]
             logger.info(
                 "Using pre-computed '%s' from %s (categorical majority, %d classes)",
                 param_name,
@@ -459,7 +470,7 @@ class PywatershedDerivation:
                 )
                 return values
 
-        logger.debug(
+        logger.warning(
             "Pre-computed '%s' declared (source=%s, variable=%s) but "
             "not found in SIR; falling back to derivation.",
             param_name,
@@ -2013,17 +2024,22 @@ class PywatershedDerivation:
         (``cov_type``) and derive canopy density (``covden_sum``) and
         impervious fraction (``hru_percent_imperv``).
 
-        Supports three input modes:
+        Supports four input modes:
 
-        1. **Categorical fractions** (preferred): SIR contains columns
-           like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
+        1. **Pre-computed pass-through** (highest priority): when the
+           consumer config declares a pre-computed source for ``cov_type``,
+           ``covden_sum``, or ``hru_percent_imperv``, the SIR value is
+           loaded directly via ``_try_precomputed()`` and no NLCD
+           derivation is performed for that parameter.
+        2. **Categorical fractions** (preferred NLCD path): SIR contains
+           columns like ``lndcov_frac_11``, ``lndcov_frac_21``, etc. from
            normalized categorical zonal output.  Fractions are grouped
            by target category before selecting the majority class to
            avoid split-vote problems.
-        2. **Single majority value**: ``land_cover`` or
+        3. **Single majority value**: ``land_cover`` or
            ``land_cover_majority`` variable containing the dominant
            NLCD class code per HRU.
-        3. **Continuous auxiliary layers**: ``fctimp_pct_mean`` (0--100%)
+        4. **Continuous auxiliary layers**: ``fctimp_pct_mean`` (0--100%)
            for impervious fraction and ``tree_canopy_pct_mean``
            (0--100%) for canopy cover density.
 
@@ -2122,8 +2138,17 @@ class PywatershedDerivation:
         # --- hru_percent_imperv: try pre-computed, then NLCD imperviousness ---
         imperv = self._try_precomputed(ctx, "hru_percent_imperv")
         if imperv is not None:
-            # Pre-computed may be 0-100% or 0-1 fraction; normalize
-            if np.nanmax(imperv) > 1.0:
+            # Determine if values are percentages (0-100) or fractions (0-1)
+            # by checking the SIR variable name suffix: "_pct_" → percentage.
+            imperv_decl = (ctx.precomputed or {}).get("hru_percent_imperv", {})
+            imperv_var = imperv_decl.get("variable", "")
+            if "_pct" in imperv_var or np.nanmax(imperv) > 1.0:
+                if np.nanmax(imperv) > 1.0:
+                    logger.info(
+                        "Pre-computed 'hru_percent_imperv' max=%.2f; "
+                        "converting from percent to fraction.",
+                        float(np.nanmax(imperv)),
+                    )
                 imperv = imperv / 100.0
             ds["hru_percent_imperv"] = xr.DataArray(
                 np.clip(imperv, 0.0, 1.0),
@@ -2949,10 +2974,16 @@ class PywatershedDerivation:
     def _apply_lookup_tables(self, ctx: DerivationContext, ds: xr.Dataset) -> xr.Dataset:
         """Apply lookup tables for interception and winter cover density (step 8).
 
-        Use ``cov_type`` (from step 4) to look up per-HRU interception
-        capacities (``srain_intcp``, ``wrain_intcp``, ``snow_intcp``) and
-        compute winter cover density (``covden_win``) by applying a
-        cov_type-dependent reduction factor to ``covden_sum``.
+        For each interception parameter (``srain_intcp``, ``wrain_intcp``,
+        ``snow_intcp``) and ``covden_win``, check for a pre-computed value
+        via ``_try_precomputed()`` before falling back to lookup-table
+        derivation from ``cov_type``.  This allows GFv1.1 (or other
+        pre-computed sources) to supply these values directly.
+
+        When no pre-computed value is available, use ``cov_type`` (from
+        step 4) to look up per-HRU interception capacities and compute
+        winter cover density by applying a cov_type-dependent reduction
+        factor to ``covden_sum``.
 
         Also sets ``imperv_stor_max`` to a uniform default of 0.03 inches.
 
@@ -2996,27 +3027,22 @@ class PywatershedDerivation:
 
         # --- Interception capacities: try pre-computed, then lookup ---
         intcp_params = ("srain_intcp", "wrain_intcp", "snow_intcp")
-        precomputed_intcp = {name: self._try_precomputed(ctx, name) for name in intcp_params}
-        any_missing = any(v is None for v in precomputed_intcp.values())
-
-        if any_missing:
-            # Need lookup table for at least one interception param
-            intcp_table = self._load_lookup_table("cov_type_to_interception", tables_dir)
-            columns = intcp_table["columns"]
-            mapping_intcp = intcp_table["mapping"]
+        intcp_table = self._load_lookup_table("cov_type_to_interception", tables_dir)
+        columns = intcp_table["columns"]
+        mapping_intcp = intcp_table["mapping"]
 
         for i, col_name in enumerate(intcp_params):
-            if precomputed_intcp[col_name] is not None:
+            precomputed_val = self._try_precomputed(ctx, col_name)
+            if precomputed_val is not None:
                 ds[col_name] = xr.DataArray(
-                    precomputed_intcp[col_name],
+                    precomputed_val,
                     dims="nhru",
                     attrs={
                         "units": "inches",
                         "long_name": f"{col_name.replace('_', ' ').title()}",
                     },
                 )
-            elif any_missing:
-                # Derive from cov_type lookup
+            else:
                 col_idx = columns.index(col_name) if col_name in columns else i
                 values = np.array(
                     [mapping_intcp.get(int(ct), [0.0, 0.0, 0.0])[col_idx] for ct in cov_type_vals]

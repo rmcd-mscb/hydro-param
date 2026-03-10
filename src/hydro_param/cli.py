@@ -596,7 +596,13 @@ def _build_precomputed_map(
     Returns
     -------
     dict[str, dict[str, str]]
-        Mapping from PRMS parameter name to ``{"source": ..., "variable": ...}``.
+        Mapping from PRMS parameter name to a dict with three keys:
+
+        - ``"source"`` (str): Pipeline dataset name (e.g., ``"gfv11_covden_sum"``).
+        - ``"variable"`` (str): SIR variable name (e.g., ``"covden_sum"``).
+        - ``"statistic"`` (str): Zonal statistic (e.g., ``"mean"``); defaults
+          to ``"mean"`` when the config entry has no explicit statistic.
+
         Empty dict if no pre-computed entries are declared.
     """
     result: dict[str, dict[str, str]] = {}
@@ -611,12 +617,24 @@ def _build_precomputed_map(
             if field_name == "available":
                 continue
             entry = getattr(category, field_name)
-            if entry is not None and entry.source and entry.variable:
+            if entry is None:
+                continue
+            has_source = bool(entry.source)
+            has_variable = bool(entry.variable)
+            if has_source and has_variable:
                 result[field_name] = {
                     "source": entry.source,
                     "variable": entry.variable,
                     "statistic": entry.statistic or "mean",
                 }
+            elif has_source != has_variable:
+                logger.warning(
+                    "Partial pre-computed entry for '%s': source=%r, variable=%r. "
+                    "Both 'source' and 'variable' are required; skipping.",
+                    field_name,
+                    entry.source,
+                    entry.variable,
+                )
     return result
 
 

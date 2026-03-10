@@ -4792,3 +4792,159 @@ class TestPrecomputedPassthrough:
         assert "hru_percent_imperv" in ds
         # NLCD 42 = Evergreen → cov_type 4
         assert ds["cov_type"].values[0] == 4
+
+    def test_partial_interception_precomputed(self, derivation: PywatershedDerivation) -> None:
+        """Mix of precomputed and lookup-derived interception params.
+
+        When only some interception params are declared as precomputed,
+        the others should fall back to lookup-table derivation.
+        """
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "land_cover": ("nhm_id", np.array([42, 71])),
+                    "srain_intcp_inches_mean": ("nhm_id", np.array([0.04, 0.01])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "srain_intcp": {
+                "source": "gfv11_srain",
+                "variable": "srain_intcp_inches_mean",
+                "statistic": "mean",
+            },
+            # wrain_intcp and snow_intcp NOT declared → lookup-table
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = xr.Dataset()
+        ds = derivation._derive_landcover(ctx, ds)
+        assert "cov_type" in ds
+        ds = derivation._apply_lookup_tables(ctx, ds)
+        # srain_intcp from precomputed
+        np.testing.assert_allclose(ds["srain_intcp"].values, [0.04, 0.01])
+        # wrain_intcp and snow_intcp from lookup table (not NaN, not missing)
+        assert "wrain_intcp" in ds
+        assert "snow_intcp" in ds
+        assert not np.any(np.isnan(ds["wrain_intcp"].values))
+        assert not np.any(np.isnan(ds["snow_intcp"].values))
+
+
+class TestBuildPrecomputedMap:
+    """Tests for _build_precomputed_map() in cli.py."""
+
+    def test_empty_config(self) -> None:
+        """Default config with no entries returns empty map."""
+        from hydro_param.cli import _build_precomputed_map
+        from hydro_param.pywatershed_config import (
+            PwsDomainConfig,
+            PwsTimeConfig,
+            PywatershedRunConfig,
+        )
+
+        cfg = PywatershedRunConfig(
+            domain=PwsDomainConfig(fabric_path="dummy.gpkg"),
+            time=PwsTimeConfig(start="2020-01-01", end="2020-12-31"),
+        )
+        result = _build_precomputed_map(cfg)
+        assert result == {}
+
+    def test_populated_entries(self) -> None:
+        """Entries with both source and variable are collected."""
+        from hydro_param.cli import _build_precomputed_map
+        from hydro_param.pywatershed_config import (
+            LandcoverDatasets,
+            ParameterEntry,
+            PwsDomainConfig,
+            PwsTimeConfig,
+            PywatershedRunConfig,
+            StaticDatasetsConfig,
+        )
+
+        cfg = PywatershedRunConfig(
+            domain=PwsDomainConfig(fabric_path="dummy.gpkg"),
+            time=PwsTimeConfig(start="2020-01-01", end="2020-12-31"),
+            static_datasets=StaticDatasetsConfig(
+                landcover=LandcoverDatasets(
+                    covden_sum=ParameterEntry(
+                        source="gfv11_covden_sum",
+                        variable="covden_sum",
+                        statistic="mean",
+                        description="Summer cover density",
+                    ),
+                    cov_type=ParameterEntry(
+                        source="gfv11_lulc",
+                        variable="cov_type",
+                        statistic="majority",
+                        description="Vegetation cover type",
+                    ),
+                ),
+            ),
+        )
+        result = _build_precomputed_map(cfg)
+        assert "covden_sum" in result
+        assert result["covden_sum"]["source"] == "gfv11_covden_sum"
+        assert result["covden_sum"]["variable"] == "covden_sum"
+        assert result["covden_sum"]["statistic"] == "mean"
+        assert "cov_type" in result
+        assert result["cov_type"]["statistic"] == "majority"
+
+    def test_default_statistic(self) -> None:
+        """Entries without explicit statistic default to 'mean'."""
+        from hydro_param.cli import _build_precomputed_map
+        from hydro_param.pywatershed_config import (
+            LandcoverDatasets,
+            ParameterEntry,
+            PwsDomainConfig,
+            PwsTimeConfig,
+            PywatershedRunConfig,
+            StaticDatasetsConfig,
+        )
+
+        cfg = PywatershedRunConfig(
+            domain=PwsDomainConfig(fabric_path="dummy.gpkg"),
+            time=PwsTimeConfig(start="2020-01-01", end="2020-12-31"),
+            static_datasets=StaticDatasetsConfig(
+                landcover=LandcoverDatasets(
+                    covden_sum=ParameterEntry(
+                        source="gfv11_covden_sum",
+                        variable="covden_sum",
+                        description="Summer cover density",
+                    ),
+                ),
+            ),
+        )
+        result = _build_precomputed_map(cfg)
+        assert result["covden_sum"]["statistic"] == "mean"
+
+    def test_partial_entry_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Entry with source but no variable logs a warning."""
+        from hydro_param.cli import _build_precomputed_map
+        from hydro_param.pywatershed_config import (
+            LandcoverDatasets,
+            ParameterEntry,
+            PwsDomainConfig,
+            PwsTimeConfig,
+            PywatershedRunConfig,
+            StaticDatasetsConfig,
+        )
+
+        cfg = PywatershedRunConfig(
+            domain=PwsDomainConfig(fabric_path="dummy.gpkg"),
+            time=PwsTimeConfig(start="2020-01-01", end="2020-12-31"),
+            static_datasets=StaticDatasetsConfig(
+                landcover=LandcoverDatasets(
+                    covden_sum=ParameterEntry(
+                        source="gfv11_covden_sum",
+                        description="Summer cover density",
+                    ),
+                ),
+            ),
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="hydro_param.cli"):
+            result = _build_precomputed_map(cfg)
+        assert result == {}
+        assert "Partial pre-computed entry" in caplog.text
+        assert "covden_sum" in caplog.text
