@@ -853,3 +853,37 @@ class TestDownloadGfv11AutoRegistration:
         download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
 
         assert not overlay_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration
+# ---------------------------------------------------------------------------
+
+
+class TestGfv11EndToEnd:
+    """Integration test: download -> register -> load."""
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_download_then_load_registry(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """Downloaded datasets are visible through registry overlay."""
+        mock_di.return_value = DownloadSummary(downloaded=["Sand.tif"])
+        overlay_dir = tmp_path / "overlay"
+        overlay_path = overlay_dir / "gfv11.yml"
+
+        download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
+
+        from hydro_param.dataset_registry import load_registry
+        from hydro_param.pipeline import DEFAULT_REGISTRY
+
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[overlay_dir])
+
+        # GFv1.1 datasets present
+        assert "gfv11_sand" in registry.datasets
+        assert "gfv11_slope" in registry.datasets
+        # Bundled datasets still present
+        assert "dem_3dep_10m" in registry.datasets
+        # Source path is resolved
+        sand = registry.get("gfv11_sand")
+        assert sand.source is not None
+        assert "soils" in sand.source
+        assert "Sand.tif" in sand.source
