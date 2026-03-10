@@ -81,8 +81,10 @@ def _load_registry(registry: Path | None) -> DatasetRegistry:
     DatasetRegistry
         Loaded and validated dataset registry.
     """
+    from hydro_param.pipeline import USER_REGISTRY_DIR
+
     path = registry if registry is not None else DEFAULT_REGISTRY
-    return load_registry(path)
+    return load_registry(path, overlay_dirs=[USER_REGISTRY_DIR])
 
 
 def _access_status(entry: DatasetEntry) -> str:
