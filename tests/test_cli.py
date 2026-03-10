@@ -721,7 +721,7 @@ def test_run_resume_flag_sets_config(mock_load_config, mock_run_pipeline, tmp_pa
     mock_cfg = PipelineConfig(
         target_fabric={"path": "test.gpkg", "id_field": "id"},
         domain={"type": "bbox", "bbox": [0, 0, 1, 1]},
-        datasets=[],
+        datasets={},
     )
     mock_load_config.return_value = mock_cfg
 
