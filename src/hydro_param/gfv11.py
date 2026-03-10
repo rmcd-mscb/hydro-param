@@ -961,7 +961,16 @@ def download_gfv11(
 
     combined.log_summary()
 
-    # Auto-register datasets if any downloads or skips succeeded
+    if combined.has_failures:
+        raise DownloadError(
+            f"{len(combined.failed)} download(s) and "
+            f"{len(combined.extract_failed)} extraction(s) failed. "
+            f"See log output above for details."
+        )
+
+    # Auto-register datasets only after download completed without failures.
+    # Writing the overlay before the failure check above would register
+    # incomplete data and could clobber a valid overlay from a prior run.
     if combined.downloaded or combined.skipped:
         try:
             write_registry_overlay(output_dir, overlay_path)
@@ -971,12 +980,5 @@ def download_gfv11(
                 "create the overlay manually or check directory permissions.",
                 exc,
             )
-
-    if combined.has_failures:
-        raise DownloadError(
-            f"{len(combined.failed)} download(s) and "
-            f"{len(combined.extract_failed)} extraction(s) failed. "
-            f"See log output above for details."
-        )
 
     return combined
