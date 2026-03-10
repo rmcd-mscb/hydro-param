@@ -1,5 +1,5 @@
 # GFv1.1 static parameter pipeline config
-# Produces a SIR with topographic, soils, land cover, and water body data.
+# Produces a SIR with topographic, soils, and land cover data.
 # Topography uses 3DEP 1 arc-second (~30m), comparable to GFv1.1 SRTM;
 # soils and land cover use GFv1.1 ScienceBase rasters.
 # Water bodies use the NHD waterbody fabric overlay (pywatershed config).
