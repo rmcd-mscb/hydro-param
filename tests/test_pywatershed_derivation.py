@@ -1238,18 +1238,23 @@ def synthetic_fabric() -> gpd.GeoDataFrame:
 
 @pytest.fixture()
 def synthetic_segments() -> gpd.GeoDataFrame:
-    """3-segment network with tosegment attribute."""
+    """3-segment network with tosegment attribute.
+
+    Coordinates are in EPSG:5070 (NAD83 CONUS Albers equal-area) in the
+    DRB region so that centroid and slope computations work correctly
+    in a projected CRS.  Approximate DRB center: (1800000, 2300000).
+    """
     return gpd.GeoDataFrame(
         {
             "nhm_seg": [201, 202, 203],
             "tosegment": [2, 3, 0],  # seg1->seg2, seg2->seg3, seg3->outlet
         },
         geometry=[
-            LineString([(0.5, 0.5), (1.0, 0.5)]),
-            LineString([(1.0, 0.5), (2.0, 0.5)]),
-            LineString([(2.0, 0.5), (3.0, 0.5)]),
+            LineString([(1800000, 2300000), (1810000, 2300000)]),
+            LineString([(1810000, 2300000), (1820000, 2300000)]),
+            LineString([(1820000, 2300000), (1830000, 2300000)]),
         ],
-        crs="EPSG:4326",
+        crs="EPSG:5070",
     )
 
 
@@ -1587,8 +1592,9 @@ class TestDeriveTopology:
         ds = derivation.derive(ctx)
         assert "seg_lat" in ds
         assert ds["seg_lat"].dims == ("nsegment",)
-        # synthetic_segments are at y=0.5 (EPSG:4326)
-        np.testing.assert_allclose(ds["seg_lat"].values, [0.5, 0.5, 0.5], atol=0.01)
+        # synthetic_segments are in EPSG:5070 near DRB (~41.8°N)
+        assert ds["seg_lat"].dims == ("nsegment",)
+        np.testing.assert_allclose(ds["seg_lat"].values, [41.81, 41.79, 41.77], atol=0.1)
 
 
 class TestTopologyValidation:
