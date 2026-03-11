@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 from hydro_param.derivations.pywatershed import (
     _DEFAULT_K_COEF,
@@ -1866,7 +1866,7 @@ class TestDeriveGeometryFromFabric:
         assert ds["hru_area"].attrs["units"] == "acres"
 
     def test_lat_from_fabric(self, derivation: PywatershedDerivation) -> None:
-        """hru_lat computed from fabric centroid latitude."""
+        """hru_lat computed from fabric representative point latitude."""
         sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -1882,7 +1882,7 @@ class TestDeriveGeometryFromFabric:
         np.testing.assert_allclose(ds["hru_lat"].values, [40.5, 42.5], atol=0.01)
 
     def test_lon_from_fabric(self, derivation: PywatershedDerivation) -> None:
-        """hru_lon computed from fabric centroid longitude."""
+        """hru_lon computed from fabric representative point longitude."""
         sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -1897,6 +1897,34 @@ class TestDeriveGeometryFromFabric:
         assert "hru_lon" in ds
         np.testing.assert_allclose(ds["hru_lon"].values, [0.5, 2.5], atol=0.01)
 
+    def test_representative_point_inside_polygon(self, derivation: PywatershedDerivation) -> None:
+        """representative_point() guarantees point inside polygon for concave HRUs."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1]}))
+        # L-shaped (concave) polygon in projected CRS
+        l_shape = Polygon(
+            [
+                (0, 0),
+                (200000, 0),
+                (200000, 100000),
+                (100000, 100000),
+                (100000, 200000),
+                (0, 200000),
+            ]
+        )
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1]},
+            geometry=[l_shape],
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_lat" in ds
+        assert "hru_lon" in ds
+        # Verify the point is inside the original polygon (in 4326)
+        fab_4326 = fabric.to_crs(epsg=4326)
+        pt = Point(ds["hru_lon"].values[0], ds["hru_lat"].values[0])
+        assert fab_4326.geometry.iloc[0].contains(pt)
+
     def test_lon_fallback_from_sir(self, derivation: PywatershedDerivation) -> None:
         """Without fabric, hru_lon falls back to SIR."""
         sir = _MockSIRAccessor(
@@ -1910,7 +1938,7 @@ class TestDeriveGeometryFromFabric:
         assert "hru_lon" in ds
         np.testing.assert_allclose(ds["hru_lon"].values, [-75.0, -76.0])
         assert ds["hru_lon"].attrs["units"] == "decimal_degrees"
-        assert ds["hru_lon"].attrs["long_name"] == "Longitude of HRU centroid"
+        assert ds["hru_lon"].attrs["long_name"] == "Longitude of HRU representative point"
 
     def test_lon_missing_without_fabric_or_sir(self, derivation: PywatershedDerivation) -> None:
         """When both fabric and SIR lack hru_lon, param is absent."""

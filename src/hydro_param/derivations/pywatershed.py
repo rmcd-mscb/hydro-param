@@ -614,15 +614,17 @@ class PywatershedDerivation:
         ctx: DerivationContext,
         ds: xr.Dataset,
     ) -> xr.Dataset:
-        """Compute HRU area, centroid lat/lon from the target fabric (step 1).
+        """Compute HRU area, representative-point lat/lon from the target fabric (step 1).
 
         Derive ``hru_area`` (acres), ``hru_lat`` (decimal degrees), and
         ``hru_lon`` (decimal degrees) from the fabric GeoDataFrame geometry.
         Area is computed in EPSG:5070 (NAD83 CONUS Albers equal-area) and
         converted from m² to acres.  Latitude and longitude are extracted
-        Latitude and longitude are extracted from centroids computed in
-        EPSG:5070 (equal-area) and reprojected to EPSG:4326 (WGS84) for
-        accurate positions.
+        from representative points (``geometry.representative_point()``)
+        computed in EPSG:5070 (equal-area) and reprojected to EPSG:4326
+        (WGS84) for accurate positions.  Unlike centroids,
+        representative points are guaranteed to fall inside the polygon,
+        which matters for concave HRUs.
 
         Falls back to SIR variables ``hru_area_m2``, ``hru_lat``, and
         ``hru_lon`` when fabric is ``None`` or lacks the ``id_field``
@@ -666,20 +668,26 @@ class PywatershedDerivation:
                 attrs={"units": "acres", "long_name": "Area of HRU"},
             )
 
-            # Latitude from WGS84 centroids (compute in projected CRS, reproject)
-            centroids_5070 = fab_5070.geometry.centroid
-            centroids_4326 = gpd.GeoSeries(centroids_5070, crs="EPSG:5070").to_crs(epsg=4326)
-            lats = centroids_4326.y.values
+            # Lat/lon from representative points (guaranteed inside polygon)
+            rep_pts_5070 = fab_5070.geometry.representative_point()
+            rep_pts_4326 = gpd.GeoSeries(rep_pts_5070, crs="EPSG:5070").to_crs(epsg=4326)
+            lats = rep_pts_4326.y.values
             ds["hru_lat"] = xr.DataArray(
                 lats,
                 dims="nhru",
-                attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
+                attrs={
+                    "units": "decimal_degrees",
+                    "long_name": "Latitude of HRU representative point",
+                },
             )
-            lons = centroids_4326.x.values
+            lons = rep_pts_4326.x.values
             ds["hru_lon"] = xr.DataArray(
                 lons,
                 dims="nhru",
-                attrs={"units": "decimal_degrees", "long_name": "Longitude of HRU centroid"},
+                attrs={
+                    "units": "decimal_degrees",
+                    "long_name": "Longitude of HRU representative point",
+                },
             )
         else:
             # Fallback to SIR-based geometry
@@ -693,13 +701,19 @@ class PywatershedDerivation:
                 ds["hru_lat"] = xr.DataArray(
                     sir["hru_lat"].values,
                     dims="nhru",
-                    attrs={"units": "decimal_degrees", "long_name": "Latitude of HRU centroid"},
+                    attrs={
+                        "units": "decimal_degrees",
+                        "long_name": "Latitude of HRU representative point",
+                    },
                 )
             if "hru_lon" in sir:
                 ds["hru_lon"] = xr.DataArray(
                     sir["hru_lon"].values,
                     dims="nhru",
-                    attrs={"units": "decimal_degrees", "long_name": "Longitude of HRU centroid"},
+                    attrs={
+                        "units": "decimal_degrees",
+                        "long_name": "Longitude of HRU representative point",
+                    },
                 )
         return ds
 
