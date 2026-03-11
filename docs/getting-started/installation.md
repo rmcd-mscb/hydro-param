@@ -16,19 +16,31 @@ cd hydro-param
 pixi install
 ```
 
+!!! info "Pixi environments"
+    pixi creates three environments:
+
+    - `default` --- core dependencies only
+    - `dev` --- development (pytest, ruff, mypy, pre-commit)
+    - `docs` --- documentation building (mkdocs-material)
+
+    Most development commands use the `dev` environment:
+    `pixi run -e dev test`, `pixi run -e dev check`, etc.
+
 ## Install with pip
 
-```bash
-pip install hydro-param
-```
-
-!!! note
-    pip installation requires that GDAL, GEOS, and PROJ system libraries
-    are already installed. Using pixi (above) is recommended as it handles
-    these automatically.
+!!! warning
+    hydro-param is not yet published to PyPI. Install from source using
+    pixi (above) or `pip install -e .` in a development environment with
+    GDAL, GEOS, and PROJ system libraries pre-installed.
 
 ## Verify installation
 
 ```bash
-hydro-param --help
+pixi run -e dev -- hydro-param --help
+```
+
+Run the test suite to confirm everything works:
+
+```bash
+pixi run -e dev test
 ```

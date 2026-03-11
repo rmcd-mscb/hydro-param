@@ -26,3 +26,13 @@ pixi run -e dev check
 | `pixi run -e dev check` | Run all quality checks |
 | `pixi run -e docs docs-serve` | Serve docs locally |
 | `pixi run -e docs docs-build` | Build docs site |
+
+## Design Documents
+
+Design decisions and implementation plans are archived in `docs/plans/`,
+organized by date. Each significant feature or change starts with a design
+document that captures the problem, proposed approaches, and the chosen
+solution.
+
+For a themed summary of all design work to date, see the
+[Development Roadmap](plans/development-roadmap.md).
