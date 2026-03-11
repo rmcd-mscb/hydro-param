@@ -67,6 +67,7 @@ from hydro_param.dataset_registry import (
     DatasetEntry,
     DatasetRegistry,
     DerivedCategoricalSpec,
+    DerivedContinuousSpec,
     DerivedVariableSpec,
     VariableSpec,
     load_registry,
@@ -413,7 +414,7 @@ def stage2_resolve_datasets(
     list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         One tuple per dataset: the registry entry, the pipeline request,
         and the resolved variable specifications (VariableSpec,
-        DerivedVariableSpec, or DerivedCategoricalSpec).
+        DerivedVariableSpec, DerivedCategoricalSpec, or DerivedContinuousSpec).
 
     Raises
     ------
@@ -472,7 +473,7 @@ def stage2_resolve_datasets(
                 registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
             ]
             all_vars_have_source = all(
-                isinstance(vs, DerivedCategoricalSpec)
+                isinstance(vs, DerivedCategoricalSpec | DerivedContinuousSpec)
                 or (isinstance(vs, VariableSpec) and vs.source_override is not None)
                 for vs in requested_var_specs
             )
@@ -523,18 +524,18 @@ def stage2_resolve_datasets(
         # Validate time range against dataset availability
         _validate_time_range(ds_req, entry)
 
-        # Auto-include source variables needed by derived categorical specs
+        # Auto-include source variables needed by derived categorical/continuous specs
         requested = set(ds_req.variables)
         extra_sources: list[str] = []
         for vname in ds_req.variables:
             spec = registry.resolve_variable(ds_req.name, vname)
-            if isinstance(spec, DerivedCategoricalSpec):
+            if isinstance(spec, DerivedCategoricalSpec | DerivedContinuousSpec):
                 for src in spec.sources:
                     if src not in requested and src not in extra_sources:
                         extra_sources.append(src)
         if extra_sources:
             logger.info(
-                "  Auto-including source variables for derived categorical: %s",
+                "  Auto-including source variables for derived specs: %s",
                 extra_sources,
             )
 
@@ -613,8 +614,8 @@ def _process_batch(
         Pipeline config request (variables, statistics, year).
     var_specs : list[AnyVariableSpec]
         Resolved variable specifications from the registry.
-        ``DerivedCategoricalSpec`` entries are processed in a second
-        pass after all source variables.
+        ``DerivedCategoricalSpec`` and ``DerivedContinuousSpec`` entries
+        are processed in second passes after all source variables.
     config : PipelineConfig
         Pipeline configuration (id_field, batch size, etc.).
     work_dir : Path
@@ -634,11 +635,13 @@ def _process_batch(
         if temporal ``nhgf_stac`` is used (not yet supported in batch loop).
     ValueError
         If a derived variable has no registered derivation function,
-        or if a derived categorical variable has no registered
-        classification function in ``CATEGORICAL_DERIVATION_FUNCTIONS``.
+        if a derived categorical variable has no registered
+        classification function in ``CATEGORICAL_DERIVATION_FUNCTIONS``,
+        or if a derived continuous variable's ``align_to`` source is
+        not found among loaded rasters.
     FileNotFoundError
-        If source GeoTIFFs required by a derived categorical variable
-        are missing from the work directory.
+        If source GeoTIFFs required by a derived categorical or
+        derived continuous variable are missing from the work directory.
 
     Notes
     -----
@@ -660,7 +663,9 @@ def _process_batch(
     if entry.strategy == "nhgf_stac" and not entry.temporal:
         zonal_proc = cast(ZonalProcessor, processor)
         for var_spec in var_specs:
-            if isinstance(var_spec, DerivedVariableSpec | DerivedCategoricalSpec):
+            if isinstance(
+                var_spec, DerivedVariableSpec | DerivedCategoricalSpec | DerivedContinuousSpec
+            ):
                 raise NotImplementedError("Derived variables not supported for nhgf_stac strategy")
             df = zonal_proc.process_nhgf_stac(
                 fabric=batch_fabric,
@@ -731,7 +736,7 @@ def _process_batch(
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for i, var_spec in enumerate(var_specs):
-        if isinstance(var_spec, DerivedCategoricalSpec):
+        if isinstance(var_spec, DerivedCategoricalSpec | DerivedContinuousSpec):
             continue  # Processed after all source variables
 
         if isinstance(var_spec, DerivedVariableSpec):
@@ -806,9 +811,10 @@ def _process_batch(
 
         results[var_spec.name] = df
 
-        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical
+        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical/continuous
         needed_by_dc = any(
-            isinstance(dc, DerivedCategoricalSpec) and var_spec.name in dc.sources
+            isinstance(dc, DerivedCategoricalSpec | DerivedContinuousSpec)
+            and var_spec.name in dc.sources
             for dc in var_specs
         )
         if not needed_by_dc:
@@ -901,11 +907,103 @@ def _process_batch(
         results[dc_spec.name] = df
 
         # Clean up classified GeoTIFF; only delete source GeoTIFFs if no
-        # remaining dc_specs still need them.
+        # remaining dc_specs or dcont_specs still need them.
         classified_tiff.unlink(missing_ok=True)
         remaining_dc = dc_specs[dc_specs.index(dc_spec) + 1 :]
+        dcont_specs_pre = [v for v in var_specs if isinstance(v, DerivedContinuousSpec)]
         for src_name in dc_spec.sources:
-            still_needed = any(src_name in other.sources for other in remaining_dc)
+            still_needed = any(src_name in other.sources for other in remaining_dc) or any(
+                src_name in dcont.sources for dcont in dcont_specs_pre
+            )
+            if not still_needed:
+                (work_dir / f"{src_name}.tif").unlink(missing_ok=True)
+        gc.collect()
+
+    # Process derived continuous specs — align source rasters, apply
+    # arithmetic, then run continuous zonal stats.
+    from hydro_param.data_access import align_rasters, apply_raster_operation
+
+    dcont_specs = [v for v in var_specs if isinstance(v, DerivedContinuousSpec)]
+    if dcont_specs:
+        import rioxarray  # noqa: F401
+
+    for dcont_spec in dcont_specs:
+        # Re-read source GeoTIFFs from disk
+        cont_source_das: list[xr.DataArray] = []
+        template_da: xr.DataArray | None = None
+        cont_missing: list[str] = []
+        for src_name in dcont_spec.sources:
+            src_tiff = work_dir / f"{src_name}.tif"
+            if not src_tiff.exists():
+                cont_missing.append(src_name)
+                continue
+            da = cast("xr.DataArray", rioxarray.open_rasterio(src_tiff))
+            da = da.squeeze("band", drop=True)
+            cont_source_das.append(da)
+            if src_name == dcont_spec.align_to:
+                template_da = da
+
+        if cont_missing:
+            msg = (
+                f"Cannot derive continuous variable '{dcont_spec.name}': "
+                f"missing source GeoTIFFs {cont_missing} in {work_dir}. "
+                f"This usually means the source variables failed to process "
+                f"or were cleaned up prematurely."
+            )
+            raise FileNotFoundError(msg)
+
+        if template_da is None:
+            msg = (
+                f"align_to source '{dcont_spec.align_to}' not found "
+                f"among loaded sources for '{dcont_spec.name}'"
+            )
+            raise ValueError(msg)
+
+        # Align all sources to template grid
+        aligned = align_rasters(cont_source_das, template_da, method=dcont_spec.resampling_method)
+        del cont_source_das
+        gc.collect()
+
+        # Apply arithmetic operation
+        product_da = apply_raster_operation(aligned, dcont_spec.operation)
+        del aligned
+        gc.collect()
+
+        # Save product raster and run continuous zonal stats
+        product_tiff = work_dir / f"{dcont_spec.name}.tif"
+        save_to_geotiff(product_da, product_tiff)
+        del product_da
+
+        df = processor.process(
+            fabric=batch_fabric,
+            tiff_path=product_tiff,
+            variable_name=dcont_spec.name,
+            id_field=config.target_fabric.id_field,
+            statistics=ds_req.statistics,
+            categorical=False,
+            source_crs=entry.crs,
+            x_coord=entry.x_coord,
+            y_coord=entry.y_coord,
+        )
+
+        # Apply scale_factor if present
+        if dcont_spec.scale_factor is not None:
+            numeric_cols = df.select_dtypes(include="number").columns
+            df[numeric_cols] = df[numeric_cols] * dcont_spec.scale_factor
+            logger.info(
+                "Applied scale_factor %.4f to derived continuous variable %s",
+                dcont_spec.scale_factor,
+                dcont_spec.name,
+            )
+
+        results[dcont_spec.name] = df
+
+        # Clean up product GeoTIFF; only delete source GeoTIFFs if no
+        # remaining dcont_specs still need them (dc_specs already processed).
+        product_tiff.unlink(missing_ok=True)
+        remaining_dcont = dcont_specs[dcont_specs.index(dcont_spec) + 1 :]
+        for src_name in dcont_spec.sources:
+            still_needed = any(src_name in other.sources for other in remaining_dcont)
             if not still_needed:
                 (work_dir / f"{src_name}.tif").unlink(missing_ok=True)
         gc.collect()

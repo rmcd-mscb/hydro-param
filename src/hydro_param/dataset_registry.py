@@ -9,8 +9,9 @@ user-requested datasets and variables into concrete access instructions.
 The registry supports five access strategies (``stac_cog``, ``local_tiff``,
 ``nhgf_stac``, ``climr_cat``, ``native_zarr``/``converted_zarr``) and three
 variable types (direct ``VariableSpec``, terrain-derived
-``DerivedVariableSpec``, and multi-source categorical
-``DerivedCategoricalSpec``).
+``DerivedVariableSpec``, multi-source categorical
+``DerivedCategoricalSpec``, and multi-source continuous
+``DerivedContinuousSpec``).
 
 References
 ----------
@@ -195,8 +196,84 @@ class DerivedCategoricalSpec(BaseModel):
         return v
 
 
+class DerivedContinuousSpec(BaseModel):
+    """Describe a continuous variable derived from pixel-level arithmetic on multiple sources.
+
+    Multi-source continuous derivations apply an arithmetic operation
+    (multiply, divide, add, subtract) to two or more aligned source
+    rasters *before* zonal statistics.  This preserves within-HRU
+    spatial correlation that would be lost by aggregating each raster
+    independently and combining the results.
+
+    Unlike ``DerivedCategoricalSpec`` (multi-source, categorical output),
+    this always produces continuous output processed with standard
+    zonal statistics (mean, median, etc.).
+
+    Attributes
+    ----------
+    name : str
+        Logical name for the derived variable (e.g.,
+        ``"soil_moist_product"``).
+    sources : list[str]
+        Names of the source ``VariableSpec`` entries to combine.
+        Must contain at least 2 entries.  All sources must belong
+        to the same dataset.
+    operation : {"multiply", "divide", "add", "subtract"}
+        Arithmetic operation applied left-to-right across sources
+        via ``functools.reduce``.
+    align_to : str
+        Name of the source whose grid (resolution, extent, CRS)
+        is used as the resampling template.  Must be one of
+        ``sources``.
+    units : str
+        Units of the derived variable after the operation.
+    long_name : str
+        Human-readable description for metadata.
+    scale_factor : float or None
+        Multiplicative factor applied to zonal statistics output
+        (e.g., 0.01 to convert from percent to fraction).
+    resampling_method : str
+        Rasterio resampling method name for aligning non-template
+        sources (default ``"nearest"``).
+    """
+
+    name: str
+    sources: list[str]
+    operation: Literal["multiply", "divide", "add", "subtract"]
+    align_to: str
+    units: str = ""
+    long_name: str = ""
+    scale_factor: float | None = None
+    resampling_method: str = "nearest"
+
+    @field_validator("sources")
+    @classmethod
+    def _check_min_sources(cls, v: list[str]) -> list[str]:
+        if len(v) < 2:
+            msg = "DerivedContinuousSpec requires at least 2 sources"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("scale_factor")
+    @classmethod
+    def _nonzero_scale(cls, v: float | None) -> float | None:
+        if v is not None and v == 0.0:
+            msg = "scale_factor must not be zero (would destroy all data)"
+            raise ValueError(msg)
+        return v
+
+    @model_validator(mode="after")
+    def _check_align_to_in_sources(self) -> DerivedContinuousSpec:
+        if self.align_to not in self.sources:
+            msg = f"align_to '{self.align_to}' must be one of sources {self.sources}"
+            raise ValueError(msg)
+        return self
+
+
 #: Union of all variable specification types used throughout the pipeline.
-AnyVariableSpec = VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec
+AnyVariableSpec = (
+    VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec | DerivedContinuousSpec
+)
 
 
 class DownloadFile(BaseModel):
@@ -431,6 +508,7 @@ class DatasetEntry(BaseModel):
     variables: list[VariableSpec] = []
     derived_variables: list[DerivedVariableSpec] = []
     derived_categorical_variables: list[DerivedCategoricalSpec] = []
+    derived_continuous_variables: list[DerivedContinuousSpec] = []
     category: str = ""
     temporal: bool = False
     time_step: Literal["daily", "monthly"] | None = None
@@ -519,11 +597,12 @@ class DatasetRegistry(BaseModel):
 
     def resolve_variable(
         self, dataset_name: str, variable_name: str
-    ) -> VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec:
+    ) -> VariableSpec | DerivedVariableSpec | DerivedCategoricalSpec | DerivedContinuousSpec:
         """Resolve a variable name to its specification within a dataset.
 
-        Search direct variables, derived variables, and derived categorical
-        variables in the named dataset.  Direct variables are checked first.
+        Search direct variables, derived variables, derived categorical
+        variables, and derived continuous variables in the named dataset.
+        Direct variables are checked first.
 
         Parameters
         ----------
@@ -534,9 +613,10 @@ class DatasetRegistry(BaseModel):
 
         Returns
         -------
-        VariableSpec or DerivedVariableSpec or DerivedCategoricalSpec
+        VariableSpec or DerivedVariableSpec or DerivedCategoricalSpec or DerivedContinuousSpec
             The matching variable specification.  Direct variables are
-            checked first, then derived, then derived categorical.
+            checked first, then derived, then derived categorical, then
+            derived continuous.
 
         Raises
         ------
@@ -555,10 +635,14 @@ class DatasetRegistry(BaseModel):
         for dcv in entry.derived_categorical_variables:
             if dcv.name == variable_name:
                 return dcv
+        for dcont in entry.derived_continuous_variables:
+            if dcont.name == variable_name:
+                return dcont
         available = (
             [v.name for v in entry.variables]
             + [dv.name for dv in entry.derived_variables]
             + [dcv.name for dcv in entry.derived_categorical_variables]
+            + [dcont.name for dcont in entry.derived_continuous_variables]
         )
         raise KeyError(
             f"Variable '{variable_name}' not found in dataset '{dataset_name}'. "

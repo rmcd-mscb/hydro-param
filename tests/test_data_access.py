@@ -10,6 +10,8 @@ import xarray as xr
 
 from hydro_param.data_access import (
     _is_remote_url,
+    align_rasters,
+    apply_raster_operation,
     build_climr_cat_dict,
     fetch_local_tiff,
     save_to_geotiff,
@@ -578,3 +580,110 @@ class TestClassifyUsdaTextureRaster:
         result = classify_usda_texture_raster(sand, silt, clay)
         # After clamping: 0+90+10=100 → silt>=80, clay<12 → silt (8)
         assert result.values[0, 0] == 8  # silt
+
+
+class TestAlignRasters:
+    """Tests for align_rasters() template-based raster alignment."""
+
+    def test_matching_grids_unchanged(self):
+        """Sources already on the same grid are returned as-is."""
+        pytest.importorskip("rioxarray")
+        template = xr.DataArray(
+            np.ones((4, 4)),
+            dims=("y", "x"),
+            coords={"y": [40.0, 39.0, 38.0, 37.0], "x": [-75.0, -74.0, -73.0, -72.0]},
+        )
+        template = template.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+        other = template * 2
+
+        result = align_rasters([other, template], template)
+        assert len(result) == 2
+        assert result[0].shape == template.shape
+        assert result[1].shape == template.shape
+
+    def test_different_resolution_aligned(self):
+        """Coarser source is resampled to match finer template."""
+        pytest.importorskip("rioxarray")
+        fine = xr.DataArray(
+            np.ones((4, 4)),
+            dims=("y", "x"),
+            coords={"y": [40.0, 39.0, 38.0, 37.0], "x": [-75.0, -74.0, -73.0, -72.0]},
+        )
+        fine = fine.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+        coarse = xr.DataArray(
+            np.full((2, 2), 5.0),
+            dims=("y", "x"),
+            coords={"y": [40.0, 37.0], "x": [-75.0, -72.0]},
+        )
+        coarse = coarse.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+
+        result = align_rasters([coarse, fine], fine)
+        assert result[0].shape == fine.shape  # coarse upsampled
+        assert result[1].shape == fine.shape  # template unchanged
+
+    def test_template_not_resampled(self):
+        """The template source is passed through without resampling."""
+        pytest.importorskip("rioxarray")
+        template = xr.DataArray(
+            np.arange(16, dtype=float).reshape(4, 4),
+            dims=("y", "x"),
+            coords={"y": [40.0, 39.0, 38.0, 37.0], "x": [-75.0, -74.0, -73.0, -72.0]},
+        )
+        template = template.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+
+        result = align_rasters([template], template)
+        xr.testing.assert_identical(result[0], template)
+
+
+class TestApplyRasterOperation:
+    """Tests for apply_raster_operation() arithmetic operations."""
+
+    @pytest.fixture()
+    def a(self):
+        return xr.DataArray(np.array([[2.0, 3.0], [4.0, 5.0]]), dims=("y", "x"))
+
+    @pytest.fixture()
+    def b(self):
+        return xr.DataArray(np.array([[10.0, 20.0], [30.0, 40.0]]), dims=("y", "x"))
+
+    @pytest.fixture()
+    def c(self):
+        return xr.DataArray(np.array([[0.5, 0.5], [0.5, 0.5]]), dims=("y", "x"))
+
+    def test_multiply(self, a, b):
+        result = apply_raster_operation([a, b], "multiply")
+        expected = a * b
+        xr.testing.assert_equal(result, expected)
+
+    def test_divide(self, a, b):
+        result = apply_raster_operation([a, b], "divide")
+        expected = a / b
+        xr.testing.assert_equal(result, expected)
+
+    def test_add(self, a, b):
+        result = apply_raster_operation([a, b], "add")
+        expected = a + b
+        xr.testing.assert_equal(result, expected)
+
+    def test_subtract(self, a, b):
+        result = apply_raster_operation([a, b], "subtract")
+        expected = a - b
+        xr.testing.assert_equal(result, expected)
+
+    def test_three_sources_multiply(self, a, b, c):
+        """Left-to-right fold: (a * b) * c."""
+        result = apply_raster_operation([a, b, c], "multiply")
+        expected = (a * b) * c
+        xr.testing.assert_equal(result, expected)
+
+    def test_invalid_operation(self, a, b):
+        with pytest.raises(ValueError, match="Unsupported"):
+            apply_raster_operation([a, b], "power")
+
+    def test_rejects_single_source(self, a):
+        with pytest.raises(ValueError, match="at least 2 sources"):
+            apply_raster_operation([a], "multiply")
+
+    def test_rejects_empty_sources(self):
+        with pytest.raises(ValueError, match="at least 2 sources"):
+            apply_raster_operation([], "multiply")
