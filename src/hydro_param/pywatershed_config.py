@@ -181,6 +181,10 @@ class SnowDatasets(BaseModel):
     ----------
     available : list[str]
         Curated datasets available in the registry for this category.
+    hru_deplcrv : ParameterEntry or None
+        Snow depletion curve class per HRU.  Source is typically the GFv1.1
+        CV_INT raster (categorical majority).  Indexes into the SDC table
+        to populate ``snarea_curve``.
     snarea_thresh : ParameterEntry or None
         Snow depletion threshold (calibration seed from historical max SWE).
     """
@@ -188,6 +192,7 @@ class SnowDatasets(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     available: list[str] = Field(default_factory=list)
+    hru_deplcrv: ParameterEntry | None = None
     snarea_thresh: ParameterEntry | None = None
 
 

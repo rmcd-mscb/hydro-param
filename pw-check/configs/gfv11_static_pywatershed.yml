@@ -1,0 +1,124 @@
+# GFv1.1 static-only pywatershed config — validates GFv1.1 rasters against DRB
+# Generates parameters.nc from 3DEP topography + GFv1.1 ScienceBase sources (Phase A: no forcing).
+#
+# Prerequisites:
+#   hydro-param run configs/examples/gfv11_static_pipeline.yml
+#
+# Usage:
+#   hydro-param pywatershed run configs/examples/gfv11_static_pywatershed.yml
+#
+# NOTE: This config references DRB test fabric files that are not shipped
+# with the repository. Obtain fabric files via pynhd/pygeohydro or from
+# the USGS Geospatial Fabric before running.
+
+target_model: pywatershed
+version: "4.0"
+
+sir_path: "../output"
+
+domain:
+  fabric_path: data/fabrics/nhru.gpkg
+  segment_path: data/fabrics/nsegment.gpkg
+  waterbody_path: data/fabrics/waterbodies.gpkg
+  id_field: nhm_id
+  segment_id_field: nhm_seg
+
+# Time section required by schema; used for soltab solar geometry.
+# No forcing data in Phase A — these dates are placeholders.
+time:
+  start: "2020-01-01"
+  end: "2021-12-31"
+  timestep: daily
+
+static_datasets:
+
+  topography:
+    available: [dem_3dep_30m]
+    hru_elev:
+      source: dem_3dep_30m
+      variable: elevation
+      statistic: median
+      description: "Median HRU elevation (3DEP 1 arc-second, ~30m)"
+    hru_slope:
+      source: dem_3dep_30m
+      variable: slope
+      statistic: mean
+      description: "Mean land surface slope (Horn method, derived from 3DEP ~30m DEM)"
+    hru_aspect:
+      source: dem_3dep_30m
+      variable: aspect
+      statistic: mean
+      description: "Mean HRU aspect (Horn method, derived from 3DEP ~30m DEM)"
+
+  soils:
+    available: [gfv11_sand, gfv11_silt, gfv11_clay, gfv11_awc, gfv11_text_prms]
+    soil_type:
+      source: gfv11_text_prms
+      variable: soil_type
+      statistic: majority
+      description: "PRMS soil type from GFv1.1 pre-classified raster"
+    soil_moist_max:
+      source: gfv11_awc
+      variable: awc
+      statistic: mean
+      description: "Max available water-holding capacity (SoilGrids250m AWC)"
+
+  landcover:
+    available: [gfv11_lulc, gfv11_imperv, gfv11_cnpy, gfv11_covden_win, gfv11_covden_loss, gfv11_srain, gfv11_wrain, gfv11_snow_intcp, gfv11_root_depth]
+    cov_type:
+      source: gfv11_lulc
+      variable: cov_type
+      statistic: majority
+      description: "Vegetation cover type from NALCMS 2015 (GFv1.1 pre-classified)"
+    hru_percent_imperv:
+      source: gfv11_imperv
+      variable: imperv_pct
+      statistic: mean
+      description: "Impervious surface fraction (GMIS)"
+    covden_sum:
+      source: gfv11_cnpy
+      variable: canopy_pct
+      statistic: mean
+      description: "Summer cover density from MODIS canopy cover (canopy% / 100)"
+    covden_win:
+      source: gfv11_covden_win
+      variable: covden_win
+      statistic: mean
+      description: "Winter cover density (GFv1.1 pre-computed)"
+    srain_intcp:
+      source: gfv11_srain
+      variable: srain_intcp
+      statistic: mean
+      description: "Summer rain interception (GFv1.1 pre-computed, inches)"
+    wrain_intcp:
+      source: gfv11_wrain
+      variable: wrain_intcp
+      statistic: mean
+      description: "Winter rain interception (GFv1.1 pre-computed, inches)"
+    snow_intcp:
+      source: gfv11_snow_intcp
+      variable: snow_intcp
+      statistic: mean
+      description: "Snow interception (GFv1.1 pre-computed, inches)"
+
+  snow:
+    available: [gfv11_cv_int]
+    hru_deplcrv:
+      source: gfv11_cv_int
+      variable: cv_int
+      statistic: majority
+      description: "Snow depletion curve index from CV_INT classification"
+
+  waterbodies:
+    available: []
+
+calibration:
+  generate_seeds: false
+
+parameter_overrides:
+  values: {}
+
+output:
+  path: models/pywatershed
+  format: netcdf
+  parameter_file: parameters.nc
