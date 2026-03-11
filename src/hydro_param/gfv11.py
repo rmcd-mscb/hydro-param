@@ -612,17 +612,24 @@ class DownloadError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def fetch_item_files(item_id: str) -> list[tuple[str, str, int]]:
+def fetch_item_files(
+    item_id: str,
+    *,
+    retries: int = 3,
+) -> list[tuple[str, str, int]]:
     """Query a ScienceBase item and return metadata for its downloadable files.
 
     Send a GET request to the ScienceBase JSON API to retrieve the item's
     file listing.  Files that lack a download URL are silently skipped
-    (logged at DEBUG level).
+    (logged at DEBUG level).  Transient network errors are retried with
+    exponential back-off.
 
     Parameters
     ----------
     item_id : str
         ScienceBase item identifier (24-character hex string).
+    retries : int, optional
+        Maximum number of API request attempts.  Default is 3.
 
     Returns
     -------
@@ -632,12 +639,19 @@ def fetch_item_files(item_id: str) -> list[tuple[str, str, int]]:
     Raises
     ------
     requests.HTTPError
-        If the ScienceBase API returns a non-2xx status code.
+        If the ScienceBase API returns a non-2xx status code after all
+        retry attempts.
     requests.ConnectionError
-        If the ScienceBase API is unreachable.
+        If the ScienceBase API is unreachable after all retry attempts.
     ValueError
         If the ScienceBase API returns a non-JSON response (e.g. during
         maintenance windows).
+
+    Notes
+    -----
+    ScienceBase is historically unreliable — transient connection failures,
+    timeouts, and 503 responses are common.  Retry delay is ``2**attempt``
+    seconds (2 s, 4 s, 8 s for the default 3 attempts).
 
     Examples
     --------
@@ -649,8 +663,27 @@ def fetch_item_files(item_id: str) -> list[tuple[str, str, int]]:
     """
     url = f"{SB_API_URL}/{item_id}?format=json"
     logger.info("Querying ScienceBase item %s", item_id)
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
+    last_exc: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < retries:
+                wait = 2**attempt
+                logger.warning(
+                    "ScienceBase API request failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt,
+                    retries,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
+    else:
+        raise last_exc  # type: ignore[misc]
 
     try:
         data = resp.json()
@@ -943,6 +976,7 @@ def download_gfv11(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     combined = DownloadSummary()
+    api_errors: list[str] = []
 
     def _merge(summary: DownloadSummary) -> None:
         combined.downloaded.extend(summary.downloaded)
@@ -951,29 +985,33 @@ def download_gfv11(
         combined.extract_failed.extend(summary.extract_failed)
         combined.unmapped.extend(summary.unmapped)
 
+    # Process each item independently so a transient API failure on one
+    # item doesn't block the other.  ScienceBase is historically unreliable.
+    item_plan: list[tuple[str, str]] = []
     if items in ("all", "data-layers"):
-        logger.info("Downloading GFv1.1 data layers")
-        _merge(download_item(DATA_LAYERS_ITEM_ID, output_dir))
-
+        item_plan.append(("GFv1.1 data layers", DATA_LAYERS_ITEM_ID))
     if items in ("all", "tgf-topo"):
-        logger.info("Downloading GFv1.1 topographic derivatives")
-        _merge(download_item(TGF_TOPO_ITEM_ID, output_dir))
+        item_plan.append(("GFv1.1 topographic derivatives", TGF_TOPO_ITEM_ID))
+
+    for label, item_id in item_plan:
+        try:
+            logger.info("Downloading %s", label)
+            _merge(download_item(item_id, output_dir))
+        except (requests.RequestException, ValueError) as exc:
+            logger.error(
+                "Failed to query ScienceBase for %s (item %s): %s — "
+                "skipping this item. Previously downloaded files are intact.",
+                label,
+                item_id,
+                exc,
+            )
+            api_errors.append(f"{label} ({item_id}): {exc}")
 
     combined.log_summary()
 
-    if combined.has_failures:
-        raise DownloadError(
-            f"{len(combined.failed)} download(s) and "
-            f"{len(combined.extract_failed)} extraction(s) failed. "
-            f"Successfully downloaded files are in {output_dir} but were NOT "
-            f"registered. Re-run the download to retry failed files, or call "
-            f"write_registry_overlay() manually after resolving failures. "
-            f"See log output above for details."
-        )
-
-    # Auto-register datasets only after download completed without failures.
-    # Writing the overlay before the failure check above would register
-    # incomplete data and could clobber a valid overlay from a prior run.
+    # Always write the overlay when data exists on disk.  Even if one
+    # ScienceBase item was unreachable, the files from prior downloads
+    # are still valid and should be registered.
     if combined.downloaded or combined.skipped:
         try:
             write_registry_overlay(output_dir, overlay_path)
@@ -983,5 +1021,22 @@ def download_gfv11(
                 "create the overlay manually or check directory permissions.",
                 exc,
             )
+
+    if combined.has_failures:
+        raise DownloadError(
+            f"{len(combined.failed)} download(s) and "
+            f"{len(combined.extract_failed)} extraction(s) failed. "
+            f"Successfully downloaded files are in {output_dir} and have been "
+            f"registered. Re-run the download to retry failed files. "
+            f"See log output above for details."
+        )
+
+    if api_errors:
+        logger.warning(
+            "%d ScienceBase item query(s) failed — previously downloaded "
+            "files were registered, but new/updated files from these items "
+            "could not be checked. Re-run the download to retry.",
+            len(api_errors),
+        )
 
     return combined

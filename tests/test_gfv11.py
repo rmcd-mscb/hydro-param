@@ -266,8 +266,8 @@ class TestFetchItemFiles:
         assert result == []
 
     @patch("hydro_param.gfv11.requests.get")
-    def test_raises_on_http_error(self, mock_get: MagicMock) -> None:
-        """HTTP errors from ScienceBase API propagate as HTTPError."""
+    def test_raises_on_http_error_after_retries(self, mock_get: MagicMock) -> None:
+        """HTTP errors from ScienceBase API propagate after exhausting retries."""
         import requests as req
 
         resp = MagicMock()
@@ -275,7 +275,40 @@ class TestFetchItemFiles:
         mock_get.return_value = resp
 
         with pytest.raises(req.HTTPError):
-            fetch_item_files("fake-id")
+            fetch_item_files("fake-id", retries=1)
+
+    @patch("hydro_param.gfv11.time.sleep")
+    @patch("hydro_param.gfv11.requests.get")
+    def test_retries_on_connection_error(self, mock_get: MagicMock, mock_sleep: MagicMock) -> None:
+        """Transient connection errors are retried before giving up."""
+        import requests as req
+
+        # Fail twice, succeed on third attempt
+        good_resp = self._mock_response(
+            [{"name": "dem.zip", "url": "https://example.com/dem.zip", "size": 100}]
+        )
+        mock_get.side_effect = [
+            req.ConnectionError("Network unreachable"),
+            req.ConnectionError("Network unreachable"),
+            good_resp,
+        ]
+        result = fetch_item_files("fake-id", retries=3)
+        assert len(result) == 1
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch("hydro_param.gfv11.time.sleep")
+    @patch("hydro_param.gfv11.requests.get")
+    def test_raises_after_all_retries_exhausted(
+        self, mock_get: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """ConnectionError raised after all retries exhausted."""
+        import requests as req
+
+        mock_get.side_effect = req.ConnectionError("Network unreachable")
+        with pytest.raises(req.ConnectionError, match="Network unreachable"):
+            fetch_item_files("fake-id", retries=2)
+        assert mock_get.call_count == 2
 
     @patch("hydro_param.gfv11.requests.get")
     def test_raises_on_non_json_response(self, mock_get: MagicMock) -> None:
@@ -814,16 +847,16 @@ class TestDownloadGfv11:
 
     @patch("hydro_param.gfv11.download_item")
     def test_raises_on_extract_failures(self, mock_di: MagicMock, tmp_path: Path) -> None:
-        """DownloadError raised when extraction fails."""
+        """DownloadError raised when extraction fails, but overlay still written."""
         mock_di.return_value = DownloadSummary(downloaded=["dem.zip"], extract_failed=["dem.zip"])
         overlay_path = tmp_path / "overlay" / "gfv11.yml"
 
         with pytest.raises(DownloadError, match="1 extraction"):
             download_gfv11(tmp_path, items="data-layers", overlay_path=overlay_path)
 
-        # Overlay must NOT be written when there are failures, even if some
-        # files were successfully downloaded.
-        assert not overlay_path.exists()
+        # Overlay IS written even with partial failures so that successfully
+        # downloaded files are registered (fault-tolerant behavior).
+        assert overlay_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -889,6 +922,42 @@ class TestDownloadGfv11AutoRegistration:
 
         assert summary.downloaded == ["Sand.tif"]
         assert not summary.has_failures
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_api_error_on_one_item_does_not_block_other(
+        self, mock_di: MagicMock, tmp_path: Path
+    ) -> None:
+        """When one ScienceBase item query fails, the other still succeeds."""
+        import requests as req
+
+        # First call (data-layers) succeeds with all skipped,
+        # second call (tgf-topo) raises ConnectionError.
+        mock_di.side_effect = [
+            DownloadSummary(skipped=["Sand.tif", "Clay.tif"]),
+            req.ConnectionError("Network is unreachable"),
+        ]
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        # Should NOT raise — the error is logged, not fatal
+        summary = download_gfv11(tmp_path, items="all", overlay_path=overlay_path)
+
+        assert summary.skipped == ["Sand.tif", "Clay.tif"]
+        # Overlay IS written because item 1 had skipped files
+        assert overlay_path.exists()
+
+    @patch("hydro_param.gfv11.download_item")
+    def test_api_error_on_all_items_no_overlay(self, mock_di: MagicMock, tmp_path: Path) -> None:
+        """When all ScienceBase item queries fail, no overlay is written."""
+        import requests as req
+
+        mock_di.side_effect = req.ConnectionError("Network is unreachable")
+        overlay_path = tmp_path / "overlay" / "gfv11.yml"
+
+        summary = download_gfv11(tmp_path, items="all", overlay_path=overlay_path)
+
+        assert not summary.downloaded
+        assert not summary.skipped
+        assert not overlay_path.exists()
 
 
 # ---------------------------------------------------------------------------
