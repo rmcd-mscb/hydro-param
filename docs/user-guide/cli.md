@@ -117,7 +117,7 @@ Usage: hydro-param datasets download NAME [--dest PATH] [--years YEARS] [--varia
 **Example:**
 
 ```bash
-hydro-param datasets download nlcd_annual --dest ./data/landcover --years 2019,2021
+hydro-param datasets download nlcd_osn_lndcov --dest ./data/land_cover --years 2019,2021
 ```
 
 ---

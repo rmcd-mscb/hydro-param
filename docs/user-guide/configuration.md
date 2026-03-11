@@ -40,7 +40,7 @@ fabrics (use [pynhd](https://github.com/hyriver/pynhd) upstream).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | *required* | Path to fabric file (GeoPackage, GeoParquet, or Shapefile) |
+| `path` | string | *required* | Path to fabric file (GeoPackage or GeoParquet) |
 | `id_field` | string | *required* | Column with unique feature IDs. Becomes the xarray dimension name in all output. |
 | `crs` | string | `"EPSG:4326"` | Coordinate reference system as an EPSG string |
 

@@ -66,7 +66,7 @@ Before starting, you need:
 
 - **Local GFv1.1 rasters** --- pre-downloaded Geospatial Fabric v1.1
   rasters for land cover parameters. Download with
-  `hydro-param datasets download gfv11_rasters`.
+  `hydro-param gfv11 download --output-dir /path/to/data/gfv11`.
 
 - **Waterbody polygons** --- NHDPlus waterbody geometries for depression
   storage and HRU type classification.
@@ -160,22 +160,22 @@ Phase 1 writes the SIR to the output directory:
 
 ```
 output/
-  manifest.json              # Index of all SIR files
+  .manifest.yml                                        # SIR manifest (resume + Phase 2 lookup)
   topography/
-    elevation_mean.csv       # Mean elevation per HRU
-    slope_mean.csv           # Mean slope per HRU
-    sin_aspect_mean.csv      # Sin of aspect (for circular mean)
-    cos_aspect_mean.csv      # Cos of aspect (for circular mean)
+    dem_3dep_10m_elevation_mean.csv                    # Mean elevation per HRU
+    dem_3dep_10m_slope_mean.csv                        # Mean slope per HRU
+    dem_3dep_10m_sin_aspect_mean.csv                   # Sin of aspect (for circular mean)
+    dem_3dep_10m_cos_aspect_mean.csv                   # Cos of aspect (for circular mean)
   soils/
-    aws0_100_mean.csv        # Available water storage 0-100cm
-    sand_mean.csv            # Sand fraction per HRU
+    gnatsgo_rasters_aws0_100_mean.csv                  # Available water storage 0-100cm
+    polaris_30m_sand_mean.csv                          # Sand fraction per HRU
     ...
   land_cover/
-    LndCov_categorical.csv   # NLCD class fractions per HRU
-    FctImp_mean.csv          # Fractional impervious per HRU
+    nlcd_osn_lndcov_LndCov_categorical_2021.csv        # NLCD class fractions per HRU
+    nlcd_osn_fctimp_FctImp_mean_2021.csv               # Fractional impervious per HRU
   climate/
-    pr_mm_mean_2020.nc       # Daily precipitation (temporal)
-    tmmx_C_mean_2020.nc      # Daily max temperature (temporal)
+    gridmet_pr_mm_mean_2020.nc                         # Daily precipitation (temporal)
+    gridmet_tmmx_C_mean_2020.nc                        # Daily max temperature (temporal)
     ...
 ```
 
@@ -184,7 +184,7 @@ or coordinate dimension. Temporal datasets produce one NetCDF per
 variable per year. Static datasets produce CSVs.
 
 !!! tip "Check the manifest"
-    The `manifest.json` file in the output directory lists every SIR
+    The `.manifest.yml` file in the output directory lists every SIR
     file with its dataset, variable, statistic, and file path. Phase 2
     uses this manifest to locate SIR data on disk.
 

@@ -13,8 +13,8 @@ it provides, and which processing strategy to use.
 | land_cover | NLCD Annual (6 collections) | Land cover, impervious surface, change |
 | climate | gridMET | Precipitation, temperature, radiation, wind |
 | snow | SNODAS | Daily snow water equivalent |
-| hydrography | NHDPlus | Flowlines, catchments |
-| water_bodies | NHDPlus waterbodies | Lakes, reservoirs |
+| hydrography | *(reserved)* | Flowlines, catchments |
+| water_bodies | *(reserved)* | Lakes, reservoirs |
 
 ## Data Access Strategies
 
@@ -86,12 +86,6 @@ List all available datasets (including any user-local overlays):
 
 ```bash
 hydro-param datasets list
-```
-
-Filter by category:
-
-```bash
-hydro-param datasets list --category soils
 ```
 
 Get detailed information for a specific dataset, including its variables,
