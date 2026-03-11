@@ -23,7 +23,7 @@ datasets:
   topography:
     # 3DEP 1 arc-second (~30m) DEM — comparable resolution to GFv1.1 SRTM
     - name: dem_3dep_30m
-      variables: [elevation, slope, aspect]
+      variables: [elevation, slope, sin_aspect, cos_aspect]
       statistics: [mean, median]
 
   soils:

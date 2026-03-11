@@ -557,11 +557,10 @@ class PywatershedRunConfig(BaseModel):
     def validate_available_fields(self) -> None:
         """Check that ``available`` dataset names exist in the registry.
 
-        Load the bundled dataset registry and verify that every name in
+        Load the bundled dataset registry (including user-local overlays
+        from ``~/.hydro-param/datasets/``) and verify that every name in
         each category's ``available`` list is a known dataset.  Unknown
-        entries emit a ``UserWarning`` rather than raising, because they
-        may refer to user-provided local datasets not in the bundled
-        registry.
+        entries emit a ``UserWarning`` rather than raising.
 
         Warnings
         --------
@@ -570,9 +569,9 @@ class PywatershedRunConfig(BaseModel):
             found in the current registry.
         """
         from hydro_param.dataset_registry import get_all_dataset_names, load_registry
-        from hydro_param.pipeline import DEFAULT_REGISTRY
+        from hydro_param.pipeline import DEFAULT_REGISTRY, USER_REGISTRY_DIR
 
-        registry = load_registry(DEFAULT_REGISTRY)
+        registry = load_registry(DEFAULT_REGISTRY, overlay_dirs=[USER_REGISTRY_DIR])
         known = get_all_dataset_names(registry)
 
         categories: list[tuple[str, BaseModel]] = [
