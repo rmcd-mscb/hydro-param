@@ -386,12 +386,20 @@ class SIRAccessor:
         return xr.Dataset.from_dataframe(df)
 
     def find_variable(self, base_name: str) -> str | None:
-        """Find a static variable by base name, allowing year suffixes.
+        """Find a static variable by base name with fuzzy resolution.
 
-        Return ``base_name`` if it exists as-is (prefixed or canonical).
-        Otherwise, search for variables whose canonical part matches
-        ``{base_name}`` or ``{base_name}_{year}`` where year is a 4-digit
-        number.  Returns the most recent year if multiple matches exist.
+        Resolution order:
+
+        1. **Exact match** — ``base_name`` exists as a prefixed key or
+           canonical name in the index.
+        2. **Year-suffix match** — canonical name matches
+           ``{base_name}_{YYYY}``.  Returns the most recent year when
+           multiple years exist.
+        3. **Prefix match** — canonical name starts with
+           ``{base_name}_``.  This handles SIR names that include units
+           and statistic suffixes (e.g., ``"canopy_pct"`` matches
+           ``"canopy_pct_pct_mean"``).  Returns the unique match, or
+           ``None`` with a warning if ambiguous.
 
         The returned key is always the actual (prefixed) key stored in
         ``_static``, so callers can pass it directly to ``load_variable()``.
@@ -399,7 +407,8 @@ class SIRAccessor:
         Parameters
         ----------
         base_name : str
-            Variable base name (e.g., ``"fctimp_pct_mean"``).
+            Variable base name (e.g., ``"fctimp_pct_mean"``,
+            ``"canopy_pct"``).
 
         Returns
         -------
@@ -432,6 +441,31 @@ class SIRAccessor:
                 len(matches),
             )
             return resolved
+
+        # Prefix match: base_name is a prefix of the canonical name.
+        # Handles SIR names with units/statistic suffixes, e.g.
+        # "canopy_pct" → "canopy_pct_pct_mean".
+        prefix = base_name + "_"
+        prefix_matches: list[str] = []
+        for prefixed_key in self._static:
+            canonical = _parse_canonical_name(prefixed_key)
+            if canonical.startswith(prefix):
+                prefix_matches.append(prefixed_key)
+        if len(prefix_matches) == 1:
+            resolved = prefix_matches[0]
+            logger.debug(
+                "Resolved '%s' to prefix-matched variant '%s'",
+                base_name,
+                resolved,
+            )
+            return resolved
+        if len(prefix_matches) > 1:
+            logger.warning(
+                "Ambiguous prefix match for '%s': %s; returning None. "
+                "Use a more specific name to disambiguate.",
+                base_name,
+                sorted(_parse_canonical_name(k) for k in prefix_matches),
+            )
         return None
 
 
