@@ -1,6 +1,6 @@
 # Development Roadmap
 
-This page summarizes the design decisions that shaped hydro-param during its initial development sprint (February--March 2026). Each theme groups related design documents by area of concern. The full design documents are in `docs/plans/`, and each entry in the tables below links to the corresponding document.
+This page summarizes the design decisions that shaped hydro-param during its initial development sprint (February--March 2026). Each theme groups related design documents by area of concern. The full design documents are in [`docs/plans/`](https://github.com/rmcd-mscb/hydro-param/tree/main/docs/plans), and each entry in the tables below links to the corresponding document on GitHub.
 
 ---
 
@@ -10,14 +10,14 @@ The core pipeline is the model-agnostic engine at the center of hydro-param. It 
 
 | Date | Design | Summary |
 |------|--------|---------|
-| 2026-02-23 | [SIR Normalization](2026-02-23-sir-normalization-design.md) | Standardized variable names and units at pipeline output boundary |
-| 2026-02-23 | [Pipeline Memory Optimization](2026-02-23-pipeline-memory-optimization-design.md) | STAC query reuse and memory-efficient batch processing |
-| 2026-02-24 | [SIR Temporal Normalization](2026-02-24-sir-temporal-normalization-design.md) | Extended SIR normalization to temporal (multi-year) datasets |
-| 2026-02-24 | [Pipeline Resilience](2026-02-24-pipeline-resilience-optimization-plan.md) | Manifest-based resume, pre-fetch, network timeout handling |
-| 2026-02-28 | [SIR Variable Naming Fix](2026-02-28-sir-variable-naming-fix.md) | Year-suffixed SIR variable name resolution |
-| 2026-02-28 | [SIR Dataset Prefix](2026-02-28-sir-dataset-prefix-design.md) | Dataset name prefix in SIR filenames for disambiguation |
-| 2026-03-02 | [Shared Classification Module](2026-03-02-shared-classification-design.md) | USDA texture triangle as shared classification module |
-| 2026-03-02 | [Derived Categorical Pipeline](2026-03-02-derived-categorical-design.md) | Pixel-level multi-source classification before zonal stats |
+| 2026-02-23 | [SIR Normalization](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-23-sir-normalization-design.md) | Standardized variable names and units at pipeline output boundary |
+| 2026-02-23 | [Pipeline Memory Optimization](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-23-pipeline-memory-optimization-design.md) | STAC query reuse and memory-efficient batch processing |
+| 2026-02-24 | [SIR Temporal Normalization](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-24-sir-temporal-normalization-design.md) | Extended SIR normalization to temporal (multi-year) datasets |
+| 2026-02-24 | [Pipeline Resilience](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-24-pipeline-resilience-optimization-plan.md) | Manifest-based resume, pre-fetch, network timeout handling |
+| 2026-02-28 | [SIR Variable Naming Fix](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-sir-variable-naming-fix.md) | Year-suffixed SIR variable name resolution |
+| 2026-02-28 | [SIR Dataset Prefix](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-sir-dataset-prefix-design.md) | Dataset name prefix in SIR filenames for disambiguation |
+| 2026-03-02 | [Shared Classification Module](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-02-shared-classification-design.md) | USDA texture triangle as shared classification module |
+| 2026-03-02 | [Derived Categorical Pipeline](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-02-derived-categorical-design.md) | Pixel-level multi-source classification before zonal stats |
 
 ## pywatershed Plugin
 
@@ -25,19 +25,19 @@ The pywatershed plugin is hydro-param's primary consumer of pipeline output. It 
 
 | Date | Design | Summary |
 |------|--------|---------|
-| 2026-02-25 | [Plugin Architecture](2026-02-25-pywatershed-plugin-architecture-design.md) | Plugin protocol, DerivationContext, formatter separation |
-| 2026-02-25 | [Steps 5, 9, 14](2026-02-25-derivation-steps-5-9-14-design.md) | Soils (step 5), soltab (step 9), calibration seeds (step 14) |
-| 2026-02-25 | [Forcing Generation](2026-02-25-forcing-generation-design.md) | Step 7 temporal forcing: per-variable SIR, unit conversion, CBH format |
-| 2026-02-25 | [PET and Transpiration](2026-02-25-pet-transpiration-design.md) | Steps 10--11: Jensen-Haise PET and transpiration timing from climate normals |
-| 2026-02-26 | [Waterbody Overlay](2026-02-26-waterbody-overlay-design.md) | Step 6: NHDPlus waterbody spatial overlay for hru_type and dprst_frac |
-| 2026-02-26 | [Routing Parameters](2026-02-26-step12-routing-design.md) | Step 12: Muskingum routing coefficients from segment geometry |
-| 2026-02-28 | [Decouple pywatershed Run](2026-02-28-decouple-pywatershed-design.md) | Decouple pywatershed run from Phase 1 pipeline (Phase 2 standalone) |
-| 2026-02-28 | [Temporal DerivationContext](2026-02-28-temporal-derivation-context-design.md) | Wire temporal SIR data into DerivationContext |
-| 2026-02-28 | [Forcing Regrouping](2026-02-28-temporal-forcing-regrouping-design.md) | Per-variable forcing detection with reverse SIR lookup |
-| 2026-03-01 | [Config Redesign v4.0](2026-03-01-pywatershed-config-redesign-design.md) | Consumer-oriented config with static_datasets, forcing, climate_normals |
-| 2026-03-02 | [Soil Texture Triangle](2026-03-02-soil-texture-triangle-design.md) | USDA soil texture triangle classifier for soil_type derivation |
-| 2026-03-02 | [pywatershed Compatibility](2026-03-02-pywatershed-compat-design.md) | pywatershed v2.0 runtime compatibility layer |
-| 2026-03-04 | [soil_rechr_max_frac](2026-03-04-soil-rechr-max-frac-design.md) | soil_rechr_max_frac from gNATSGO AWC ratio (aws0_30 / aws0_100) |
+| 2026-02-25 | [Plugin Architecture](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-25-pywatershed-plugin-architecture-design.md) | Plugin protocol, DerivationContext, formatter separation |
+| 2026-02-25 | [Steps 5, 9, 14](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-25-derivation-steps-5-9-14-design.md) | Soils (step 5), soltab (step 9), calibration seeds (step 14) |
+| 2026-02-25 | [Forcing Generation](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-25-forcing-generation-design.md) | Step 7 temporal forcing: per-variable SIR, unit conversion, CBH format |
+| 2026-02-25 | [PET and Transpiration](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-25-pet-transpiration-design.md) | Steps 10--11: Jensen-Haise PET and transpiration timing from climate normals |
+| 2026-02-26 | [Waterbody Overlay](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-26-waterbody-overlay-design.md) | Step 6: NHDPlus waterbody spatial overlay for hru_type and dprst_frac |
+| 2026-02-26 | [Routing Parameters](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-26-step12-routing-design.md) | Step 12: Muskingum routing coefficients from segment geometry |
+| 2026-02-28 | [Decouple pywatershed Run](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-decouple-pywatershed-design.md) | Decouple pywatershed run from Phase 1 pipeline (Phase 2 standalone) |
+| 2026-02-28 | [Temporal DerivationContext](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-temporal-derivation-context-design.md) | Wire temporal SIR data into DerivationContext |
+| 2026-02-28 | [Forcing Regrouping](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-temporal-forcing-regrouping-design.md) | Per-variable forcing detection with reverse SIR lookup |
+| 2026-03-01 | [Config Redesign v4.0](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-01-pywatershed-config-redesign-design.md) | Consumer-oriented config with static_datasets, forcing, climate_normals |
+| 2026-03-02 | [Soil Texture Triangle](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-02-soil-texture-triangle-design.md) | USDA soil texture triangle classifier for soil_type derivation |
+| 2026-03-02 | [pywatershed Compatibility](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-02-pywatershed-compat-design.md) | pywatershed v2.0 runtime compatibility layer |
+| 2026-03-04 | [soil_rechr_max_frac](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-04-soil-rechr-max-frac-design.md) | soil_rechr_max_frac from gNATSGO AWC ratio (aws0_30 / aws0_100) |
 
 ## Data Access
 
@@ -45,9 +45,9 @@ hydro-param supports five data access strategies spanning STAC catalogs, local G
 
 | Date | Design | Summary |
 |------|--------|---------|
-| 2026-03-06 | [GFv1.1 Download CLI](2026-03-06-gfv11-download-design.md) | GFv1.1 ScienceBase download CLI (~15 GB, fault-tolerant) |
-| 2026-03-06 | [GFv1.1 Raster Integration](2026-03-06-gfv11-raster-integration-design.md) | GFv1.1 raster integration via local_tiff strategy |
-| 2026-03-09 | [GFv1.1 Registry Overlay](2026-03-09-gfv11-registry-design.md) | User-local dataset registry overlay for GFv1.1 |
+| 2026-03-06 | [GFv1.1 Download CLI](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-06-gfv11-download-design.md) | GFv1.1 ScienceBase download CLI (~15 GB, fault-tolerant) |
+| 2026-03-06 | [GFv1.1 Raster Integration](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-06-gfv11-raster-integration-design.md) | GFv1.1 raster integration via local_tiff strategy |
+| 2026-03-09 | [GFv1.1 Registry Overlay](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-09-gfv11-registry-design.md) | User-local dataset registry overlay for GFv1.1 |
 
 ## Validation and QA
 
@@ -55,11 +55,11 @@ Validation work ensures that hydro-param's derived parameters match authoritativ
 
 | Date | Design | Summary |
 |------|--------|---------|
-| 2026-03-02 | [Soltab Valid Range](2026-03-02-soltab-valid-range-design.md) | Fix soltab valid_range from [0, 1000] to [0, 2000] Langleys |
-| 2026-03-05 | [Parameter Audit Design](2026-03-05-parameter-audit-design.md) | Source-code cross-reference of all ~100 parameters |
-| 2026-03-05 | [Parameter Audit Findings](parameter_audit_2026-03-05.md) | Audit findings: parameter inventory with derivation categories |
-| 2026-03-10 | [GFv1.1 Validation Plan](2026-03-10-gfv11-validation-plan.md) | GFv1.1 static parameter validation against NHM reference |
-| 2026-03-10 | [NHM Cross-Check](2026-03-10-nhm-crosscheck-design.md) | NHM reference cross-check: elevation median, representative_point, CV_INT fix |
+| 2026-03-02 | [Soltab Valid Range](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-02-soltab-valid-range-design.md) | Fix soltab valid_range from [0, 1000] to [0, 2000] Langleys |
+| 2026-03-05 | [Parameter Audit Design](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-05-parameter-audit-design.md) | Source-code cross-reference of all ~100 parameters |
+| 2026-03-05 | [Parameter Audit Findings](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/parameter_audit_2026-03-05.md) | Audit findings: parameter inventory with derivation categories |
+| 2026-03-10 | [GFv1.1 Validation Plan](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-10-gfv11-validation-plan.md) | GFv1.1 static parameter validation against NHM reference |
+| 2026-03-10 | [NHM Cross-Check](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-10-nhm-crosscheck-design.md) | NHM reference cross-check: elevation median, representative_point, CV_INT fix |
 
 ## Infrastructure
 
@@ -67,12 +67,12 @@ Infrastructure work improved the developer and user experience without changing 
 
 | Date | Design | Summary |
 |------|--------|---------|
-| 2026-02-27 | [Pre-Release UX Audit](2026-02-27-pre-release-ux-audit-design.md) | 15-gap UX audit: CLI messages, error handling, validation |
-| 2026-02-27 | [Pipeline Template](2026-02-27-pipeline-template-comprehensive-design.md) | Comprehensive pipeline template with all dataset categories |
-| 2026-02-27 | [Bundle Registry in Package](2026-02-27-bundle-registry-in-package-design.md) | Bundle dataset registry YAMLs in package via importlib.resources |
-| 2026-02-28 | [Config Schema Audit](2026-02-28-config-schema-audit-design.md) | Config schema audit: waterbody_path, lookup table relocation |
-| 2026-03-01 | [Stale Code Cleanup](2026-03-01-stale-code-cleanup-design.md) | Remove dead backward compatibility code (-167 lines) |
-| 2026-03-10 | [Themed Datasets Config](2026-03-10-themed-datasets-design.md) | Themed pipeline config: datasets grouped by category dict |
+| 2026-02-27 | [Pre-Release UX Audit](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-27-pre-release-ux-audit-design.md) | 15-gap UX audit: CLI messages, error handling, validation |
+| 2026-02-27 | [Pipeline Template](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-27-pipeline-template-comprehensive-design.md) | Comprehensive pipeline template with all dataset categories |
+| 2026-02-27 | [Bundle Registry in Package](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-27-bundle-registry-in-package-design.md) | Bundle dataset registry YAMLs in package via importlib.resources |
+| 2026-02-28 | [Config Schema Audit](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-02-28-config-schema-audit-design.md) | Config schema audit: waterbody_path, lookup table relocation |
+| 2026-03-01 | [Stale Code Cleanup](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-01-stale-code-cleanup-design.md) | Remove dead backward compatibility code (-167 lines) |
+| 2026-03-10 | [Themed Datasets Config](https://github.com/rmcd-mscb/hydro-param/blob/main/docs/plans/2026-03-10-themed-datasets-design.md) | Themed pipeline config: datasets grouped by category dict |
 
 ## Open and Planned Work
 

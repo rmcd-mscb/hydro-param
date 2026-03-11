@@ -6,6 +6,14 @@ repo_url: https://github.com/rmcd-mscb/hydro-param
 repo_name: rmcd-mscb/hydro-param
 edit_uri: edit/main/docs/
 
+# Plan/design docs live in docs/plans/ for GitHub browsing but most
+# are not in the nav.  Exclude date-prefixed files from the build to
+# avoid broken-link warnings in strict mode.  The development roadmap
+# (in nav) links to them on GitHub instead.
+exclude_docs: |
+  plans/2026-*.md
+  plans/parameter_audit_*.md
+
 theme:
   name: material
   palette:
@@ -53,6 +61,8 @@ plugins:
             merge_init_into_class: true
             show_signature_annotations: true
             separate_signature: true
+            docstring_options:
+              warn_unknown_params: false
 
 markdown_extensions:
   - admonition
