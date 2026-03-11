@@ -530,7 +530,7 @@ def align_rasters(
         Aligned rasters in the same order as *sources*, all
         sharing the template's grid.
     """
-    from rasterio.enums import Resampling
+    from rasterio.enums import Resampling  # type: ignore[import-untyped]
 
     resampling = Resampling[method]
     aligned: list[xr.DataArray] = []

@@ -5,7 +5,10 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 
-from hydro_param.dataset_registry import VALID_CATEGORIES
+import pytest
+from pydantic import ValidationError
+
+from hydro_param.dataset_registry import VALID_CATEGORIES, DerivedContinuousSpec
 
 
 def test_valid_categories_is_frozenset():
@@ -30,16 +33,6 @@ def test_valid_categories_matches_yaml_files():
     datasets_dir = Path(str(files("hydro_param").joinpath("data/datasets")))
     yaml_categories = {p.stem for p in datasets_dir.glob("*.yml")}
     assert VALID_CATEGORIES == yaml_categories
-
-
-# ---------------------------------------------------------------------------
-# DerivedContinuousSpec tests
-# ---------------------------------------------------------------------------
-
-import pytest
-from pydantic import ValidationError
-
-from hydro_param.dataset_registry import DerivedContinuousSpec
 
 
 class TestDerivedContinuousSpec:
