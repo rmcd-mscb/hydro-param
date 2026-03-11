@@ -100,8 +100,8 @@ hydro-param pywatershed validate output/parameters.nc
 ### Path 3: Download GFv1.1 national rasters
 
 ```bash
-# Download GFv1.1 rasters from ScienceBase
-hydro-param gfv11 download
+# Download GFv1.1 rasters from ScienceBase (~15 GB)
+hydro-param gfv11 download --output-dir /path/to/data/gfv11
 ```
 
 ## CLI Commands
@@ -115,7 +115,7 @@ hydro-param gfv11 download
 | `hydro-param run CONFIG` | Run the 5-stage generic pipeline |
 | `hydro-param pywatershed run CONFIG` | Generate pywatershed model parameters from SIR |
 | `hydro-param pywatershed validate FILE` | Validate parameter file against metadata |
-| `hydro-param gfv11 download` | Download GFv1.1 national rasters from ScienceBase |
+| `hydro-param gfv11 download --output-dir PATH` | Download GFv1.1 national rasters from ScienceBase |
 
 ## Project Structure
 
