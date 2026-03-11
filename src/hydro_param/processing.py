@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 ZonalEngine = Literal["serial", "parallel", "dask", "exactextract"]
 
+# gdptools/exactextract returns percentile columns as "25%", "50%", "75%"
+# but users request them as "median".  This mapping normalizes column names
+# so that user-facing statistic names work transparently.
+_STAT_COLUMN_RENAMES: dict[str, str] = {
+    "50%": "median",
+}
+
 
 class Processor(Protocol):
     """Protocol defining the interface for spatial processing strategies.
@@ -223,6 +230,8 @@ class ZonalProcessor:
 
         # For continuous variables, validate and select requested statistics
         if not categorical:
+            # Normalize gdptools percentile column names (e.g., "50%" → "median")
+            result_df = result_df.rename(columns=_STAT_COLUMN_RENAMES)
             available = set(result_df.columns)
             missing = [s for s in statistics if s not in available]
             if missing:
@@ -356,6 +365,8 @@ class ZonalProcessor:
 
         # For continuous variables, validate and select requested statistics
         if not categorical:
+            # Normalize gdptools percentile column names (e.g., "50%" → "median")
+            result_df = result_df.rename(columns=_STAT_COLUMN_RENAMES)
             available = set(result_df.columns)
             missing = [s for s in statistics if s not in available]
             if missing:
