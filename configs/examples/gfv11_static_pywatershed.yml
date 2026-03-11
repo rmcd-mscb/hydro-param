@@ -37,8 +37,8 @@ static_datasets:
     hru_elev:
       source: dem_3dep_30m
       variable: elevation
-      statistic: mean
-      description: "Mean HRU elevation (3DEP 1 arc-second, ~30m)"
+      statistic: median
+      description: "Median HRU elevation (3DEP 1 arc-second, ~30m)"
     hru_slope:
       source: dem_3dep_30m
       variable: slope
@@ -64,7 +64,7 @@ static_datasets:
       description: "Max available water-holding capacity (SoilGrids250m AWC)"
 
   landcover:
-    available: [gfv11_lulc, gfv11_imperv, gfv11_cnpy, gfv11_covden_sum, gfv11_covden_win, gfv11_covden_loss, gfv11_srain, gfv11_wrain, gfv11_snow_intcp, gfv11_root_depth]
+    available: [gfv11_lulc, gfv11_imperv, gfv11_cnpy, gfv11_covden_win, gfv11_covden_loss, gfv11_srain, gfv11_wrain, gfv11_snow_intcp, gfv11_root_depth]
     cov_type:
       source: gfv11_lulc
       variable: cov_type
@@ -76,10 +76,10 @@ static_datasets:
       statistic: mean
       description: "Impervious surface fraction (GMIS)"
     covden_sum:
-      source: gfv11_covden_sum
-      variable: covden_sum
+      source: gfv11_cnpy
+      variable: canopy_pct
       statistic: mean
-      description: "Summer cover density (GFv1.1 pre-computed)"
+      description: "Summer cover density from MODIS canopy cover (canopy% / 100)"
     covden_win:
       source: gfv11_covden_win
       variable: covden_win
@@ -100,6 +100,14 @@ static_datasets:
       variable: snow_intcp
       statistic: mean
       description: "Snow interception (GFv1.1 pre-computed, inches)"
+
+  snow:
+    available: [gfv11_cv_int]
+    hru_deplcrv:
+      source: gfv11_cv_int
+      variable: cv_int
+      statistic: majority
+      description: "Snow depletion curve index from CV_INT classification"
 
   waterbodies:
     available: []
