@@ -38,12 +38,6 @@ static_datasets:
       variable: slope
       statistic: mean
       description: "Mean land surface slope"
-    hru_aspect:
-      source: dem_3dep_10m
-      variable: aspect
-      statistic: mean
-      description: "Mean HRU aspect"
-
   soils:
     available: [polaris_30m, gnatsgo_rasters]
     soil_type:
