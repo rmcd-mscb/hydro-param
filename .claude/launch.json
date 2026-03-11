@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "docs-serve",
+      "runtimeExecutable": "pixi",
+      "runtimeArgs": ["run", "-e", "docs", "docs-serve"],
+      "port": 8000
+    },
+    {
+      "name": "jupyter-lab",
+      "runtimeExecutable": "pixi",
+      "runtimeArgs": ["run", "-e", "pws-test", "lab"],
+      "port": 8888
+    },
+    {
+      "name": "pws-notebook",
+      "runtimeExecutable": "pixi",
+      "runtimeArgs": ["run", "-e", "pws-test", "pws-notebook"],
+      "port": 8888
+    }
+  ]
+}
