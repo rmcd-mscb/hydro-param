@@ -939,7 +939,7 @@ class PywatershedDerivation:
             )
             seg_lats = segments.geometry.centroid.y.values
         else:
-            segs_5070 = segments if segments.crs == "EPSG:5070" else segments.to_crs(epsg=5070)
+            segs_5070 = segments.to_crs(epsg=5070)
             seg_centroids_4326 = gpd.GeoSeries(segs_5070.geometry.centroid, crs="EPSG:5070").to_crs(
                 epsg=4326
             )

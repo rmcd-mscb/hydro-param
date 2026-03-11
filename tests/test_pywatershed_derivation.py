@@ -1593,8 +1593,43 @@ class TestDeriveTopology:
         assert "seg_lat" in ds
         assert ds["seg_lat"].dims == ("nsegment",)
         # synthetic_segments are in EPSG:5070 near DRB (~41.8°N)
-        assert ds["seg_lat"].dims == ("nsegment",)
         np.testing.assert_allclose(ds["seg_lat"].values, [41.81, 41.79, 41.77], atol=0.1)
+
+    def test_seg_lat_no_crs_fallback(
+        self,
+        derivation: PywatershedDerivation,
+        sir_minimal: _MockSIRAccessor,
+        synthetic_fabric: gpd.GeoDataFrame,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """seg_lat falls back to raw centroid when segments have no CRS."""
+        import logging
+
+        segs_no_crs = gpd.GeoDataFrame(
+            {
+                "nhm_seg": [201, 202, 203],
+                "tosegment": [2, 3, 0],
+            },
+            geometry=[
+                LineString([(0, 40.0), (1, 40.0)]),
+                LineString([(1, 40.0), (2, 40.0)]),
+                LineString([(2, 40.0), (3, 40.0)]),
+            ],
+            crs=None,
+        )
+        ctx = DerivationContext(
+            sir=sir_minimal,
+            fabric=synthetic_fabric,
+            segments=segs_no_crs,
+            fabric_id_field="nhm_id",
+            segment_id_field="nhm_seg",
+        )
+        with caplog.at_level(logging.WARNING, logger="hydro_param.derivations.pywatershed"):
+            ds = derivation.derive(ctx)
+        assert "seg_lat" in ds
+        # Raw centroid y values (no projection)
+        np.testing.assert_allclose(ds["seg_lat"].values, [40.0, 40.0, 40.0], atol=0.01)
+        assert "Segments have no CRS" in caplog.text
 
 
 class TestTopologyValidation:
