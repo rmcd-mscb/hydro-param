@@ -561,11 +561,11 @@ For complete field-level documentation, see the API reference:
 
 **pywatershed run config (Phase 2):**
 
-- [`PywatershedRunConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.PywatershedRunConfig) --- Top-level pywatershed configuration
-- [`PwsDomainConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.PwsDomainConfig) --- Domain fabric paths
-- [`PwsTimeConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.PwsTimeConfig) --- Simulation time period
-- [`StaticDatasetsConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.StaticDatasetsConfig) --- Static parameter declarations
-- [`ForcingConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.ForcingConfig) --- Forcing time series
-- [`ClimateNormalsConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.ClimateNormalsConfig) --- Climate-derived parameters
-- [`ParameterEntry`](../api/pywatershed_config.md#hydro_param.pywatershed_config.ParameterEntry) --- Individual parameter declaration
-- [`PwsOutputConfig`](../api/pywatershed_config.md#hydro_param.pywatershed_config.PwsOutputConfig) --- Output file layout
+- [`PywatershedRunConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.PywatershedRunConfig) --- Top-level pywatershed configuration
+- [`PwsDomainConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.PwsDomainConfig) --- Domain fabric paths
+- [`PwsTimeConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.PwsTimeConfig) --- Simulation time period
+- [`StaticDatasetsConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.StaticDatasetsConfig) --- Static parameter declarations
+- [`ForcingConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.ForcingConfig) --- Forcing time series
+- [`ClimateNormalsConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.ClimateNormalsConfig) --- Climate-derived parameters
+- [`ParameterEntry`](../api/pywatershed-config.md#hydro_param.pywatershed_config.ParameterEntry) --- Individual parameter declaration
+- [`PwsOutputConfig`](../api/pywatershed-config.md#hydro_param.pywatershed_config.PwsOutputConfig) --- Output file layout
