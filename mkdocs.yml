@@ -85,6 +85,7 @@ nav:
       - user-guide/index.md
       - user-guide/cli.md
       - user-guide/configuration.md
+      - user-guide/pywatershed-workflow.md
       - user-guide/datasets.md
   - API Reference:
       - api/index.md
@@ -109,8 +110,10 @@ nav:
           - api/solar.md
   - Architecture:
       - design.md
+      - plans/development-roadmap.md
   - Contributing:
       - contributing.md
+      - ai-workflow-guide.md
 
 extra:
   social:
