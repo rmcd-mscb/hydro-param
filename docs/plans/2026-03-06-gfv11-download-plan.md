@@ -233,7 +233,7 @@ def fetch_item_files(item_id: str) -> list[tuple[str, str, int]]:
     Parameters
     ----------
     item_id
-        ScienceBase item identifier (e.g., ``"5ebb182b82ce25b5136181cf"``).
+        ScienceBase item identifier (e.g., ``"5ebb182b82ce25b5136181cf"``).  # pragma: allowlist secret
 
     Returns
     -------
