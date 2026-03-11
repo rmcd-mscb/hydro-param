@@ -564,8 +564,12 @@ def apply_raster_operation(
     Raises
     ------
     ValueError
-        If *operation* is not one of the supported operations.
+        If *operation* is not one of the supported operations,
+        or if *sources* contains fewer than 2 rasters.
     """
+    if len(sources) < 2:
+        msg = f"apply_raster_operation requires at least 2 sources, got {len(sources)}"
+        raise ValueError(msg)
     op_fn = _RASTER_OPS.get(operation)
     if op_fn is None:
         msg = f"Unsupported raster operation '{operation}'. Choose from {list(_RASTER_OPS)}"

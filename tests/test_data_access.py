@@ -679,3 +679,11 @@ class TestApplyRasterOperation:
     def test_invalid_operation(self, a, b):
         with pytest.raises(ValueError, match="Unsupported"):
             apply_raster_operation([a, b], "power")
+
+    def test_rejects_single_source(self, a):
+        with pytest.raises(ValueError, match="at least 2 sources"):
+            apply_raster_operation([a], "multiply")
+
+    def test_rejects_empty_sources(self):
+        with pytest.raises(ValueError, match="at least 2 sources"):
+            apply_raster_operation([], "multiply")

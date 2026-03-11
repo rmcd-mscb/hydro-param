@@ -94,3 +94,13 @@ class TestDerivedContinuousSpec:
             align_to="b",
         )
         assert len(spec.sources) == 3
+
+    def test_rejects_zero_scale_factor(self):
+        with pytest.raises(ValidationError, match="scale_factor must not be zero"):
+            DerivedContinuousSpec(
+                name="bad",
+                sources=["a", "b"],
+                operation="multiply",
+                align_to="a",
+                scale_factor=0.0,
+            )

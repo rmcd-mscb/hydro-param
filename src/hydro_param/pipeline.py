@@ -635,11 +635,13 @@ def _process_batch(
         if temporal ``nhgf_stac`` is used (not yet supported in batch loop).
     ValueError
         If a derived variable has no registered derivation function,
-        or if a derived categorical variable has no registered
-        classification function in ``CATEGORICAL_DERIVATION_FUNCTIONS``.
+        if a derived categorical variable has no registered
+        classification function in ``CATEGORICAL_DERIVATION_FUNCTIONS``,
+        or if a derived continuous variable's ``align_to`` source is
+        not found among loaded rasters.
     FileNotFoundError
-        If source GeoTIFFs required by a derived categorical variable
-        are missing from the work directory.
+        If source GeoTIFFs required by a derived categorical or
+        derived continuous variable are missing from the work directory.
 
     Notes
     -----
@@ -809,7 +811,7 @@ def _process_batch(
 
         results[var_spec.name] = df
 
-        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical
+        # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical/continuous
         needed_by_dc = any(
             isinstance(dc, DerivedCategoricalSpec | DerivedContinuousSpec)
             and var_spec.name in dc.sources
@@ -905,17 +907,20 @@ def _process_batch(
         results[dc_spec.name] = df
 
         # Clean up classified GeoTIFF; only delete source GeoTIFFs if no
-        # remaining dc_specs still need them.
+        # remaining dc_specs or dcont_specs still need them.
         classified_tiff.unlink(missing_ok=True)
         remaining_dc = dc_specs[dc_specs.index(dc_spec) + 1 :]
+        dcont_specs_pre = [v for v in var_specs if isinstance(v, DerivedContinuousSpec)]
         for src_name in dc_spec.sources:
-            still_needed = any(src_name in other.sources for other in remaining_dc)
+            still_needed = any(src_name in other.sources for other in remaining_dc) or any(
+                src_name in dcont.sources for dcont in dcont_specs_pre
+            )
             if not still_needed:
                 (work_dir / f"{src_name}.tif").unlink(missing_ok=True)
         gc.collect()
 
-    # Process derived continuous specs — same second-pass pattern as
-    # categorical, but runs continuous (not categorical) zonal stats.
+    # Process derived continuous specs — align source rasters, apply
+    # arithmetic, then run continuous zonal stats.
     from hydro_param.data_access import align_rasters, apply_raster_operation
 
     dcont_specs = [v for v in var_specs if isinstance(v, DerivedContinuousSpec)]
@@ -994,7 +999,7 @@ def _process_batch(
         results[dcont_spec.name] = df
 
         # Clean up product GeoTIFF; only delete source GeoTIFFs if no
-        # remaining dcont_specs or dc_specs still need them.
+        # remaining dcont_specs still need them (dc_specs already processed).
         product_tiff.unlink(missing_ok=True)
         remaining_dcont = dcont_specs[dcont_specs.index(dcont_spec) + 1 :]
         for src_name in dcont_spec.sources:

@@ -209,7 +209,7 @@ class DerivedContinuousSpec(BaseModel):
     this always produces continuous output processed with standard
     zonal statistics (mean, median, etc.).
 
-    Parameters
+    Attributes
     ----------
     name : str
         Logical name for the derived variable (e.g.,
@@ -251,6 +251,14 @@ class DerivedContinuousSpec(BaseModel):
     def _check_min_sources(cls, v: list[str]) -> list[str]:
         if len(v) < 2:
             msg = "DerivedContinuousSpec requires at least 2 sources"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("scale_factor")
+    @classmethod
+    def _nonzero_scale(cls, v: float | None) -> float | None:
+        if v is not None and v == 0.0:
+            msg = "scale_factor must not be zero (would destroy all data)"
             raise ValueError(msg)
         return v
 
