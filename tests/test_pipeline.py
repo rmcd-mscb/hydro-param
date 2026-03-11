@@ -2646,6 +2646,139 @@ def test_process_batch_derived_categorical_missing_source(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# DerivedContinuousSpec second-pass processing
+# ---------------------------------------------------------------------------
+
+
+def test_process_batch_derived_continuous(tmp_path: Path) -> None:
+    """_process_batch computes DerivedContinuousSpec via second-pass raster math."""
+    from unittest.mock import patch
+
+    import numpy as np
+    import rioxarray  # noqa: F401
+
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import (
+        DatasetEntry,
+        DerivedContinuousSpec,
+        VariableSpec,
+    )
+    from hydro_param.pipeline import _process_batch
+    from hydro_param.processing import ZonalProcessor
+
+    fabric = gpd.GeoDataFrame(
+        {"hru_id": ["a", "b"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs="EPSG:4326",
+    )
+
+    entry = DatasetEntry(strategy="local_tiff", crs="EPSG:4326")
+    var_a = VariableSpec(name="root_depth", band=1, source_override="/fake/a.tif")
+    var_b = VariableSpec(name="awc", band=1, source_override="/fake/b.tif")
+    dcont = DerivedContinuousSpec(
+        name="soil_product",
+        sources=["root_depth", "awc"],
+        operation="multiply",
+        align_to="awc",
+    )
+
+    ds_req = DatasetRequest(
+        name="test_ds",
+        variables=["root_depth", "awc", "soil_product"],
+        statistics=["mean"],
+    )
+    config = PipelineConfig(
+        target_fabric={"path": "test.gpkg", "id_field": "hru_id"},
+        domain={"type": "bbox", "bbox": [0, 0, 2, 2]},
+        datasets={},
+    )
+
+    # Create mock DataArrays with CRS for rioxarray
+    mock_da_a = xr.DataArray(
+        np.full((4, 4), 2.0),
+        dims=["y", "x"],
+        coords={"y": [1.0, 0.75, 0.5, 0.25], "x": [0.0, 0.5, 1.0, 1.5]},
+    )
+    mock_da_a = mock_da_a.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+
+    mock_da_b = xr.DataArray(
+        np.full((4, 4), 3.0),
+        dims=["y", "x"],
+        coords={"y": [1.0, 0.75, 0.5, 0.25], "x": [0.0, 0.5, 1.0, 1.5]},
+    )
+    mock_da_b = mock_da_b.rio.write_crs("EPSG:4326").rio.set_spatial_dims("x", "y")
+
+    # Track which variable fetch returns which DataArray
+    def mock_fetch_side_effect(entry_arg, bbox_arg, variable_source=None, **kwargs):
+        if variable_source and "a.tif" in variable_source:
+            return mock_da_a
+        return mock_da_b
+
+    mock_source_df = pd.DataFrame({"mean": [50.0, 60.0]}, index=["a", "b"])
+    mock_product_df = pd.DataFrame({"mean": [6.0, 6.0]}, index=["a", "b"])
+
+    call_count = {"n": 0}
+
+    def mock_process_side_effect(**kwargs):
+        call_count["n"] += 1
+        if kwargs.get("variable_name") == "soil_product":
+            return mock_product_df
+        return mock_source_df
+
+    with (
+        patch(
+            "hydro_param.pipeline.fetch_local_tiff",
+            side_effect=mock_fetch_side_effect,
+        ),
+        patch.object(ZonalProcessor, "process", side_effect=mock_process_side_effect),
+    ):
+        results = _process_batch(fabric, entry, ds_req, [var_a, var_b, dcont], config, tmp_path)
+
+    assert "root_depth" in results
+    assert "awc" in results
+    assert "soil_product" in results
+    assert results["soil_product"]["mean"].iloc[0] == pytest.approx(6.0)
+
+
+def test_process_batch_derived_continuous_missing_source(tmp_path: Path) -> None:
+    """_process_batch raises FileNotFoundError when source GeoTIFFs are missing."""
+    from hydro_param.config import DatasetRequest, PipelineConfig
+    from hydro_param.dataset_registry import (
+        DatasetEntry,
+        DerivedContinuousSpec,
+    )
+    from hydro_param.pipeline import _process_batch
+
+    entry = DatasetEntry(strategy="local_tiff")
+    ds_req = DatasetRequest(
+        name="test_ds",
+        variables=["product"],
+        statistics=["mean"],
+    )
+    dcont = DerivedContinuousSpec(
+        name="product",
+        sources=["a", "b"],
+        operation="multiply",
+        align_to="a",
+    )
+    config = PipelineConfig(
+        target_fabric={"path": "/tmp/test.gpkg", "id_field": "nhm_id"},
+        datasets={"soils": [ds_req]},
+        output={"path": "/tmp/out"},
+    )
+
+    fabric = gpd.GeoDataFrame(
+        {"nhm_id": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs="EPSG:4326",
+    )
+
+    # Only DerivedContinuousSpec in var_specs, no source GeoTIFFs on disk
+    with pytest.raises(FileNotFoundError, match="missing source GeoTIFFs"):
+        _process_batch(fabric, entry, ds_req, [dcont], config, tmp_path)
+
+
+# ---------------------------------------------------------------------------
 # USER_REGISTRY_DIR constant
 # ---------------------------------------------------------------------------
 
