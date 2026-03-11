@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 from hydro_param.derivations.pywatershed import (
     _DEFAULT_K_COEF,
@@ -99,6 +99,7 @@ def sir_topography() -> _MockSIRAccessor:
         xr.Dataset(
             {
                 "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                "elevation_m_median": ("nhm_id", np.array([101.0, 502.0, 1498.0])),
                 "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
                 "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
                 "sin_aspect_mean": (
@@ -293,9 +294,38 @@ class TestDeriveTopography:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_elev" in ds
-        # Elevation is kept in meters (no m→ft conversion)
-        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        # Median is preferred when both mean and median are present
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 101.0, atol=0.01)
         assert ds["hru_elev"].attrs["units"] == "meters"
+
+    def test_elevation_prefers_median(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        """When both median and mean are in SIR, median is used."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Median values (101, 502, 1498), not mean values (100, 500, 1500)
+        np.testing.assert_allclose(ds["hru_elev"].values, [101.0, 502.0, 1498.0], atol=0.01)
+        assert ds["hru_elev"].attrs["long_name"] == "Median HRU elevation"
+
+    def test_elevation_falls_back_to_mean(self, derivation: PywatershedDerivation) -> None:
+        """When only mean is available (no median), mean is used with warning."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_elev" in ds
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        assert ds["hru_elev"].attrs["long_name"] == "Mean HRU elevation"
 
     def test_slope_degrees_to_fraction(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
@@ -1836,7 +1866,7 @@ class TestDeriveGeometryFromFabric:
         assert ds["hru_area"].attrs["units"] == "acres"
 
     def test_lat_from_fabric(self, derivation: PywatershedDerivation) -> None:
-        """hru_lat computed from fabric centroid latitude."""
+        """hru_lat computed from fabric representative point latitude."""
         sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -1852,7 +1882,7 @@ class TestDeriveGeometryFromFabric:
         np.testing.assert_allclose(ds["hru_lat"].values, [40.5, 42.5], atol=0.01)
 
     def test_lon_from_fabric(self, derivation: PywatershedDerivation) -> None:
-        """hru_lon computed from fabric centroid longitude."""
+        """hru_lon computed from fabric representative point longitude."""
         sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1, 2]}))
         fabric = gpd.GeoDataFrame(
             {"nhm_id": [1, 2]},
@@ -1867,6 +1897,34 @@ class TestDeriveGeometryFromFabric:
         assert "hru_lon" in ds
         np.testing.assert_allclose(ds["hru_lon"].values, [0.5, 2.5], atol=0.01)
 
+    def test_representative_point_inside_polygon(self, derivation: PywatershedDerivation) -> None:
+        """representative_point() guarantees point inside polygon for concave HRUs."""
+        sir = _MockSIRAccessor(xr.Dataset(coords={"nhm_id": [1]}))
+        # L-shaped (concave) polygon in projected CRS
+        l_shape = Polygon(
+            [
+                (0, 0),
+                (200000, 0),
+                (200000, 100000),
+                (100000, 100000),
+                (100000, 200000),
+                (0, 200000),
+            ]
+        )
+        fabric = gpd.GeoDataFrame(
+            {"nhm_id": [1]},
+            geometry=[l_shape],
+            crs="EPSG:5070",
+        )
+        ctx = DerivationContext(sir=sir, fabric=fabric, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_lat" in ds
+        assert "hru_lon" in ds
+        # Verify the point is inside the original polygon (in 4326)
+        fab_4326 = fabric.to_crs(epsg=4326)
+        pt = Point(ds["hru_lon"].values[0], ds["hru_lat"].values[0])
+        assert fab_4326.geometry.iloc[0].contains(pt)
+
     def test_lon_fallback_from_sir(self, derivation: PywatershedDerivation) -> None:
         """Without fabric, hru_lon falls back to SIR."""
         sir = _MockSIRAccessor(
@@ -1880,7 +1938,7 @@ class TestDeriveGeometryFromFabric:
         assert "hru_lon" in ds
         np.testing.assert_allclose(ds["hru_lon"].values, [-75.0, -76.0])
         assert ds["hru_lon"].attrs["units"] == "decimal_degrees"
-        assert ds["hru_lon"].attrs["long_name"] == "Longitude of HRU centroid"
+        assert ds["hru_lon"].attrs["long_name"] == "Longitude of HRU representative point"
 
     def test_lon_missing_without_fabric_or_sir(self, derivation: PywatershedDerivation) -> None:
         """When both fabric and SIR lack hru_lon, param is absent."""
@@ -4364,7 +4422,14 @@ class TestSegmentDefaults:
             },
             coords={"nhru": [1, 2]},
         )
-        ds = derivation._apply_defaults(ds, nhru=2)
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation._apply_defaults(ds, nhru=2, ctx=ctx)
         for name in ("mann_n", "seg_depth", "segment_flow_init", "obsout_segment"):
             assert name in ds, f"Missing segment default: {name}"
             assert ds[name].shape == (2,), f"{name}: expected (2,), got {ds[name].shape}"
@@ -4948,3 +5013,199 @@ class TestBuildPrecomputedMap:
         assert result == {}
         assert "Partial pre-computed entry" in caplog.text
         assert "covden_sum" in caplog.text
+
+
+# ------------------------------------------------------------------
+# Snow depletion curve derivation
+# ------------------------------------------------------------------
+
+
+class TestSnowDepletionCurves:
+    """Tests for snow depletion curve derivation from CV_INT + SDC table."""
+
+    def test_hru_deplcrv_from_cv_int(self, derivation: PywatershedDerivation) -> None:
+        """hru_deplcrv assigned from majority of CV_INT categorical fractions."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "cv_int_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "cv_int_frac_2": ("nhm_id", np.array([0.8, 0.1])),
+                    "cv_int_frac_5": ("nhm_id", np.array([0.2, 0.9])),
+                    "cv_int_frac_count": ("nhm_id", np.array([100, 100])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "hru_deplcrv": {
+                "source": "gfv11_cv_int",
+                "variable": "cv_int",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "hru_deplcrv" in ds
+        # HRU 1: class 2 majority, HRU 2: class 5 majority
+        # Remapped to 1-based sequential: {2: 1, 5: 2}
+        assert ds["hru_deplcrv"].values[0] == 1  # curve for class 2
+        assert ds["hru_deplcrv"].values[1] == 2  # curve for class 5
+
+    def test_snarea_curve_values(self, derivation: PywatershedDerivation) -> None:
+        """snarea_curve populated from SDC table with correct values."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "cv_int_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "cv_int_frac_2": ("nhm_id", np.array([0.8, 0.1])),
+                    "cv_int_frac_5": ("nhm_id", np.array([0.2, 0.9])),
+                    "cv_int_frac_count": ("nhm_id", np.array([100, 100])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "hru_deplcrv": {
+                "source": "gfv11_cv_int",
+                "variable": "cv_int",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "snarea_curve" in ds
+        # 2 unique curves (class 2 and 5) x 11 values = 22 total
+        assert len(ds["snarea_curve"].values) == 22
+        # First 11 values = curve 2: [0.00, 0.85, 0.99, 1.00, ...]
+        np.testing.assert_allclose(ds["snarea_curve"].values[0], 0.00)
+        np.testing.assert_allclose(ds["snarea_curve"].values[1], 0.85)
+        np.testing.assert_allclose(ds["snarea_curve"].values[2], 0.99)
+        # Values 11-21 = curve 5: [0.00, 0.29, 0.53, 0.72, ...]
+        np.testing.assert_allclose(ds["snarea_curve"].values[11], 0.00)
+        np.testing.assert_allclose(ds["snarea_curve"].values[12], 0.29)
+        np.testing.assert_allclose(ds["snarea_curve"].values[13], 0.53)
+
+    def test_snarea_curve_default_without_cv_int(self, derivation: PywatershedDerivation) -> None:
+        """Without CV_INT, snarea_curve defaults to all 1.0."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "snarea_curve" in ds
+        np.testing.assert_array_equal(ds["snarea_curve"].values, np.ones(11))
+        assert "hru_deplcrv" in ds
+        np.testing.assert_array_equal(ds["hru_deplcrv"].values, [1, 1])
+
+
+class TestPrecomputedAllNanCategorical:
+    """Test that all-NaN categorical fractions don't crash nanargmax."""
+
+    def test_all_nan_fractions_assigned_first_class(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """HRUs with all-NaN fractions get first class index, not ValueError."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # Anchor key needed by find_variable
+                    "soil_type_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "soil_type_frac_1": ("nhm_id", np.array([0.8, np.nan])),
+                    "soil_type_frac_2": ("nhm_id", np.array([0.2, np.nan])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "soil_type": {
+                "source": "gfv11_text_prms",
+                "variable": "soil_type",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # HRU 1: class 1 majority; HRU 2: all-NaN → first class (1)
+        assert ds["soil_type"].values[0] == 1
+        assert ds["soil_type"].values[1] == 1
+
+
+class TestPrecomputedCovdenSumPercentConversion:
+    """Test covden_sum percent-to-fraction conversion for canopy sources."""
+
+    def test_canopy_pct_divided_by_100(self, derivation: PywatershedDerivation) -> None:
+        """covden_sum from canopy source with values > 1 gets divided by 100."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "canopy_pct_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "covden_sum": {
+                "source": "gfv11_cnpy",
+                "variable": "canopy_pct",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "covden_sum" in ds
+        np.testing.assert_allclose(ds["covden_sum"].values, [0.5, 0.8])
+
+
+class TestElevationMissingWarning:
+    """Test warning when no elevation variable found in SIR."""
+
+    def test_no_elevation_logs_warning(
+        self, derivation: PywatershedDerivation, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning emitted when neither median nor mean elevation in SIR."""
+        import logging
+
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        with caplog.at_level(logging.WARNING):
+            derivation.derive(ctx)
+        assert any("No elevation variable found" in msg for msg in caplog.messages)
+
+
+class TestSdcTableValidation:
+    """Test SDC table loading error paths."""
+
+    def test_missing_sdc_file_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """FileNotFoundError when sdc_table.yml missing."""
+        with pytest.raises(FileNotFoundError, match="sdc_table.yml"):
+            derivation._load_sdc_table(tmp_path)
+
+    def test_missing_curves_key_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """ValueError when sdc_table.yml has no 'curves' key."""
+        (tmp_path / "sdc_table.yml").write_text("other_key: {}")
+        with pytest.raises(ValueError, match="missing required 'curves' key"):
+            derivation._load_sdc_table(tmp_path)
+
+    def test_non_contiguous_keys_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """ValueError when SDC table has non-contiguous integer keys."""
+        import yaml
+
+        data = {"curves": {0: [0.0] * 11, 2: [1.0] * 11}}  # missing key 1
+        (tmp_path / "sdc_table.yml").write_text(yaml.dump(data))
+        with pytest.raises(ValueError, match="non-contiguous keys"):
+            derivation._load_sdc_table(tmp_path)

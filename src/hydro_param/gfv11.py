@@ -317,19 +317,19 @@ GFV11_DATASETS: dict[str, dict] = {
             }
         ],
     },
-    "gfv11_covden_sum": {
-        "description": "GFv1.1 pre-computed summer cover density, 30m, CONUS",
-        "category": "land_cover",
+    "gfv11_cv_int": {
+        "description": "GFv1.1 snow CV integer class for snow depletion curves, 30m, CONUS",
+        "category": "snow",
         "filename": "CV_INT.tif",
         "subdir": "land_cover",
         "variables": [
             {
-                "name": "covden_sum",
+                "name": "cv_int",
                 "band": 1,
-                "units": "fraction",
-                "long_name": "Summer vegetation cover density (pre-computed from NALCMS + lookup)",
-                "native_name": "covden_sum",
-                "categorical": False,
+                "units": "class_index",
+                "long_name": "Snow coefficient of variation class (indexes into SDC table)",
+                "native_name": "cv_int",
+                "categorical": True,
             }
         ],
     },

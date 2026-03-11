@@ -598,7 +598,7 @@ def _build_precomputed_map(
     dict[str, dict[str, str]]
         Mapping from PRMS parameter name to a dict with three keys:
 
-        - ``"source"`` (str): Pipeline dataset name (e.g., ``"gfv11_covden_sum"``).
+        - ``"source"`` (str): Pipeline dataset name (e.g., ``"gfv11_cnpy"``).
         - ``"variable"`` (str): SIR variable name (e.g., ``"covden_sum"``).
         - ``"statistic"`` (str): Zonal statistic (e.g., ``"mean"``); defaults
           to ``"mean"`` when the config entry has no explicit statistic.

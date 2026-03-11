@@ -101,7 +101,7 @@ class TestGfv11Datasets:
 
     def test_valid_categories(self) -> None:
         """All categories are from the expected set."""
-        valid = {"soils", "land_cover", "water_bodies", "topography"}
+        valid = {"soils", "land_cover", "water_bodies", "topography", "snow"}
         for name, meta in GFV11_DATASETS.items():
             assert meta["category"] in valid, f"{name} has unexpected category: {meta['category']}"
 
@@ -109,9 +109,10 @@ class TestGfv11Datasets:
         """Category counts match the expected distribution."""
         cats = [m["category"] for m in GFV11_DATASETS.values()]
         assert cats.count("soils") == 5
-        assert cats.count("land_cover") == 10
+        assert cats.count("land_cover") == 9
         assert cats.count("water_bodies") == 1
         assert cats.count("topography") == 5
+        assert cats.count("snow") == 1
 
     def test_variables_nonempty(self) -> None:
         """Every dataset has at least one variable."""
@@ -151,13 +152,29 @@ class TestGfv11Datasets:
 
     def test_categorical_datasets(self) -> None:
         """Categorical flag is set on the correct datasets."""
-        expected_categorical = {"gfv11_text_prms", "gfv11_lulc", "gfv11_wbg", "gfv11_fdr"}
+        expected_categorical = {
+            "gfv11_text_prms",
+            "gfv11_lulc",
+            "gfv11_wbg",
+            "gfv11_fdr",
+            "gfv11_cv_int",
+        }
         for name, meta in GFV11_DATASETS.items():
             is_cat = meta["variables"][0]["categorical"]
             if name in expected_categorical:
                 assert is_cat, f"{name} should be categorical"
             else:
                 assert not is_cat, f"{name} should not be categorical"
+
+    def test_cv_int_registered_correctly(self) -> None:
+        """CV_INT.tif is registered as gfv11_cv_int (categorical snow CV), not gfv11_covden_sum."""
+        assert "gfv11_cv_int" in GFV11_DATASETS
+        assert "gfv11_covden_sum" not in GFV11_DATASETS
+        entry = GFV11_DATASETS["gfv11_cv_int"]
+        assert entry["filename"] == "CV_INT.tif"
+        assert entry["variables"][0]["categorical"] is True
+        assert entry["variables"][0]["name"] == "cv_int"
+        assert entry["category"] == "snow"
 
 
 # ---------------------------------------------------------------------------

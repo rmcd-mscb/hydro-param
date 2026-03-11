@@ -1,0 +1,20 @@
+# Snow Depletion Curve (SDC) table.
+# Source: GFv1.1 ScienceBase SDC_table.csv (item 5ebb182b82ce25b5136181cf)
+# Reference: Liston et al. 2009, Sexstone et al. 2020
+#
+# Keys are CV_INT class values (0-9). Values are 11 entries (ndeplval)
+# representing fractional snow-covered area at evenly-spaced SWE fractions.
+# Class 0 is bare ground / water (all zeros).
+description: "Snow depletion curves indexed by CV_INT class"
+ndeplval: 11
+curves:
+  0: [0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]
+  1: [0.00, 0.96, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+  2: [0.00, 0.85, 0.99, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+  3: [0.00, 0.75, 0.96, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+  4: [0.00, 0.61, 0.88, 0.98, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+  5: [0.00, 0.29, 0.53, 0.72, 0.86, 0.94, 0.99, 1.00, 1.00, 1.00, 1.00]
+  6: [0.00, 0.22, 0.43, 0.62, 0.77, 0.88, 0.95, 0.99, 1.00, 1.00, 1.00]
+  7: [0.00, 0.17, 0.36, 0.53, 0.68, 0.81, 0.91, 0.97, 1.00, 1.00, 1.00]
+  8: [0.00, 0.14, 0.30, 0.46, 0.61, 0.75, 0.86, 0.94, 0.99, 1.00, 1.00]
+  9: [0.00, 0.10, 0.23, 0.37, 0.52, 0.65, 0.78, 0.89, 0.96, 1.00, 1.00]
