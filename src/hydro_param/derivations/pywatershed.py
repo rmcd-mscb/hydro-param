@@ -930,18 +930,22 @@ class PywatershedDerivation:
         )
 
         # --- seg_lat: segment centroid latitude (WGS84) ---
+        # Project to EPSG:5070 (NAD83 CONUS Albers equal-area) for accurate
+        # centroid computation, then reproject to EPSG:4326 for lat extraction.
+        # This mirrors the HRU representative_point approach in _derive_geometry.
         if segments.crs is None:
             logger.warning(
                 "Segments have no CRS; seg_lat assumes coordinates are geographic (WGS84)"
             )
-            segs_4326 = segments
-        elif not segments.crs.is_geographic:
-            segs_4326 = segments.to_crs(epsg=4326)
+            seg_lats = segments.geometry.centroid.y.values
         else:
-            segs_4326 = segments
-        seg_centroids = segs_4326.geometry.centroid
+            segs_5070 = segments.to_crs(epsg=5070)
+            seg_centroids_4326 = gpd.GeoSeries(segs_5070.geometry.centroid, crs="EPSG:5070").to_crs(
+                epsg=4326
+            )
+            seg_lats = seg_centroids_4326.y.values
         ds["seg_lat"] = xr.DataArray(
-            seg_centroids.y.values,
+            seg_lats,
             dims="nsegment",
             attrs={
                 "units": "decimal_degrees",
