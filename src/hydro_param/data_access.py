@@ -29,7 +29,9 @@ References
 
 from __future__ import annotations
 
+import functools
 import logging
+import operator
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -487,6 +489,88 @@ def classify_usda_texture_raster(
 CATEGORICAL_DERIVATION_FUNCTIONS: dict[str, Callable[..., xr.DataArray]] = {
     "usda_texture_triangle": classify_usda_texture_raster,
 }
+
+
+# ---------------------------------------------------------------------------
+# Raster alignment and arithmetic
+# ---------------------------------------------------------------------------
+
+_RASTER_OPS: dict[str, Any] = {
+    "multiply": operator.mul,
+    "divide": operator.truediv,
+    "add": operator.add,
+    "subtract": operator.sub,
+}
+
+
+def align_rasters(
+    sources: list[xr.DataArray],
+    template: xr.DataArray,
+    method: str = "nearest",
+) -> list[xr.DataArray]:
+    """Align source rasters to a template grid via reprojection.
+
+    Non-template sources are reprojected to match the template's CRS,
+    resolution, and extent using ``rioxarray.reproject_match()``.  The
+    template itself is passed through unchanged.
+
+    Parameters
+    ----------
+    sources : list[xr.DataArray]
+        Source rasters to align.
+    template : xr.DataArray
+        Reference raster whose grid defines the target CRS,
+        resolution, and extent.
+    method : str
+        Rasterio resampling method name (default ``"nearest"``).
+
+    Returns
+    -------
+    list[xr.DataArray]
+        Aligned rasters in the same order as *sources*, all
+        sharing the template's grid.
+    """
+    from rasterio.enums import Resampling
+
+    resampling = Resampling[method]
+    aligned: list[xr.DataArray] = []
+    for da in sources:
+        if da is template:
+            aligned.append(da)
+        else:
+            aligned.append(da.rio.reproject_match(template, resampling=resampling))
+    return aligned
+
+
+def apply_raster_operation(
+    sources: list[xr.DataArray],
+    operation: str,
+) -> xr.DataArray:
+    """Apply an arithmetic operation across source rasters via left-to-right fold.
+
+    Parameters
+    ----------
+    sources : list[xr.DataArray]
+        Two or more rasters to combine.  Must be on the same grid
+        (use ``align_rasters`` first if resolutions differ).
+    operation : {"multiply", "divide", "add", "subtract"}
+        Arithmetic operation to apply.
+
+    Returns
+    -------
+    xr.DataArray
+        Result of ``reduce(op, sources)``.
+
+    Raises
+    ------
+    ValueError
+        If *operation* is not one of the supported operations.
+    """
+    op_fn = _RASTER_OPS.get(operation)
+    if op_fn is None:
+        msg = f"Unsupported raster operation '{operation}'. Choose from {list(_RASTER_OPS)}"
+        raise ValueError(msg)
+    return functools.reduce(op_fn, sources)
 
 
 # ---------------------------------------------------------------------------
