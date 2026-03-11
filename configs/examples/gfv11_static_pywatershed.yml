@@ -44,12 +44,6 @@ static_datasets:
       variable: slope
       statistic: mean
       description: "Mean land surface slope (Horn method, derived from 3DEP ~30m DEM)"
-    hru_aspect:
-      source: dem_3dep_30m
-      variable: aspect
-      statistic: mean
-      description: "Mean HRU aspect (Horn method, derived from 3DEP ~30m DEM)"
-
   soils:
     available: [gfv11_sand, gfv11_silt, gfv11_clay, gfv11_awc, gfv11_text_prms]
     soil_type:

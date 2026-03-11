@@ -14,9 +14,9 @@ target_fabric:
 
 datasets:
   topography:
-    # 3DEP 10m DEM — elevation, slope, aspect
+    # 3DEP 10m DEM — elevation, slope, sin/cos aspect for circular mean
     - name: dem_3dep_10m
-      variables: [elevation, slope, aspect]
+      variables: [elevation, slope, sin_aspect, cos_aspect]
       statistics: [mean]
 
   soils:
