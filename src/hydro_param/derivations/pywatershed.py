@@ -1797,7 +1797,18 @@ class PywatershedDerivation:
         aspect if only ``aspect_deg_mean`` is available (legacy SIR).
         """
         sir = ctx.sir
-        if "elevation_m_mean" in sir:
+        if "elevation_m_median" in sir:
+            ds["hru_elev"] = xr.DataArray(
+                sir["elevation_m_median"].values.astype(np.float64),
+                dims="nhru",
+                attrs={"units": "meters", "long_name": "Median HRU elevation"},
+            )
+        elif "elevation_m_mean" in sir:
+            logger.warning(
+                "Using arithmetic mean elevation (legacy SIR). Median is preferred "
+                "for robustness to outlier cells. Consider adding 'median' to the "
+                "elevation statistics in your pipeline config."
+            )
             ds["hru_elev"] = xr.DataArray(
                 sir["elevation_m_mean"].values.astype(np.float64),
                 dims="nhru",

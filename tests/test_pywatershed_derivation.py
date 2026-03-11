@@ -99,6 +99,7 @@ def sir_topography() -> _MockSIRAccessor:
         xr.Dataset(
             {
                 "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                "elevation_m_median": ("nhm_id", np.array([101.0, 502.0, 1498.0])),
                 "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
                 "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
                 "sin_aspect_mean": (
@@ -293,9 +294,38 @@ class TestDeriveTopography:
         ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
         ds = derivation.derive(ctx)
         assert "hru_elev" in ds
-        # Elevation is kept in meters (no m→ft conversion)
-        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        # Median is preferred when both mean and median are present
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 101.0, atol=0.01)
         assert ds["hru_elev"].attrs["units"] == "meters"
+
+    def test_elevation_prefers_median(
+        self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
+    ) -> None:
+        """When both median and mean are in SIR, median is used."""
+        ctx = DerivationContext(sir=sir_topography, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        # Median values (101, 502, 1498), not mean values (100, 500, 1500)
+        np.testing.assert_allclose(ds["hru_elev"].values, [101.0, 502.0, 1498.0], atol=0.01)
+        assert ds["hru_elev"].attrs["long_name"] == "Median HRU elevation"
+
+    def test_elevation_falls_back_to_mean(self, derivation: PywatershedDerivation) -> None:
+        """When only mean is available (no median), mean is used with warning."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "elevation_m_mean": ("nhm_id", np.array([100.0, 500.0, 1500.0])),
+                    "slope_deg_mean": ("nhm_id", np.array([5.0, 15.0, 30.0])),
+                    "aspect_deg_mean": ("nhm_id", np.array([0.0, 90.0, 270.0])),
+                    "hru_lat": ("nhm_id", np.array([42.0, 41.5, 43.0])),
+                },
+                coords={"nhm_id": [1, 2, 3]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "hru_elev" in ds
+        np.testing.assert_allclose(ds["hru_elev"].values[0], 100.0, atol=0.01)
+        assert ds["hru_elev"].attrs["long_name"] == "Mean HRU elevation"
 
     def test_slope_degrees_to_fraction(
         self, derivation: PywatershedDerivation, sir_topography: xr.Dataset
