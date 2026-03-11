@@ -389,8 +389,9 @@ class PywatershedDerivation:
 
         For categorical variables, fraction columns are identified by the
         ``_<digit>`` suffix pattern.  All-NaN rows (HRUs outside raster
-        coverage) are detected and warned about; ``nanargmax`` assigns
-        them to the first class index.
+        coverage) are detected and warned about; their fractions are
+        zeroed so that ``nanargmax`` assigns them to the first class
+        index rather than raising ``ValueError``.
         """
         if ctx.precomputed is None or param_name not in ctx.precomputed:
             return None
@@ -431,6 +432,8 @@ class PywatershedDerivation:
             class_indices = np.array([int(str(col).rsplit("_", 1)[-1]) for col in frac_cols])
             fractions = np.column_stack([frac_ds[col].values for col in frac_cols])
             # Warn on all-NaN rows (HRUs outside raster coverage).
+            # Zero them so nanargmax returns position 0 (first class)
+            # instead of raising ValueError.
             nan_rows = np.all(np.isnan(fractions), axis=1)
             if np.any(nan_rows):
                 logger.warning(
@@ -441,6 +444,7 @@ class PywatershedDerivation:
                     len(fractions),
                     int(class_indices[0]),
                 )
+                fractions[nan_rows] = 0.0
             majority_pos = np.nanargmax(fractions, axis=1)
             result = class_indices[majority_pos]
             logger.info(
@@ -1828,6 +1832,12 @@ class PywatershedDerivation:
                 dims="nhru",
                 attrs={"units": "meters", "long_name": "Mean HRU elevation"},
             )
+        else:
+            logger.warning(
+                "No elevation variable found in SIR (checked 'elevation_m_median' "
+                "and 'elevation_m_mean'). hru_elev will not be set; downstream "
+                "steps that depend on elevation may fail or produce incorrect results."
+            )
 
         if "slope_deg_mean" in sir:
             # SIR slope is in degrees; PRMS wants decimal fraction (rise/run)
@@ -2132,6 +2142,16 @@ class PywatershedDerivation:
         # --- covden_sum: try pre-computed, then canopy %, then lookup ---
         covden_sum = self._try_precomputed(ctx, "covden_sum")
         if covden_sum is not None:
+            # Source may be canopy percent (0-100) — convert to fraction.
+            covden_decl = (ctx.precomputed or {}).get("covden_sum", {})
+            covden_var = covden_decl.get("variable", "")
+            if "_pct" in covden_var or "canopy" in covden_var or np.nanmax(covden_sum) > 1.0:
+                if np.nanmax(covden_sum) > 1.0:
+                    logger.info(
+                        "Pre-computed 'covden_sum' max=%.2f; converting from percent to fraction.",
+                        float(np.nanmax(covden_sum)),
+                    )
+                covden_sum = covden_sum / 100.0
             ds["covden_sum"] = xr.DataArray(
                 np.clip(covden_sum, 0.0, 1.0),
                 dims="nhru",
@@ -2167,13 +2187,19 @@ class PywatershedDerivation:
             # by checking the SIR variable name suffix: "_pct_" → percentage.
             imperv_decl = (ctx.precomputed or {}).get("hru_percent_imperv", {})
             imperv_var = imperv_decl.get("variable", "")
-            if "_pct" in imperv_var or np.nanmax(imperv) > 1.0:
-                if np.nanmax(imperv) > 1.0:
-                    logger.info(
-                        "Pre-computed 'hru_percent_imperv' max=%.2f; "
-                        "converting from percent to fraction.",
-                        float(np.nanmax(imperv)),
-                    )
+            if "_pct" in imperv_var:
+                logger.info(
+                    "Pre-computed 'hru_percent_imperv' variable '%s' contains "
+                    "'_pct'; interpreting as percent and converting to fraction.",
+                    imperv_var,
+                )
+                imperv = imperv / 100.0
+            elif np.nanmax(imperv) > 1.0:
+                logger.info(
+                    "Pre-computed 'hru_percent_imperv' max=%.2f; "
+                    "converting from percent to fraction.",
+                    float(np.nanmax(imperv)),
+                )
                 imperv = imperv / 100.0
             ds["hru_percent_imperv"] = xr.DataArray(
                 np.clip(imperv, 0.0, 1.0),
@@ -3344,63 +3370,9 @@ class PywatershedDerivation:
                 attrs={"long_name": "Elevation units (0=feet, 1=meters)"},
             )
 
-        # hru_deplcrv + snarea_curve: derive from CV_INT + SDC table if
-        # pre-computed CV_INT is available; otherwise use scalar defaults.
+        # hru_deplcrv + snarea_curve: derive from CV_INT + SDC table
         if "hru_deplcrv" not in ds and "snarea_curve" not in ds:
-            cv_int = self._try_precomputed(ctx, "hru_deplcrv", categorical=True)
-            if cv_int is not None:
-                tables_dir = ctx.resolved_lookup_tables_dir
-                sdc = self._load_sdc_table(tables_dir)
-                curves = sdc["curves"]
-                max_key = max(int(k) for k in curves)
-                cv_clamped = np.clip(cv_int.astype(int), 0, max_key)
-
-                # Build sequential 1-based remap for unique classes used
-                unique_classes = sorted(set(cv_clamped))
-                class_to_idx = {c: i + 1 for i, c in enumerate(unique_classes)}
-                ndepl = len(unique_classes)
-
-                # hru_deplcrv: 1-based index into concatenated curve blocks
-                hru_deplcrv = np.array([class_to_idx[c] for c in cv_clamped], dtype=np.int32)
-                ds["hru_deplcrv"] = xr.DataArray(
-                    hru_deplcrv,
-                    dims=("nhru",),
-                    attrs={
-                        "long_name": "Index of snow depletion curve",
-                        "description": "1-based index into snarea_curve blocks",
-                    },
-                )
-
-                # snarea_curve: flat concatenation of 11-value curves
-                curve_values = []
-                for cls in unique_classes:
-                    curve_values.extend(curves[cls])
-                ds["snarea_curve"] = xr.DataArray(
-                    np.array(curve_values, dtype=np.float64),
-                    dims=("ndeplval",),
-                    attrs={
-                        "long_name": "Snow area depletion curve",
-                        "description": (f"{ndepl} curves x 11 values from SDC table"),
-                    },
-                )
-                logger.info(
-                    "Derived hru_deplcrv and snarea_curve from CV_INT: "
-                    "%d unique curves, %d total values.",
-                    ndepl,
-                    len(curve_values),
-                )
-            else:
-                # Default: single curve of all 1.0, all HRUs point to curve 1
-                ds["hru_deplcrv"] = xr.DataArray(
-                    np.ones(nhru, dtype=np.int32),
-                    dims=("nhru",),
-                    attrs={"long_name": "Index of snow depletion curve (default)"},
-                )
-                ds["snarea_curve"] = xr.DataArray(
-                    np.ones(11, dtype=np.float64),
-                    dims=("ndeplval",),
-                    attrs={"long_name": "Snow area depletion curve (default)"},
-                )
+            ds = self._derive_snow_depletion_curves(ctx, ds, nhru)
 
         # pref_flow_infil_frac: pywatershed v2.0 requires values in [0, 1].
         # Use pref_flow_den if available, otherwise default to 0.0.
@@ -4335,6 +4307,104 @@ class PywatershedDerivation:
             self._lookup_cache[name] = data
         return self._lookup_cache[name]
 
+    def _derive_snow_depletion_curves(
+        self,
+        ctx: DerivationContext,
+        ds: xr.Dataset,
+        nhru: int,
+    ) -> xr.Dataset:
+        """Derive snow depletion curve parameters from CV_INT classification.
+
+        Load the pre-computed CV_INT raster (majority class per HRU) and
+        the SDC lookup table, then populate ``hru_deplcrv`` (1-based curve
+        index) and ``snarea_curve`` (concatenated 11-value curves).
+
+        When CV_INT is unavailable, assigns a default linear depletion
+        curve (all 1.0) with all HRUs pointing to curve 1.
+
+        Parameters
+        ----------
+        ctx : DerivationContext
+            Derivation context with ``precomputed`` map and lookup tables.
+        ds : xr.Dataset
+            In-progress parameter dataset to augment.
+        nhru : int
+            Number of HRUs for default array dimensioning.
+
+        Returns
+        -------
+        xr.Dataset
+            Dataset with ``hru_deplcrv`` and ``snarea_curve`` added.
+
+        Notes
+        -----
+        CV_INT raster values are clamped to ``[0, max_key]`` where
+        ``max_key`` is the largest class in the SDC table.  Out-of-range
+        values (e.g., NoData sentinels) map to the nearest valid class.
+
+        The SDC table must have contiguous integer keys from 0 to
+        ``max_key``; non-contiguous keys raise ``ValueError`` during
+        table loading.
+
+        References
+        ----------
+        Liston, G. E., et al. (2009). Snow cover coefficient of variation.
+        Sexstone, G. A., et al. (2020). Snow depletion curves in PRMS.
+        """
+        cv_int = self._try_precomputed(ctx, "hru_deplcrv", categorical=True)
+        if cv_int is not None:
+            tables_dir = ctx.resolved_lookup_tables_dir
+            sdc = self._load_sdc_table(tables_dir)
+            curves = sdc["curves"]
+            max_key = max(int(k) for k in curves)
+            cv_clamped = np.clip(cv_int.astype(int), 0, max_key)
+
+            # Build sequential 1-based remap for unique classes used
+            unique_classes = sorted(set(cv_clamped))
+            class_to_idx = {c: i + 1 for i, c in enumerate(unique_classes)}
+            ndepl = len(unique_classes)
+
+            # hru_deplcrv: 1-based index into concatenated curve blocks
+            hru_deplcrv = np.array([class_to_idx[c] for c in cv_clamped], dtype=np.int32)
+            ds["hru_deplcrv"] = xr.DataArray(
+                hru_deplcrv,
+                dims=("nhru",),
+                attrs={
+                    "long_name": "Index of snow depletion curve",
+                    "description": "1-based index into snarea_curve blocks",
+                },
+            )
+
+            # snarea_curve: flat concatenation of 11-value curves
+            curve_values = np.concatenate([curves[cls] for cls in unique_classes])
+            ds["snarea_curve"] = xr.DataArray(
+                curve_values.astype(np.float64),
+                dims=("ndeplval",),
+                attrs={
+                    "long_name": "Snow area depletion curve",
+                    "description": f"{ndepl} curves x 11 values from SDC table",
+                },
+            )
+            logger.info(
+                "Derived hru_deplcrv and snarea_curve from CV_INT: "
+                "%d unique curves, %d total values.",
+                ndepl,
+                len(curve_values),
+            )
+        else:
+            # Default: single curve of all 1.0, all HRUs point to curve 1
+            ds["hru_deplcrv"] = xr.DataArray(
+                np.ones(nhru, dtype=np.int32),
+                dims=("nhru",),
+                attrs={"long_name": "Index of snow depletion curve (default)"},
+            )
+            ds["snarea_curve"] = xr.DataArray(
+                np.ones(11, dtype=np.float64),
+                dims=("ndeplval",),
+                attrs={"long_name": "Snow area depletion curve (default)"},
+            )
+        return ds
+
     def _load_sdc_table(self, tables_dir: Path) -> dict:
         """Load the Snow Depletion Curve (SDC) lookup table.
 
@@ -4380,6 +4450,17 @@ class PywatershedDerivation:
             if not isinstance(data, dict) or "curves" not in data:
                 raise ValueError(
                     f"SDC table '{name}.yml' at '{path}' is missing required 'curves' key."
+                )
+            # Validate contiguous integer keys (0..max_key).
+            curve_keys = set(int(k) for k in data["curves"])
+            max_key = max(curve_keys)
+            expected = set(range(max_key + 1))
+            missing = expected - curve_keys
+            if missing:
+                raise ValueError(
+                    f"SDC table '{name}.yml' has non-contiguous keys; "
+                    f"missing: {sorted(missing)}. All integer keys from "
+                    f"0 to {max_key} are required."
                 )
             self._lookup_cache[name] = data
         return self._lookup_cache[name]

@@ -5099,3 +5099,113 @@ class TestSnowDepletionCurves:
         np.testing.assert_array_equal(ds["snarea_curve"].values, np.ones(11))
         assert "hru_deplcrv" in ds
         np.testing.assert_array_equal(ds["hru_deplcrv"].values, [1, 1])
+
+
+class TestPrecomputedAllNanCategorical:
+    """Test that all-NaN categorical fractions don't crash nanargmax."""
+
+    def test_all_nan_fractions_assigned_first_class(
+        self, derivation: PywatershedDerivation
+    ) -> None:
+        """HRUs with all-NaN fractions get first class index, not ValueError."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    # Anchor key needed by find_variable
+                    "soil_type_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "soil_type_frac_1": ("nhm_id", np.array([0.8, np.nan])),
+                    "soil_type_frac_2": ("nhm_id", np.array([0.2, np.nan])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "soil_type": {
+                "source": "gfv11_text_prms",
+                "variable": "soil_type",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "soil_type" in ds
+        # HRU 1: class 1 majority; HRU 2: all-NaN → first class (1)
+        assert ds["soil_type"].values[0] == 1
+        assert ds["soil_type"].values[1] == 1
+
+
+class TestPrecomputedCovdenSumPercentConversion:
+    """Test covden_sum percent-to-fraction conversion for canopy sources."""
+
+    def test_canopy_pct_divided_by_100(self, derivation: PywatershedDerivation) -> None:
+        """covden_sum from canopy source with values > 1 gets divided by 100."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "canopy_pct_mean": ("nhm_id", np.array([50.0, 80.0])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "covden_sum": {
+                "source": "gfv11_cnpy",
+                "variable": "canopy_pct",
+                "statistic": "mean",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "covden_sum" in ds
+        np.testing.assert_allclose(ds["covden_sum"].values, [0.5, 0.8])
+
+
+class TestElevationMissingWarning:
+    """Test warning when no elevation variable found in SIR."""
+
+    def test_no_elevation_logs_warning(
+        self, derivation: PywatershedDerivation, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning emitted when neither median nor mean elevation in SIR."""
+        import logging
+
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        with caplog.at_level(logging.WARNING):
+            derivation.derive(ctx)
+        assert any("No elevation variable found" in msg for msg in caplog.messages)
+
+
+class TestSdcTableValidation:
+    """Test SDC table loading error paths."""
+
+    def test_missing_sdc_file_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """FileNotFoundError when sdc_table.yml missing."""
+        with pytest.raises(FileNotFoundError, match="sdc_table.yml"):
+            derivation._load_sdc_table(tmp_path)
+
+    def test_missing_curves_key_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """ValueError when sdc_table.yml has no 'curves' key."""
+        (tmp_path / "sdc_table.yml").write_text("other_key: {}")
+        with pytest.raises(ValueError, match="missing required 'curves' key"):
+            derivation._load_sdc_table(tmp_path)
+
+    def test_non_contiguous_keys_raises(
+        self, derivation: PywatershedDerivation, tmp_path: Path
+    ) -> None:
+        """ValueError when SDC table has non-contiguous integer keys."""
+        import yaml
+
+        data = {"curves": {0: [0.0] * 11, 2: [1.0] * 11}}  # missing key 1
+        (tmp_path / "sdc_table.yml").write_text(yaml.dump(data))
+        with pytest.raises(ValueError, match="non-contiguous keys"):
+            derivation._load_sdc_table(tmp_path)

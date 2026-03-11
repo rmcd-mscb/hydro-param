@@ -175,7 +175,7 @@ class LandcoverDatasets(BaseModel):
 
 
 class SnowDatasets(BaseModel):
-    """Snow parameters derived from historical SWE data.
+    """Snow parameters from depletion curve classification and historical SWE data.
 
     Parameters
     ----------
