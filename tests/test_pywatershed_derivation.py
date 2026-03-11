@@ -4422,7 +4422,14 @@ class TestSegmentDefaults:
             },
             coords={"nhru": [1, 2]},
         )
-        ds = derivation._apply_defaults(ds, nhru=2)
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation._apply_defaults(ds, nhru=2, ctx=ctx)
         for name in ("mann_n", "seg_depth", "segment_flow_init", "obsout_segment"):
             assert name in ds, f"Missing segment default: {name}"
             assert ds[name].shape == (2,), f"{name}: expected (2,), got {ds[name].shape}"
@@ -5006,3 +5013,89 @@ class TestBuildPrecomputedMap:
         assert result == {}
         assert "Partial pre-computed entry" in caplog.text
         assert "covden_sum" in caplog.text
+
+
+# ------------------------------------------------------------------
+# Snow depletion curve derivation
+# ------------------------------------------------------------------
+
+
+class TestSnowDepletionCurves:
+    """Tests for snow depletion curve derivation from CV_INT + SDC table."""
+
+    def test_hru_deplcrv_from_cv_int(self, derivation: PywatershedDerivation) -> None:
+        """hru_deplcrv assigned from majority of CV_INT categorical fractions."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "cv_int_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "cv_int_frac_2": ("nhm_id", np.array([0.8, 0.1])),
+                    "cv_int_frac_5": ("nhm_id", np.array([0.2, 0.9])),
+                    "cv_int_frac_count": ("nhm_id", np.array([100, 100])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "hru_deplcrv": {
+                "source": "gfv11_cv_int",
+                "variable": "cv_int",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "hru_deplcrv" in ds
+        # HRU 1: class 2 majority, HRU 2: class 5 majority
+        # Remapped to 1-based sequential: {2: 1, 5: 2}
+        assert ds["hru_deplcrv"].values[0] == 1  # curve for class 2
+        assert ds["hru_deplcrv"].values[1] == 2  # curve for class 5
+
+    def test_snarea_curve_values(self, derivation: PywatershedDerivation) -> None:
+        """snarea_curve populated from SDC table with correct values."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {
+                    "cv_int_frac": ("nhm_id", np.array([0.0, 0.0])),
+                    "cv_int_frac_2": ("nhm_id", np.array([0.8, 0.1])),
+                    "cv_int_frac_5": ("nhm_id", np.array([0.2, 0.9])),
+                    "cv_int_frac_count": ("nhm_id", np.array([100, 100])),
+                },
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        precomputed = {
+            "hru_deplcrv": {
+                "source": "gfv11_cv_int",
+                "variable": "cv_int",
+                "statistic": "majority",
+            },
+        }
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id", precomputed=precomputed)
+        ds = derivation.derive(ctx)
+        assert "snarea_curve" in ds
+        # 2 unique curves (class 2 and 5) x 11 values = 22 total
+        assert len(ds["snarea_curve"].values) == 22
+        # First 11 values = curve 2: [0.00, 0.85, 0.99, 1.00, ...]
+        np.testing.assert_allclose(ds["snarea_curve"].values[0], 0.00)
+        np.testing.assert_allclose(ds["snarea_curve"].values[1], 0.85)
+        np.testing.assert_allclose(ds["snarea_curve"].values[2], 0.99)
+        # Values 11-21 = curve 5: [0.00, 0.29, 0.53, 0.72, ...]
+        np.testing.assert_allclose(ds["snarea_curve"].values[11], 0.00)
+        np.testing.assert_allclose(ds["snarea_curve"].values[12], 0.29)
+        np.testing.assert_allclose(ds["snarea_curve"].values[13], 0.53)
+
+    def test_snarea_curve_default_without_cv_int(self, derivation: PywatershedDerivation) -> None:
+        """Without CV_INT, snarea_curve defaults to all 1.0."""
+        sir = _MockSIRAccessor(
+            xr.Dataset(
+                {"_dummy": ("nhm_id", np.array([0.0, 0.0]))},
+                coords={"nhm_id": [1, 2]},
+            )
+        )
+        ctx = DerivationContext(sir=sir, fabric_id_field="nhm_id")
+        ds = derivation.derive(ctx)
+        assert "snarea_curve" in ds
+        np.testing.assert_array_equal(ds["snarea_curve"].values, np.ones(11))
+        assert "hru_deplcrv" in ds
+        np.testing.assert_array_equal(ds["hru_deplcrv"].values, [1, 1])

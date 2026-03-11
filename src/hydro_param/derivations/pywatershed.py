@@ -117,7 +117,6 @@ _DEFAULTS: dict[str, float] = {
     "melt_look": 90,  # Julian day
     "snowinfil_max": 2.0,
     "snowpack_init": 0.0,
-    "hru_deplcrv": 1,  # index into snarea_curve
     "tstorm_mo": 0,
     # --- Atmosphere ---
     "ppt_rad_adj": 0.02,
@@ -143,6 +142,7 @@ _DEFAULTS_SPECIAL: frozenset[str] = frozenset(
         "hru_in_to_cf",
         "temp_units",
         "elev_units",
+        "hru_deplcrv",
         "snarea_curve",
         "pref_flow_infil_frac",
     }
@@ -588,7 +588,7 @@ class PywatershedDerivation:
         ds = self._derive_transp_timing(ds, normals)
 
         # Step 13: Defaults and initial conditions
-        ds = self._apply_defaults(ds, nhru)
+        ds = self._apply_defaults(ds, nhru, context)
 
         # Step 14: Calibration seeds
         ds = self._derive_calibration_seeds(context, ds)
@@ -3223,7 +3223,7 @@ class PywatershedDerivation:
     # Step 13: Defaults and initial conditions
     # ------------------------------------------------------------------
 
-    def _apply_defaults(self, ds: xr.Dataset, nhru: int) -> xr.Dataset:
+    def _apply_defaults(self, ds: xr.Dataset, nhru: int, ctx: DerivationContext) -> xr.Dataset:
         """Apply standard PRMS default values and initial conditions (step 13).
 
         Fill parameters that were not derived from data in earlier steps
@@ -3237,6 +3237,9 @@ class PywatershedDerivation:
             In-progress parameter dataset to augment.
         nhru : int
             Number of HRUs for array dimensioning of per-HRU defaults.
+        ctx : DerivationContext
+            Derivation context for accessing pre-computed SIR data and
+            lookup tables (used for snow depletion curve derivation).
 
         Returns
         -------
@@ -3254,7 +3257,10 @@ class PywatershedDerivation:
         - ``doy``: shape ``(366,)`` --- day-of-year coordinate
         - ``hru_in_to_cf``: shape ``(nhru,)`` --- derived from ``hru_area``
         - ``temp_units``: scalar --- 0 for Fahrenheit
-        - ``snarea_curve``: shape ``(11,)`` --- snow depletion curve
+        - ``hru_deplcrv``: shape ``(nhru,)`` --- per-HRU curve index into
+          ``snarea_curve``; derived from CV_INT if available, else default 1
+        - ``snarea_curve``: shape ``(ndepl * 11,)`` --- snow depletion curves
+          from SDC table when CV_INT available, else ``ones(11)``
         - ``pref_flow_infil_frac``: shape ``(nhru,)`` --- derived from
           ``pref_flow_den`` or defaults to 0.0
 
@@ -3338,13 +3344,63 @@ class PywatershedDerivation:
                 attrs={"long_name": "Elevation units (0=feet, 1=meters)"},
             )
 
-        # snarea_curve: snow depletion curve (11 values, default all 1.0)
-        if "snarea_curve" not in ds:
-            ds["snarea_curve"] = xr.DataArray(
-                np.ones(11, dtype=np.float64),
-                dims=("ndeplval",),
-                attrs={"long_name": "Snow area depletion curve"},
-            )
+        # hru_deplcrv + snarea_curve: derive from CV_INT + SDC table if
+        # pre-computed CV_INT is available; otherwise use scalar defaults.
+        if "hru_deplcrv" not in ds and "snarea_curve" not in ds:
+            cv_int = self._try_precomputed(ctx, "hru_deplcrv", categorical=True)
+            if cv_int is not None:
+                tables_dir = ctx.resolved_lookup_tables_dir
+                sdc = self._load_sdc_table(tables_dir)
+                curves = sdc["curves"]
+                max_key = max(int(k) for k in curves)
+                cv_clamped = np.clip(cv_int.astype(int), 0, max_key)
+
+                # Build sequential 1-based remap for unique classes used
+                unique_classes = sorted(set(cv_clamped))
+                class_to_idx = {c: i + 1 for i, c in enumerate(unique_classes)}
+                ndepl = len(unique_classes)
+
+                # hru_deplcrv: 1-based index into concatenated curve blocks
+                hru_deplcrv = np.array([class_to_idx[c] for c in cv_clamped], dtype=np.int32)
+                ds["hru_deplcrv"] = xr.DataArray(
+                    hru_deplcrv,
+                    dims=("nhru",),
+                    attrs={
+                        "long_name": "Index of snow depletion curve",
+                        "description": "1-based index into snarea_curve blocks",
+                    },
+                )
+
+                # snarea_curve: flat concatenation of 11-value curves
+                curve_values = []
+                for cls in unique_classes:
+                    curve_values.extend(curves[cls])
+                ds["snarea_curve"] = xr.DataArray(
+                    np.array(curve_values, dtype=np.float64),
+                    dims=("ndeplval",),
+                    attrs={
+                        "long_name": "Snow area depletion curve",
+                        "description": (f"{ndepl} curves x 11 values from SDC table"),
+                    },
+                )
+                logger.info(
+                    "Derived hru_deplcrv and snarea_curve from CV_INT: "
+                    "%d unique curves, %d total values.",
+                    ndepl,
+                    len(curve_values),
+                )
+            else:
+                # Default: single curve of all 1.0, all HRUs point to curve 1
+                ds["hru_deplcrv"] = xr.DataArray(
+                    np.ones(nhru, dtype=np.int32),
+                    dims=("nhru",),
+                    attrs={"long_name": "Index of snow depletion curve (default)"},
+                )
+                ds["snarea_curve"] = xr.DataArray(
+                    np.ones(11, dtype=np.float64),
+                    dims=("ndeplval",),
+                    attrs={"long_name": "Snow area depletion curve (default)"},
+                )
 
         # pref_flow_infil_frac: pywatershed v2.0 requires values in [0, 1].
         # Use pref_flow_den if available, otherwise default to 0.0.
@@ -4275,6 +4331,55 @@ class PywatershedDerivation:
             if not isinstance(data, dict) or "mapping" not in data:
                 raise ValueError(
                     f"Lookup table '{name}.yml' at '{path}' is missing required 'mapping' key."
+                )
+            self._lookup_cache[name] = data
+        return self._lookup_cache[name]
+
+    def _load_sdc_table(self, tables_dir: Path) -> dict:
+        """Load the Snow Depletion Curve (SDC) lookup table.
+
+        The SDC table has a different structure from standard lookup tables
+        (``curves`` key instead of ``mapping``), so it uses its own loader
+        rather than ``_load_lookup_table()``.
+
+        Parameters
+        ----------
+        tables_dir : Path
+            Directory containing lookup table YAML files.
+
+        Returns
+        -------
+        dict
+            Parsed YAML with ``curves`` key mapping integer class IDs
+            to lists of 11 depletion values.
+
+        Raises
+        ------
+        FileNotFoundError
+            If ``sdc_table.yml`` does not exist in ``tables_dir``.
+        ValueError
+            If the YAML is malformed or missing the ``curves`` key.
+
+        References
+        ----------
+        Liston, G. E., et al. (2009). Snow cover coefficient of variation.
+        Sexstone, G. A., et al. (2020). Snow depletion curves in PRMS.
+        """
+        name = "sdc_table"
+        if name not in self._lookup_cache:
+            path = tables_dir / f"{name}.yml"
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f)
+            except FileNotFoundError:
+                raise FileNotFoundError(f"SDC table '{name}.yml' not found at '{path}'.") from None
+            except yaml.YAMLError as exc:
+                raise ValueError(
+                    f"SDC table '{name}.yml' at '{path}' contains invalid YAML: {exc}"
+                ) from exc
+            if not isinstance(data, dict) or "curves" not in data:
+                raise ValueError(
+                    f"SDC table '{name}.yml' at '{path}' is missing required 'curves' key."
                 )
             self._lookup_cache[name] = data
         return self._lookup_cache[name]
