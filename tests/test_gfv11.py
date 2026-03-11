@@ -310,6 +310,11 @@ class TestFetchItemFiles:
             fetch_item_files("fake-id", retries=2)
         assert mock_get.call_count == 2
 
+    def test_rejects_zero_retries(self) -> None:
+        """retries=0 raises ValueError immediately."""
+        with pytest.raises(ValueError, match="retries must be >= 1"):
+            fetch_item_files("fake-id", retries=0)
+
     @patch("hydro_param.gfv11.requests.get")
     def test_raises_on_non_json_response(self, mock_get: MagicMock) -> None:
         """Non-JSON responses raise ValueError with descriptive message."""

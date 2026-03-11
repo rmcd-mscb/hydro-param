@@ -629,7 +629,7 @@ def fetch_item_files(
     item_id : str
         ScienceBase item identifier (24-character hex string).
     retries : int, optional
-        Maximum number of API request attempts.  Default is 3.
+        Maximum number of API request attempts (must be ≥ 1).  Default is 3.
 
     Returns
     -------
@@ -651,7 +651,7 @@ def fetch_item_files(
     -----
     ScienceBase is historically unreliable — transient connection failures,
     timeouts, and 503 responses are common.  Retry delay is ``2**attempt``
-    seconds (2 s, 4 s, 8 s for the default 3 attempts).
+    seconds between failed attempts (2 s, 4 s for the default 3 attempts).
 
     Examples
     --------
@@ -661,6 +661,10 @@ def fetch_item_files(
     >>> files[0]  # doctest: +SKIP
     ('TEXT_PRMS.zip', 'https://...', 12345678)
     """
+    if retries < 1:
+        msg = f"retries must be >= 1, got {retries}"
+        raise ValueError(msg)
+
     url = f"{SB_API_URL}/{item_id}?format=json"
     logger.info("Querying ScienceBase item %s", item_id)
     last_exc: Exception | None = None
@@ -682,8 +686,16 @@ def fetch_item_files(
                     wait,
                 )
                 time.sleep(wait)
+            else:
+                logger.error(
+                    "ScienceBase API request failed (attempt %d/%d): %s — no retries left",
+                    attempt,
+                    retries,
+                    exc,
+                )
     else:
-        raise last_exc  # type: ignore[misc]
+        assert last_exc is not None  # noqa: S101
+        raise last_exc
 
     try:
         data = resp.json()
@@ -943,9 +955,14 @@ def download_gfv11(
     layer rasters and/or topographic derivatives.  Files are organized
     into thematic subdirectories under *output_dir*.
 
-    After a successful download (at least one file downloaded or skipped),
+    When at least one file was downloaded or already present on disk,
     a registry overlay YAML is written so the datasets become visible
     to the pipeline via :func:`~hydro_param.dataset_registry.load_registry`.
+    The overlay is written even when some files or items failed, so that
+    previously successful downloads remain registered.
+
+    Each ScienceBase item is processed independently — a transient API
+    failure on one item does not prevent the other from being processed.
 
     Parameters
     ----------
@@ -997,7 +1014,7 @@ def download_gfv11(
         try:
             logger.info("Downloading %s", label)
             _merge(download_item(item_id, output_dir))
-        except (requests.RequestException, ValueError) as exc:
+        except requests.RequestException as exc:
             logger.error(
                 "Failed to query ScienceBase for %s (item %s): %s — "
                 "skipping this item. Previously downloaded files are intact.",
