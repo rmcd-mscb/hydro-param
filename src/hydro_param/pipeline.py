@@ -734,7 +734,7 @@ def _process_batch(
         raise NotImplementedError(f"Strategy '{dataset_entry.strategy}' not yet supported")
 
     for i, var_spec in enumerate(var_specs):
-        if isinstance(var_spec, (DerivedCategoricalSpec, DerivedContinuousSpec)):
+        if isinstance(var_spec, DerivedCategoricalSpec | DerivedContinuousSpec):
             continue  # Processed after all source variables
 
         if isinstance(var_spec, DerivedVariableSpec):
@@ -811,7 +811,7 @@ def _process_batch(
 
         # Clean up GeoTIFF after zonal stats — keep if needed by derived categorical
         needed_by_dc = any(
-            isinstance(dc, (DerivedCategoricalSpec, DerivedContinuousSpec))
+            isinstance(dc, DerivedCategoricalSpec | DerivedContinuousSpec)
             and var_spec.name in dc.sources
             for dc in var_specs
         )
