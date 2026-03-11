@@ -414,7 +414,7 @@ def stage2_resolve_datasets(
     list[tuple[DatasetEntry, DatasetRequest, list[...]]]
         One tuple per dataset: the registry entry, the pipeline request,
         and the resolved variable specifications (VariableSpec,
-        DerivedVariableSpec, or DerivedCategoricalSpec).
+        DerivedVariableSpec, DerivedCategoricalSpec, or DerivedContinuousSpec).
 
     Raises
     ------
@@ -473,7 +473,7 @@ def stage2_resolve_datasets(
                 registry.resolve_variable(ds_req.name, v) for v in ds_req.variables
             ]
             all_vars_have_source = all(
-                isinstance(vs, DerivedCategoricalSpec)
+                isinstance(vs, DerivedCategoricalSpec | DerivedContinuousSpec)
                 or (isinstance(vs, VariableSpec) and vs.source_override is not None)
                 for vs in requested_var_specs
             )
@@ -524,18 +524,18 @@ def stage2_resolve_datasets(
         # Validate time range against dataset availability
         _validate_time_range(ds_req, entry)
 
-        # Auto-include source variables needed by derived categorical specs
+        # Auto-include source variables needed by derived categorical/continuous specs
         requested = set(ds_req.variables)
         extra_sources: list[str] = []
         for vname in ds_req.variables:
             spec = registry.resolve_variable(ds_req.name, vname)
-            if isinstance(spec, DerivedCategoricalSpec):
+            if isinstance(spec, DerivedCategoricalSpec | DerivedContinuousSpec):
                 for src in spec.sources:
                     if src not in requested and src not in extra_sources:
                         extra_sources.append(src)
         if extra_sources:
             logger.info(
-                "  Auto-including source variables for derived categorical: %s",
+                "  Auto-including source variables for derived specs: %s",
                 extra_sources,
             )
 
@@ -614,8 +614,8 @@ def _process_batch(
         Pipeline config request (variables, statistics, year).
     var_specs : list[AnyVariableSpec]
         Resolved variable specifications from the registry.
-        ``DerivedCategoricalSpec`` entries are processed in a second
-        pass after all source variables.
+        ``DerivedCategoricalSpec`` and ``DerivedContinuousSpec`` entries
+        are processed in second passes after all source variables.
     config : PipelineConfig
         Pipeline configuration (id_field, batch size, etc.).
     work_dir : Path
