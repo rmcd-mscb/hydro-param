@@ -415,6 +415,13 @@ class SIRAccessor:
         str or None
             The actual SIR variable name (prefixed key), or ``None``
             if not found.
+
+        Notes
+        -----
+        Steps are evaluated in strict order; a match at an earlier step
+        short-circuits later ones.  In particular, year-suffixed names
+        like ``canopy_pct_2021`` are always resolved by step 2 and never
+        reach the prefix-match step, avoiding false positives.
         """
         # Exact match (prefixed key or canonical via index)
         resolved = self._resolve_static(base_name)

@@ -648,8 +648,11 @@ def test_find_variable_prefix_match_ambiguous_returns_none(tmp_path: Path) -> No
     assert sir.find_variable("canopy_pct") is None
 
 
-def test_find_variable_prefix_match_with_statistic_disambiguates(tmp_path: Path) -> None:
-    """find_variable with variable_stat resolves when base name is ambiguous."""
+def test_find_variable_prefix_match_ambiguous_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """find_variable logs a warning when prefix match is ambiguous."""
+    import logging
     import textwrap
 
     from hydro_param.sir_accessor import SIRAccessor
@@ -672,12 +675,39 @@ def test_find_variable_prefix_match_with_statistic_disambiguates(tmp_path: Path)
     """)
     (tmp_path / ".manifest.yml").write_text(manifest_content)
     sir = SIRAccessor(tmp_path)
-    # "canopy_pct_pct_mean" is exact → unambiguous
-    assert sir.find_variable("canopy_pct_pct_mean") == "canopy_pct_pct_mean"
-    # "canopy_pct_mean" prefix matches only "canopy_pct_mean" → wait, no
-    # Actually "canopy_pct_mean" is a prefix of "canopy_pct_mean..." - let's test
-    # the _try_precomputed candidate "canopy_pct_mean" prefix-matching
-    assert sir.find_variable("canopy_pct_pct") is None  # ambiguous
+    with caplog.at_level(logging.WARNING, logger="hydro_param.sir_accessor"):
+        result = sir.find_variable("canopy_pct")
+    assert result is None
+    assert "Ambiguous prefix match" in caplog.text
+    assert "canopy_pct" in caplog.text
+
+
+def test_find_variable_year_suffix_takes_precedence_over_prefix(tmp_path: Path) -> None:
+    """Year-suffix match (step 2) takes precedence over prefix match (step 3)."""
+    import textwrap
+
+    from hydro_param.sir_accessor import SIRAccessor
+
+    sir_dir = tmp_path / "sir"
+    sir_dir.mkdir()
+    df = pd.DataFrame({"val": [5.0]}, index=pd.Index([1], name="nhm_id"))
+    df.to_csv(sir_dir / "canopy_pct_2021.csv")
+    df.to_csv(sir_dir / "canopy_pct_pct_mean.csv")
+    manifest_content = textwrap.dedent("""\
+        version: 2
+        fabric_fingerprint: test
+        entries: {}
+        sir:
+          static_files:
+            canopy_pct_2021: sir/canopy_pct_2021.csv
+            canopy_pct_pct_mean: sir/canopy_pct_pct_mean.csv
+          temporal_files: {}
+          sir_schema: []
+    """)
+    (tmp_path / ".manifest.yml").write_text(manifest_content)
+    sir = SIRAccessor(tmp_path)
+    # Year-suffix (step 2) should win over prefix match (step 3)
+    assert sir.find_variable("canopy_pct") == "canopy_pct_2021"
 
 
 def test_build_canonical_index_duplicate_last_wins() -> None:
