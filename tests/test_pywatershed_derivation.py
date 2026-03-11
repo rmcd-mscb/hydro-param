@@ -82,10 +82,35 @@ class _MockSIRAccessor:
         return None
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def derivation() -> PywatershedDerivation:
-    """Derivation plugin instance."""
+    """Derivation plugin instance (stateless, shared across all tests)."""
     return PywatershedDerivation()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _cache_fetch_vaa() -> None:  # type: ignore[misc]
+    """Cache ``_fetch_vaa`` result for the entire test session.
+
+    ``pynhd.nhdplus_vaa()`` downloads a ~245 MB parquet file on first call
+    (~5.8 s of HTTP + I/O).  Without caching, every topology test pays this
+    cost independently (~18 calls × 6 s ≈ 108 s).  This fixture calls
+    ``_fetch_vaa`` once and monkeypatches the class method to return the
+    cached result for all subsequent calls.  Tests that explicitly
+    ``monkeypatch.setattr`` the method (e.g., routing tests) override this
+    naturally since monkeypatch runs after fixture setup.
+    """
+    cached_result = PywatershedDerivation._fetch_vaa()
+
+    original = PywatershedDerivation._fetch_vaa
+
+    @staticmethod  # type: ignore[misc]
+    def _cached_fetch_vaa() -> pd.DataFrame | None:
+        return cached_result
+
+    PywatershedDerivation._fetch_vaa = _cached_fetch_vaa  # type: ignore[assignment]
+    yield
+    PywatershedDerivation._fetch_vaa = original  # type: ignore[assignment]
 
 
 @pytest.fixture()
@@ -1745,15 +1770,15 @@ _HAS_DRB_DATA = (
 class TestTopologyIntegrationDRB:
     """Integration tests with real DRB pywatershed GIS data."""
 
-    @pytest.fixture()
+    @pytest.fixture(scope="class")
     def drb_fabric(self) -> gpd.GeoDataFrame:
         return gpd.read_file(_DRB_DIR / "nhru.gpkg")
 
-    @pytest.fixture()
+    @pytest.fixture(scope="class")
     def drb_segments(self) -> gpd.GeoDataFrame:
         return gpd.read_file(_DRB_DIR / "nsegment.gpkg")
 
-    @pytest.fixture()
+    @pytest.fixture(scope="class")
     def drb_params_dis_both(self) -> xr.Dataset:  # type: ignore[misc]
         ds = xr.open_dataset(_DRB_DIR / "parameters_dis_both.nc")
         try:
@@ -1761,7 +1786,7 @@ class TestTopologyIntegrationDRB:
         finally:
             ds.close()
 
-    @pytest.fixture()
+    @pytest.fixture(scope="class")
     def drb_params_channel(self) -> xr.Dataset:  # type: ignore[misc]
         ds = xr.open_dataset(_DRB_DIR / "parameters_PRMSChannel.nc")
         try:
@@ -2699,7 +2724,6 @@ class TestDeriveCalibrationSeeds:
 
     def test_malformed_params_raises(
         self,
-        derivation: PywatershedDerivation,
         tmp_path: Path,
     ) -> None:
         """Missing params key in YAML raises ValueError with context."""
@@ -2732,8 +2756,10 @@ class TestDeriveCalibrationSeeds:
             fabric_id_field="nhm_id",
             lookup_tables_dir=tmp_path,
         )
+        # Fresh instance needed — session-scoped derivation has cached lookup tables
+        d = PywatershedDerivation()
         with pytest.raises(ValueError, match="smidx_exp"):
-            derivation.derive(ctx)
+            d.derive(ctx)
 
     def test_linear_seed_carea_max(self, derivation: PywatershedDerivation) -> None:
         """carea_max = 0.6 * hru_percent_imperv + 0.2."""
@@ -2901,7 +2927,6 @@ class TestDeriveCalibrationSeeds:
 
     def test_unknown_method_uses_default(
         self,
-        derivation: PywatershedDerivation,
         caplog: pytest.LogCaptureFixture,
         tmp_path: Path,
     ) -> None:
@@ -2939,8 +2964,10 @@ class TestDeriveCalibrationSeeds:
             fabric_id_field="nhm_id",
             lookup_tables_dir=tmp_path,
         )
+        # Fresh instance needed — session-scoped derivation has cached lookup tables
+        d = PywatershedDerivation()
         with caplog.at_level(logging.WARNING, logger="hydro_param.derivations.pywatershed"):
-            ds = derivation.derive(ctx)
+            ds = d.derive(ctx)
 
         assert "gwflow_coef" in ds
         # Should use default value 0.015
@@ -5184,28 +5211,25 @@ class TestElevationMissingWarning:
 class TestSdcTableValidation:
     """Test SDC table loading error paths."""
 
-    def test_missing_sdc_file_raises(
-        self, derivation: PywatershedDerivation, tmp_path: Path
-    ) -> None:
+    def test_missing_sdc_file_raises(self, tmp_path: Path) -> None:
         """FileNotFoundError when sdc_table.yml missing."""
+        d = PywatershedDerivation()
         with pytest.raises(FileNotFoundError, match="sdc_table.yml"):
-            derivation._load_sdc_table(tmp_path)
+            d._load_sdc_table(tmp_path)
 
-    def test_missing_curves_key_raises(
-        self, derivation: PywatershedDerivation, tmp_path: Path
-    ) -> None:
+    def test_missing_curves_key_raises(self, tmp_path: Path) -> None:
         """ValueError when sdc_table.yml has no 'curves' key."""
         (tmp_path / "sdc_table.yml").write_text("other_key: {}")
+        d = PywatershedDerivation()
         with pytest.raises(ValueError, match="missing required 'curves' key"):
-            derivation._load_sdc_table(tmp_path)
+            d._load_sdc_table(tmp_path)
 
-    def test_non_contiguous_keys_raises(
-        self, derivation: PywatershedDerivation, tmp_path: Path
-    ) -> None:
+    def test_non_contiguous_keys_raises(self, tmp_path: Path) -> None:
         """ValueError when SDC table has non-contiguous integer keys."""
         import yaml
 
         data = {"curves": {0: [0.0] * 11, 2: [1.0] * 11}}  # missing key 1
         (tmp_path / "sdc_table.yml").write_text(yaml.dump(data))
+        d = PywatershedDerivation()
         with pytest.raises(ValueError, match="non-contiguous keys"):
-            derivation._load_sdc_table(tmp_path)
+            d._load_sdc_table(tmp_path)
