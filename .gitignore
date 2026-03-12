@@ -44,7 +44,6 @@ htmlcov/
 cache/
 
 # Generated docs
-docs/ai-workflow-guide.md
 site/
 CONTRIBUTING.html
 CONTRIBUTING_files/
